@@ -815,6 +815,9 @@ packages/
       rendering/
       tracing/
 
+  application/
+    src/
+
   tokenization/
     src/
       ports/
@@ -857,14 +860,20 @@ Allowed dependency direction:
 
 ```text
 apps
-  -> application services
-      -> compiler and domain
+  -> application
+      -> compiler
       -> ports
-
-adapters
-  -> ports and domain
+      -> domain
 
 compiler
+  -> ports
+  -> domain
+
+adapters and technical packages
+  -> ports
+  -> domain
+
+ports
   -> domain
 
 domain

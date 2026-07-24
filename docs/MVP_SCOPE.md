@@ -366,19 +366,19 @@ The MVP includes a minimal CLI for development and validation.
 Required commands:
 
 ```text
-token-os compile
-token-os trace
-token-os eval
-token-os inspect-blocks
-token-os version
+ctxalloc compile
+ctxalloc trace
+ctxalloc eval
+ctxalloc inspect-blocks
+ctxalloc version
 ```
 
 Optional commands after the core works:
 
 ```text
-token-os source add
-token-os index
-token-os search
+ctxalloc source add
+ctxalloc index
+ctxalloc search
 ```
 
 The CLI is not required to provide a polished interactive interface.
@@ -562,6 +562,7 @@ docs/
 packages/
   domain/
   compiler/
+  application/
   tokenization/
   evaluation/
   ports/
