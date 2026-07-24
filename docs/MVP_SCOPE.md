@@ -562,6 +562,7 @@ docs/
 packages/
   domain/
   compiler/
+  application/
   tokenization/
   evaluation/
   ports/

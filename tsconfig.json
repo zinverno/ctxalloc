@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/domain" },
+    { "path": "packages/ports" },
+    { "path": "packages/compiler" },
+    { "path": "packages/application" },
+    { "path": "packages/tokenization" },
+    { "path": "packages/evaluation" },
+    { "path": "packages/testing" },
+    { "path": "apps/api" },
+    { "path": "apps/cli" }
+  ]
+}
