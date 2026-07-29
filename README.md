@@ -9,16 +9,17 @@ or agent framework.
 
 ## Status
 
-Phase 4 — real tokenization and the token budget value model. The repository
-contains the TypeScript monorepo scaffolding from Phase 1 (workspace structure,
-strict compiler and linting configuration, test infrastructure, package
-boundaries, boundary checker), the runtime-validated domain model in
-`@ctxalloc/domain` (scope, identifiers, content hash values, JSON-safe metadata,
-source types, source locations, `SourceDocument`, `ContextBlock`, `TokenBudget`,
-and a structured validation API), the project-owned `Tokenizer` port in
-`@ctxalloc/ports`, the deterministic `FakeTokenizer` test double in
-`@ctxalloc/testing` with a reusable tokenizer contract test suite, and a real
-offline tokenizer adapter in `@ctxalloc/tokenization`.
+Phase 5 — deterministic source ingestion. The repository contains the TypeScript
+monorepo scaffolding from Phase 1 (workspace structure, strict compiler and
+linting configuration, test infrastructure, package boundaries, boundary
+checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
+identifiers, content hash values, JSON-safe metadata, source types, source
+locations, `SourceDocument`, `ContextBlock`, `TokenBudget`, and a structured
+validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
+deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
+tokenizer contract test suite, a real offline tokenizer adapter in
+`@ctxalloc/tokenization`, and the first application use case in
+`@ctxalloc/application`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
 `js-tiktoken` (pinned to 1.0.21, see [DEC-027](./docs/DECISIONS.md)). It runs
@@ -32,12 +33,29 @@ Anthropic, not any other.
 
 `TokenBudget` validates a budget and reports two exact values:
 `configuredReservedTokens` and `availableInputTokens`. It is pure arithmetic over
-validated integers and depends on no tokenizer.
+validated integers and depends on no tokenizer. Both arrived in Phase 4.
+
+`@ctxalloc/application` adds `ingestSource`, one synchronous, deterministic,
+offline use case (see [DEC-028](./docs/DECISIONS.md)). It takes an explicit
+scope, source type, logical source identity, JSON-safe metadata, and **source
+content that the caller has already read**, then returns a validated
+`SourceDocument` plus the unchanged content. The document ID is derived from the
+logical identity alone, so editing a source changes its `contentHash` and keeps
+its identity; the `contentHash` is SHA-256 over the exact content encoded as
+UTF-8. Content is never normalized: line endings, whitespace, a BOM, a trailing
+newline, and composed or decomposed Unicode all survive unchanged and are all
+visible in the hash. Malformed UTF-16 is rejected before hashing.
+
+**No source reader exists.** Ingestion reads no file, walks no directory,
+fetches no URL, and infers no path or scope; the caller supplies the content.
+There is no Markdown parsing, no frontmatter handling, no chunking, and no
+`ContextBlock` creation from sources.
 
 **No compiler and no allocator exist yet.** Nothing decides which blocks fit a
 budget. There is no allocation, scoring, deduplication, ordering, rendering,
-trace generation, retrieval, ingestion, persistence, HTTP, or CLI behavior yet.
-CtxAlloc does not yet compile or optimize context.
+trace generation, retrieval, persistence, HTTP, or CLI behavior yet. CtxAlloc
+does not yet compile or optimize context, and it supports no Obsidian
+integration.
 
 ## Prerequisites
 

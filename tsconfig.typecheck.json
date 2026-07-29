@@ -17,6 +17,7 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
+      "@ctxalloc/application": ["packages/application/src/index.ts"],
       "@ctxalloc/domain": ["packages/domain/src/index.ts"],
       "@ctxalloc/ports": ["packages/ports/src/index.ts"],
       "@ctxalloc/testing": ["packages/testing/src/index.ts"],

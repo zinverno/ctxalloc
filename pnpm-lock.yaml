@@ -37,7 +37,14 @@ importers:
 
   apps/cli: {}
 
-  packages/application: {}
+  packages/application:
+    dependencies:
+      '@ctxalloc/domain':
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/compiler: {}
 
