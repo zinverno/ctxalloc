@@ -339,8 +339,6 @@ interface ContextBlock {
     required?: boolean;
     priority?: number;
     category?: string;
-    relevanceScore?: number;
-    recencyScore?: number;
   };
 
   metadata: Record<string, unknown>;
@@ -352,6 +350,23 @@ A ContextBlock is the smallest independently selectable unit.
 The compiler does not read files during compilation.
 
 All required source information must already be present in the block.
+
+A ContextBlock contains only source-derived or explicitly authored block data.
+
+Its content is query-independent: the same block record is valid for every query
+in its scope.
+
+Query-dependent retrieval and scoring values must not be persisted inside a
+ContextBlock. A provider relevance score, a computed recency score, a redundancy
+measure, and a final utility score all describe one retrieval or one compilation
+for one query, not the block itself.
+
+Future phases introduce separate structures for those values:
+
+* a candidate structure carrying retrieval-supplied scores for one request;
+* a scored-candidate structure carrying calculated score components.
+
+See DEC-026.
 
 ---
 

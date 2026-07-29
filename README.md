@@ -9,12 +9,17 @@ or agent framework.
 
 ## Status
 
-Phase 1 — repository foundation. This repository currently contains only the
-TypeScript monorepo scaffolding: workspace structure, strict compiler and linting
-configuration, test infrastructure, package boundaries, and a boundary checker.
-**Product implementation has not started yet.** No compiler, domain schema, token
-allocation, retrieval, persistence, HTTP, or CLI behavior exists. CtxAlloc does not
-yet compile or optimize context.
+Phase 2 — domain foundation. The repository contains the TypeScript monorepo
+scaffolding from Phase 1 (workspace structure, strict compiler and linting
+configuration, test infrastructure, package boundaries, boundary checker) and the
+runtime-validated domain model in `@ctxalloc/domain`: scope, identifiers, content
+hash values, JSON-safe metadata, source types, source locations, `SourceDocument`,
+`ContextBlock`, and a structured validation API.
+
+**Compiler behavior is still not implemented.** The domain package defines and
+validates data only. There is no tokenization, token allocation, scoring,
+deduplication, rendering, trace generation, retrieval, ingestion, persistence,
+HTTP, or CLI behavior yet. CtxAlloc does not yet compile or optimize context.
 
 ## Prerequisites
 
