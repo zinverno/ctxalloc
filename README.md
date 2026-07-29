@@ -47,7 +47,7 @@ pnpm install
 | Command                 | Description                                                      |
 | ----------------------- | ---------------------------------------------------------------- |
 | `pnpm build`            | Type-check and emit declarations for all packages (`tsc -b`).    |
-| `pnpm typecheck`        | Type-check all packages, apps, and tests without emitting.       |
+| `pnpm typecheck`        | Type-check all packages, apps, and tests.                        |
 | `pnpm lint`             | Run ESLint over the workspace.                                   |
 | `pnpm test`             | Run the Vitest suite.                                            |
 | `pnpm format`           | Format supported files with Prettier.                            |
