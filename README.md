@@ -9,22 +9,35 @@ or agent framework.
 
 ## Status
 
-Phase 3 — minimal ports and test doubles. The repository contains the TypeScript
-monorepo scaffolding from Phase 1 (workspace structure, strict compiler and
-linting configuration, test infrastructure, package boundaries, boundary checker),
-the runtime-validated domain model in `@ctxalloc/domain` (scope, identifiers,
-content hash values, JSON-safe metadata, source types, source locations,
-`SourceDocument`, `ContextBlock`, and a structured validation API), the
-project-owned `Tokenizer` port in `@ctxalloc/ports`, and the deterministic
-`FakeTokenizer` test double in `@ctxalloc/testing`, together with a reusable
-tokenizer contract test suite.
+Phase 4 — real tokenization and the token budget value model. The repository
+contains the TypeScript monorepo scaffolding from Phase 1 (workspace structure,
+strict compiler and linting configuration, test infrastructure, package
+boundaries, boundary checker), the runtime-validated domain model in
+`@ctxalloc/domain` (scope, identifiers, content hash values, JSON-safe metadata,
+source types, source locations, `SourceDocument`, `ContextBlock`, `TokenBudget`,
+and a structured validation API), the project-owned `Tokenizer` port in
+`@ctxalloc/ports`, the deterministic `FakeTokenizer` test double in
+`@ctxalloc/testing` with a reusable tokenizer contract test suite, and a real
+offline tokenizer adapter in `@ctxalloc/tokenization`.
 
-**No real tokenizer and no compiler behavior exist yet.** The fake tokenizer
-returns only explicitly configured counts for exact text and fails on anything
-else; it is a test double, not a token estimator. There is no real tokenization,
-token budget, allocation, scoring, deduplication, rendering, trace generation,
-retrieval, ingestion, persistence, HTTP, or CLI behavior yet. CtxAlloc does not
-yet compile or optimize context.
+`O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
+`js-tiktoken` (pinned to 1.0.21, see [DEC-027](./docs/DECISIONS.md)). It runs
+fully offline: no network request, no model API, no model-name mapping, and no
+runtime rank download. Its counts are verified against committed golden fixtures
+that were cross-checked with the official `openai/tiktoken` package before being
+committed. **This adapter is not universal for all model families:** `o200k_base`
+is a reference encoding, and a model family that uses a different vocabulary
+needs its own adapter. CtxAlloc supports no provider API — not OpenAI, not
+Anthropic, not any other.
+
+`TokenBudget` validates a budget and reports two exact values:
+`configuredReservedTokens` and `availableInputTokens`. It is pure arithmetic over
+validated integers and depends on no tokenizer.
+
+**No compiler and no allocator exist yet.** Nothing decides which blocks fit a
+budget. There is no allocation, scoring, deduplication, ordering, rendering,
+trace generation, retrieval, ingestion, persistence, HTTP, or CLI behavior yet.
+CtxAlloc does not yet compile or optimize context.
 
 ## Prerequisites
 

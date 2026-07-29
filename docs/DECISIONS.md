@@ -72,6 +72,7 @@ A newer decision has replaced the previous one.
 | DEC-024 | Use Claude Code as the main implementation environment       | Accepted |
 | DEC-025 | Use stronger models selectively for reviews                  | Accepted |
 | DEC-026 | Keep canonical ContextBlock data query-independent           | Accepted |
+| DEC-027 | Use js-tiktoken o200k_base as the first real tokenizer       | Accepted |
 
 ---
 
@@ -1052,6 +1053,94 @@ The candidate and scored-candidate structures are not implemented by this decisi
 
 ---
 
+## DEC-027: Use js-tiktoken o200k_base as the First Real Tokenizer
+
+### Status
+
+Accepted
+
+### Decision
+
+The first real implementation of the Tokenizer port is an offline adapter built on:
+
+```text
+package:  js-tiktoken
+version:  1.0.21 (pinned exactly)
+import:   js-tiktoken/lite
+ranks:    js-tiktoken/ranks/o200k_base
+encoding: o200k_base
+```
+
+The adapter lives in `@ctxalloc/tokenization` and is the only package allowed to depend on the tokenizer library.
+
+Its stable identity is recorded as two separate values:
+
+```text
+id:      js-tiktoken:o200k_base
+version: 1.0.21
+```
+
+The identifier names the implementation and its vocabulary; the version names the exact package the counts came from. Keeping them separate lets a trace state which counts are comparable (INV-TRACE-005), because counts are comparable only when both values match.
+
+### Context
+
+Token counts are correctness data, not an estimate. A budget decision, a rejected candidate, and a final rendered-context check all depend on the count being exactly what the model will see, so the first real adapter was selected against these requirements:
+
+* it must run offline, because core tests must not require a network (Product Contract 9.5);
+* it must be deterministic, with no clock, randomness, or cache;
+* it must not download a vocabulary at runtime;
+* it must not map model names to encodings implicitly;
+* its counts must be independently verifiable;
+* it must be removable without changing the compiler kernel.
+
+`js-tiktoken` is a pure-JavaScript port of `tiktoken` that ships its rank tables as importable modules. The `js-tiktoken/lite` entry point contains the BPE implementation only, so the encoding is chosen by importing exactly one rank module and nothing else is loaded.
+
+### Rules
+
+Only the bundled `o200k_base` ranks are loaded. No CDN, no runtime `fetch`, no WASM build, no `encodingForModel`, and no mutable model registry is used. The adapter reads no file, environment variable, clock, or random value while counting.
+
+Encoding uses ordinary-text semantics: no substring may be promoted to a control token, and text that merely looks like one, such as `<|endoftext|>`, is counted as the literal source text it is instead of raising an error. Source content is data, never an instruction to the tokenizer (INV-SEC-001).
+
+The dependency is pinned to one exact version rather than a range. A patch release that changed a rank table or a splitting rule would silently change every recorded count and break comparability between traces, so the version moves only through a reviewed change.
+
+The library type never crosses the port. `Tokenizer` stays a project-owned interface, the adapter's errors are project-owned, and the emitted declarations are checked for library types (INV-ADAPTER-001).
+
+### Scope of the Encoding
+
+`o200k_base` is a reference adapter, not a universal tokenizer. Its counts are valid for model families that use `o200k_base` and must not be assumed valid for another family.
+
+Supporting another family requires either a separate adapter or an explicit decision introducing a model-to-encoding mapping. Silently falling back to a different tokenizer is forbidden: a count from the wrong vocabulary is wrong data, not an approximation.
+
+### Alternatives Considered
+
+#### tiktoken (WASM bindings)
+
+Rejected for the first adapter: it adds a WASM artifact to the build and to every consumer without improving the correctness of the counts the MVP needs.
+
+#### Character or word estimation
+
+Rejected. An estimate cannot support a hard budget guarantee, and a compiled context validated against an estimate can still overflow the real budget.
+
+#### A provider token-count API
+
+Rejected. It requires a network call and credentials, makes core tests dependent on an external service, and introduces latency and nondeterminism into a value the compiler must compute locally.
+
+### Validation
+
+Committed golden fixtures record exact counts for empty text, ASCII, significant whitespace, LF and CRLF line endings, Cyrillic, Japanese, composed and decomposed Unicode forms, emoji including a multi-code-point sequence, Markdown, TypeScript code, literal special-token-looking text, and a mixed-language paragraph.
+
+Those counts are not self-certified by the adapter. Before they were committed they were cross-checked against the official `openai/tiktoken` Python package, version 0.12.0, using ordinary-text encoding semantics. The oracle run happens outside the repository; the committed suite requires no Python, no oracle package, and no network.
+
+### Consequences
+
+`js-tiktoken` must not become a dependency of `@ctxalloc/domain`, `@ctxalloc/ports`, `@ctxalloc/compiler`, `@ctxalloc/application`, `@ctxalloc/testing`, `@ctxalloc/evaluation`, the CLI, or the API.
+
+Token budgets remain a domain concern. A tokenizer reports what text costs; deciding what fits belongs to the allocator (INV-DEP-003).
+
+This decision resolves OPEN-001 for the first adapter only. It does not decide the tokenizer for any other model family.
+
+---
+
 # 4. Rejected Decisions
 
 ## REJ-001: Build a Full AI Operating System
@@ -1483,6 +1572,10 @@ Accept | Reject | Revisit later
 The following questions remain intentionally unresolved.
 
 ## OPEN-001: Which Tokenizer Will Be the First Production Adapter?
+
+Answered for the first adapter by DEC-027: `js-tiktoken` 1.0.21 with the `o200k_base` encoding.
+
+The question remains open for every other model family. `o200k_base` is a reference encoding, and a family that uses a different vocabulary requires its own adapter or an explicit model-to-encoding mapping decision.
 
 Requirements:
 

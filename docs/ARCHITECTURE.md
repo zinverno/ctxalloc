@@ -385,6 +385,8 @@ interface CompilationRequest {
     totalTokens: number;
     reservedOutputTokens: number;
     reservedSystemTokens?: number;
+    reservedToolTokens?: number;
+    reservedProtocolTokens?: number;
   };
 
   policy: CompilationPolicy;

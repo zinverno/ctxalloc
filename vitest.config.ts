@@ -14,11 +14,16 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     environment: 'node',
+    // Building the real tokenizer's rank table takes about a second per instance,
+    // and the contract suite deliberately constructs independent instances. The
+    // raised limit keeps those tests from failing on machine speed alone.
+    testTimeout: 30_000,
   },
   resolve: {
     alias: {
       '@ctxalloc/ports': packageEntry('ports'),
       '@ctxalloc/testing': packageEntry('testing'),
+      '@ctxalloc/tokenization': packageEntry('tokenization'),
     },
   },
 });

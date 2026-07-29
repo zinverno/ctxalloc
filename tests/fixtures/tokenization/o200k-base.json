@@ -1,0 +1,117 @@
+{
+  "fixtureSchemaVersion": 1,
+  "encoding": "o200k_base",
+  "adapter": {
+    "package": "js-tiktoken",
+    "version": "1.0.21"
+  },
+  "oracle": {
+    "package": "tiktoken",
+    "version": "0.12.0",
+    "method": "encode_ordinary"
+  },
+  "cases": [
+    {
+      "id": "empty",
+      "description": "Empty string: costs zero tokens.",
+      "text": "",
+      "expectedTokens": 0
+    },
+    {
+      "id": "ascii-sentence",
+      "description": "Plain ASCII sentence.",
+      "text": "The compiler selects final context.",
+      "expectedTokens": 6
+    },
+    {
+      "id": "ascii-whitespace-padded",
+      "description": "Leading and trailing whitespace is significant and never trimmed.",
+      "text": "   leading and trailing whitespace   ",
+      "expectedTokens": 6
+    },
+    {
+      "id": "line-ending-lf",
+      "description": "LF line endings.",
+      "text": "first\nsecond\nthird\n",
+      "expectedTokens": 6
+    },
+    {
+      "id": "line-ending-crlf",
+      "description": "CRLF line endings: the same lines as line-ending-lf, counted independently.",
+      "text": "first\r\nsecond\r\nthird\r\n",
+      "expectedTokens": 6
+    },
+    {
+      "id": "line-ending-lf-trailing-space",
+      "description": "Trailing space before blank LF lines. Paired with line-ending-crlf-trailing-space, where the same lines cost one token more, this shows that line endings are counted exactly and never normalized.",
+      "text": "summary \n\n\nbody text",
+      "expectedTokens": 4
+    },
+    {
+      "id": "line-ending-crlf-trailing-space",
+      "description": "CRLF form of line-ending-lf-trailing-space: identical lines, a different exact count.",
+      "text": "summary \r\n\r\n\r\nbody text",
+      "expectedTokens": 5
+    },
+    {
+      "id": "cyrillic",
+      "description": "Cyrillic script.",
+      "text": "Детерминированный компилятор контекста.",
+      "expectedTokens": 13
+    },
+    {
+      "id": "japanese",
+      "description": "Japanese script: a non-Latin script without spaces between words.",
+      "text": "コンテキストは決定論的にコンパイルされます。",
+      "expectedTokens": 16
+    },
+    {
+      "id": "unicode-nfc-composed",
+      "description": "Composed (NFC) form: precomposed accented characters.",
+      "text": "café résumé",
+      "expectedTokens": 3
+    },
+    {
+      "id": "unicode-nfd-decomposed",
+      "description": "Decomposed (NFD) form of unicode-nfc-composed: base letters plus combining acute accents. No normalization is applied, so this is a separate input.",
+      "text": "café résumé",
+      "expectedTokens": 7
+    },
+    {
+      "id": "emoji-single",
+      "description": "Single supplementary-plane emoji.",
+      "text": "🚀",
+      "expectedTokens": 2
+    },
+    {
+      "id": "emoji-zwj-sequence",
+      "description": "Multi-code-point emoji: a zero-width-joiner family sequence.",
+      "text": "👩‍👩‍👧‍👦",
+      "expectedTokens": 11
+    },
+    {
+      "id": "markdown-document",
+      "description": "Markdown with a heading, a list, and a block quote.",
+      "text": "# Token budget\n\n- required blocks are resolved first\n- optional blocks follow policy order\n\n> The rendered context is the source of truth.\n",
+      "expectedTokens": 28
+    },
+    {
+      "id": "typescript-code",
+      "description": "TypeScript source code inside a fenced code block.",
+      "text": "```ts\nexport function availableInputTokens(budget: TokenBudget): number {\n  return budget.totalTokens - budget.reservedOutputTokens;\n}\n```",
+      "expectedTokens": 30
+    },
+    {
+      "id": "literal-special-token",
+      "description": "Text containing a special-token-looking substring. It is counted as literal source text and never interpreted as a control token.",
+      "text": "Literal <|endoftext|> stays ordinary text.",
+      "expectedTokens": 12
+    },
+    {
+      "id": "mixed-language-paragraph",
+      "description": "Longer paragraph mixing Latin, Cyrillic, and Japanese text with an emoji.",
+      "text": "CtxAlloc compiles context deterministically: it selects a minimal sufficient subset of candidate blocks under a strict token budget, renders the result, and records every decision. Детерминизм означает, что одинаковые входные данные всегда дают одинаковый результат. 同じ入力は常に同じ出力を生成します 🚀 — no randomness, no clock, no network.",
+      "expectedTokens": 76
+    }
+  ]
+}
