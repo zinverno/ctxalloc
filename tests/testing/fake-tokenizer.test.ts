@@ -186,6 +186,24 @@ describe('FakeTokenizer failure semantics', () => {
     expect(() => new FakeTokenizer([], { version: '' })).toThrow(FakeTokenizerConfigurationError);
   });
 
+  it('INV-TRACE-005: rejects a whitespace-only tokenizer id', () => {
+    for (const id of [' ', '   ', '\t', '\n', ' \r\n\t ']) {
+      expect(() => new FakeTokenizer([], { id })).toThrow(FakeTokenizerConfigurationError);
+    }
+  });
+
+  it('INV-TRACE-005: rejects a whitespace-only tokenizer version', () => {
+    for (const version of [' ', '   ', '\t', '\n', ' \r\n\t ']) {
+      expect(() => new FakeTokenizer([], { version })).toThrow(FakeTokenizerConfigurationError);
+    }
+  });
+
+  it('keeps a surrounding-whitespace identity verbatim instead of trimming it', () => {
+    const tokenizer = new FakeTokenizer([], { id: ' fake ', version: ' 1 ' });
+    expect(tokenizer.id).toBe(' fake ');
+    expect(tokenizer.version).toBe(' 1 ');
+  });
+
   it('rejects a duplicate mapping for the same exact text', () => {
     expect(
       () =>

@@ -1,0 +1,26 @@
+{
+  // Aggregate type-check program.
+  //
+  // `tsc -b` cannot type-check without emitting once a package references another
+  // composite project, so type checking uses this single non-composite program
+  // instead. It covers package sources, app sources, tests, and the TypeScript
+  // configuration files, resolves workspace packages to their sources so no
+  // `dist` directory is required, and never emits.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@ctxalloc/domain": ["packages/domain/src/index.ts"],
+      "@ctxalloc/ports": ["packages/ports/src/index.ts"],
+      "@ctxalloc/testing": ["packages/testing/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+}

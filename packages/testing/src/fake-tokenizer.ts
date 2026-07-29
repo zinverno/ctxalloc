@@ -64,9 +64,16 @@ function previewText(text: string): string {
   return `${JSON.stringify(head)}... (${codePoints.length} code points)`;
 }
 
-function requireNonEmpty(value: string, field: string): string {
-  if (value.length === 0) {
-    throw new FakeTokenizerConfigurationError(`FakeTokenizer ${field} must not be empty.`);
+/**
+ * Rejects blank identity values without rewriting them: a tokenizer identity is
+ * recorded verbatim in a trace, so trimming here would silently store a value
+ * the caller never configured.
+ */
+function requireNonBlank(value: string, field: string): string {
+  if (value.trim().length === 0) {
+    throw new FakeTokenizerConfigurationError(
+      `FakeTokenizer ${field} must not be empty or whitespace-only.`,
+    );
   }
   return value;
 }
@@ -93,8 +100,8 @@ export class FakeTokenizer implements Tokenizer {
   readonly #counts: ReadonlyMap<string, number>;
 
   constructor(entries: readonly FakeTokenizerEntry[], options: FakeTokenizerOptions = {}) {
-    this.id = requireNonEmpty(options.id ?? DEFAULT_ID, 'id');
-    this.version = requireNonEmpty(options.version ?? DEFAULT_VERSION, 'version');
+    this.id = requireNonBlank(options.id ?? DEFAULT_ID, 'id');
+    this.version = requireNonBlank(options.version ?? DEFAULT_VERSION, 'version');
 
     const counts = new Map<string, number>();
     for (const entry of entries) {

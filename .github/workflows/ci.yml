@@ -28,3 +28,6 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Validate declarations
+        run: pnpm check:declarations
