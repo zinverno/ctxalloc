@@ -9,17 +9,22 @@ or agent framework.
 
 ## Status
 
-Phase 2 — domain foundation. The repository contains the TypeScript monorepo
-scaffolding from Phase 1 (workspace structure, strict compiler and linting
-configuration, test infrastructure, package boundaries, boundary checker) and the
-runtime-validated domain model in `@ctxalloc/domain`: scope, identifiers, content
-hash values, JSON-safe metadata, source types, source locations, `SourceDocument`,
-`ContextBlock`, and a structured validation API.
+Phase 3 — minimal ports and test doubles. The repository contains the TypeScript
+monorepo scaffolding from Phase 1 (workspace structure, strict compiler and
+linting configuration, test infrastructure, package boundaries, boundary checker),
+the runtime-validated domain model in `@ctxalloc/domain` (scope, identifiers,
+content hash values, JSON-safe metadata, source types, source locations,
+`SourceDocument`, `ContextBlock`, and a structured validation API), the
+project-owned `Tokenizer` port in `@ctxalloc/ports`, and the deterministic
+`FakeTokenizer` test double in `@ctxalloc/testing`, together with a reusable
+tokenizer contract test suite.
 
-**Compiler behavior is still not implemented.** The domain package defines and
-validates data only. There is no tokenization, token allocation, scoring,
-deduplication, rendering, trace generation, retrieval, ingestion, persistence,
-HTTP, or CLI behavior yet. CtxAlloc does not yet compile or optimize context.
+**No real tokenizer and no compiler behavior exist yet.** The fake tokenizer
+returns only explicitly configured counts for exact text and fails on anything
+else; it is a test double, not a token estimator. There is no real tokenization,
+token budget, allocation, scoring, deduplication, rendering, trace generation,
+retrieval, ingestion, persistence, HTTP, or CLI behavior yet. CtxAlloc does not
+yet compile or optimize context.
 
 ## Prerequisites
 

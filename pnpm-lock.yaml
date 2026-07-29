@@ -51,7 +51,11 @@ importers:
 
   packages/ports: {}
 
-  packages/testing: {}
+  packages/testing:
+    dependencies:
+      '@ctxalloc/ports':
+        specifier: workspace:*
+        version: link:../ports
 
   packages/tokenization: {}
 
