@@ -3,7 +3,12 @@
   "compilerOptions": {
     "composite": false,
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    "baseUrl": "..",
+    "paths": {
+      "@ctxalloc/ports": ["packages/ports/src/index.ts"],
+      "@ctxalloc/testing": ["packages/testing/src/index.ts"]
+    }
   },
   "include": ["**/*.ts"]
 }
