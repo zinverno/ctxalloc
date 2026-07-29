@@ -71,6 +71,7 @@ A newer decision has replaced the previous one.
 | DEC-023 | Write documentation in English                               | Accepted |
 | DEC-024 | Use Claude Code as the main implementation environment       | Accepted |
 | DEC-025 | Use stronger models selectively for reviews                  | Accepted |
+| DEC-026 | Keep canonical ContextBlock data query-independent           | Accepted |
 
 ---
 
@@ -1004,6 +1005,50 @@ Independent review has higher value than using the strongest model for every sim
 Routine implementation can use the primary Claude Code model.
 
 Remaining GPT or higher-tier model limits should be reserved for critical independent checks.
+
+---
+
+## DEC-026: Keep Canonical ContextBlock Data Query-Independent
+
+### Status
+
+Accepted
+
+### Decision
+
+A `ContextBlock` contains only source-derived or explicitly authored block data.
+
+Its data is query-independent: the same block record is valid for every query in its scope.
+
+Query-dependent values are separated as follows:
+
+* retrieval-supplied scores belong to a future candidate wrapper produced for one request;
+* calculated relevance, recency, redundancy, and utility scores belong to a future scoring result;
+* scoring must never mutate the canonical `ContextBlock`.
+
+### Context
+
+An earlier version of the architecture placed `relevanceScore` and `recencyScore` inside `ContextBlock.attributes`.
+
+Those values describe one retrieval or one compilation for one query, not the block itself. Persisting them on the canonical entity would mean:
+
+* the stored record changes meaning depending on the last query that touched it;
+* the same block yields different persisted data for different queries;
+* deduplication and content hashing would have to ignore parts of the record;
+* a stale score could silently influence a later compilation;
+* provenance and scoring responsibilities would be merged in one structure.
+
+Required status and authored priority are different. They are declared properties of the block and remain valid across queries, so they stay in `attributes`.
+
+### Consequences
+
+`relevanceScore` and `recencyScore` are removed from `ContextBlock`.
+
+Retrieval scores remain untrusted inputs and must be validated where they enter the system (INV-SCORE-002, INV-SCORE-004). Score components must still be recorded in the trace (INV-SCORE-001).
+
+Required status keeps its separate allocation class and must not be represented as a large numeric score (INV-SCORE-003).
+
+The candidate and scored-candidate structures are not implemented by this decision. They are introduced when retrieval and scoring phases begin.
 
 ---
 

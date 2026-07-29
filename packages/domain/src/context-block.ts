@@ -11,27 +11,23 @@ import { TimestampSchema } from './timestamp.js';
 export const CONTEXT_BLOCK_SCHEMA_VERSION = 1;
 
 /**
- * Selection attributes supplied with a candidate (ARCHITECTURE section 5.3).
+ * Query-independent authored attributes of a block (DEC-026).
  *
- * `relevanceScore` and `recencyScore` are *inputs* placed here by the
- * architecture document, not compiler results. They arrive from untrusted
- * providers, so they are validated as finite numbers and must be normalized by
- * explicit policy before use (INV-SCORE-002, INV-SCORE-004).
+ * These values describe the block itself and stay identical no matter which
+ * query is being compiled. Query-dependent retrieval scores do not belong here:
+ * a provider's relevance or recency score is a property of one retrieval for one
+ * query, so storing it on the canonical entity would make the record's meaning
+ * depend on the last query that touched it. Those values will travel on a future
+ * candidate wrapper, and calculated scores on a future scoring result.
  *
  * `required` is a declaration only. Required blocks form a separate allocation
  * class and must never be modelled as a large score (INV-SCORE-003); that logic
  * belongs to the allocator, not to this record.
  */
-const finiteScore = z
-  .number()
-  .refine((value) => Number.isFinite(value), { message: 'must be a finite number' });
-
 const ContextBlockAttributesSchema = z.strictObject({
   required: z.boolean().optional(),
   priority: z.number().int().optional(),
   category: z.string().optional(),
-  relevanceScore: finiteScore.optional(),
-  recencyScore: finiteScore.optional(),
 });
 
 export type ContextBlockAttributes = Readonly<z.infer<typeof ContextBlockAttributesSchema>>;
@@ -44,9 +40,10 @@ export type ContextBlockAttributes = Readonly<z.infer<typeof ContextBlockAttribu
  * (INV-PROV-005). Content is validated but never trimmed or rewritten, so the
  * extractive guarantee holds byte-for-byte (DEC-014).
  *
- * The record deliberately contains no scoring result, allocation decision, trace
- * decision, rendered output, or generated summary. Those are produced by later
- * stages and must not be stored on the candidate itself.
+ * The record is query-independent (DEC-026): it contains only source-derived or
+ * explicitly authored data. It deliberately contains no retrieval score, scoring
+ * result, allocation decision, trace decision, rendered output, or generated
+ * summary. Those are produced by later stages and must not be stored here.
  */
 export const ContextBlockSchema = z.strictObject({
   id: ContextBlockIdSchema,

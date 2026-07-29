@@ -104,13 +104,11 @@ describe('supplied measurement and attribute values are validated', () => {
   });
 
   it.each([
-    ['NaN relevanceScore', { relevanceScore: Number.NaN }],
-    ['Infinite relevanceScore', { relevanceScore: Number.POSITIVE_INFINITY }],
-    ['Infinite recencyScore', { recencyScore: Number.NEGATIVE_INFINITY }],
     ['fractional priority', { priority: 1.5 }],
     ['non-boolean required', { required: 'yes' }],
+    ['non-string category', { category: 7 }],
     ['unknown attribute', { score: 1 }],
-  ])('INV-SCORE-004: rejects attributes with %s', (_label, attributes) => {
+  ])('rejects attributes with %s', (_label, attributes) => {
     expect(
       safeParse(ContextBlockSchema, {
         ...validContextBlock(),
@@ -119,13 +117,46 @@ describe('supplied measurement and attribute values are validated', () => {
     ).toBe(false);
   });
 
-  it('accepts finite provider scores as untrusted inputs', () => {
+  it('accepts query-independent authored attributes', () => {
     expect(
       safeParse(ContextBlockSchema, {
         ...validContextBlock(),
-        attributes: { relevanceScore: 0.87, recencyScore: -3, required: false, priority: -1 },
+        attributes: { required: false, priority: -1, category: 'notes' },
       }).ok,
     ).toBe(true);
+  });
+});
+
+describe('DEC-026: canonical block data is query-independent', () => {
+  it.each([
+    ['relevanceScore', { relevanceScore: 0.87 }],
+    ['recencyScore', { recencyScore: 0.5 }],
+    ['both retrieval scores', { relevanceScore: 0.87, recencyScore: 0.5 }],
+  ])('rejects %s in attributes as an unknown field', (_label, scores) => {
+    const result = safeParse(ContextBlockSchema, {
+      ...validContextBlock(),
+      attributes: { required: true, ...scores },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.code === 'unrecognized_keys')).toBe(true);
+    }
+  });
+
+  it.each(['relevanceScore', 'recencyScore'])('rejects a top-level %s on the block', (field) => {
+    expect(safeParse(ContextBlockSchema, { ...validContextBlock(), [field]: 0.9 }).ok).toBe(false);
+  });
+
+  it('exposes no score field on the attributes type', () => {
+    const result = safeParse(ContextBlockSchema, validContextBlock());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(Object.keys(result.value.attributes).sort()).toEqual([
+        'category',
+        'priority',
+        'required',
+      ]);
+    }
   });
 });
 
