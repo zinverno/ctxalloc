@@ -41,6 +41,12 @@ export {
 export { SOURCE_TYPES, SourceTypeSchema, type SourceType } from './source-type.js';
 export { TimestampSchema, type Timestamp } from './timestamp.js';
 export {
+  TokenBudgetSchema,
+  availableInputTokens,
+  configuredReservedTokens,
+  type TokenBudget,
+} from './token-budget.js';
+export {
   DomainValidationError,
   parseOrThrow,
   safeParse,

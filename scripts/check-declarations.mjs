@@ -22,6 +22,8 @@ const DECLARATIONS = [
   'packages/ports/dist/tokenizer.d.ts',
   'packages/testing/dist/index.d.ts',
   'packages/testing/dist/fake-tokenizer.d.ts',
+  'packages/tokenization/dist/index.d.ts',
+  'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -77,6 +79,57 @@ requireContains(
   'packages/testing/dist/fake-tokenizer.d.ts',
   'class FakeTokenizer implements Tokenizer',
 );
+
+// The real adapter implements the port and publishes its stable identity.
+requireContains(
+  'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
+  'class O200kBaseTokenizer implements Tokenizer',
+);
+requireContains(
+  'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
+  'O200K_BASE_TOKENIZER_ID = "js-tiktoken:o200k_base"',
+);
+requireContains(
+  'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
+  'O200K_BASE_TOKENIZER_VERSION = "1.0.21"',
+);
+requireContains(
+  'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
+  'O200K_BASE_ENCODING = "o200k_base"',
+);
+requireContains(
+  'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
+  'countTokens(text: string)',
+);
+requireContains('packages/tokenization/dist/index.d.ts', "} from './o200k-base-tokenizer.js'");
+
+// The tokenizer library stays behind the adapter: no js-tiktoken type may appear
+// in the published tokenization surface (INV-ADAPTER-001). Documentation
+// comments are removed first, because they legitimately name the library that the
+// adapter wraps; only declared code is inspected. The stable tokenizer id also
+// names the library on purpose and is the one accepted occurrence.
+function stripComments(content) {
+  return content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+const TOKENIZER_LIBRARY_TYPES = ['Tiktoken', 'TiktokenBPE', 'TiktokenEncoding', 'TiktokenModel'];
+
+for (const relativePath of [
+  'packages/tokenization/dist/index.d.ts',
+  'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const type of TOKENIZER_LIBRARY_TYPES) {
+    if (declarations.includes(type)) {
+      fail(`${relativePath} exposes the tokenizer library type "${type}"`);
+    }
+  }
+  if (declarations.replaceAll('"js-tiktoken:o200k_base"', '').includes('js-tiktoken')) {
+    fail(`${relativePath} references "js-tiktoken" outside the stable tokenizer identity`);
+  }
+}
 
 // No external library type reaches a public declaration.
 for (const [relativePath, content] of contents) {
