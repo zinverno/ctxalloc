@@ -5,9 +5,23 @@ import { validInput } from './fixtures.js';
 
 const rootUrl = new URL('../../', import.meta.url);
 
+/**
+ * The source-ingestion use case (DEC-028) and its helpers.
+ *
+ * The package entry point is deliberately absent: since Phase 6 it also
+ * re-exports the Markdown chunker, so assertions about what *ingestion* does not
+ * do no longer apply to the barrel file.
+ */
 const SOURCE_FILES = [
-  'packages/application/src/index.ts',
   'packages/application/src/source-ingestion.ts',
+  'packages/application/src/unicode.ts',
+] as const;
+
+/** Every application source file, for the properties the whole layer must hold. */
+const ALL_SOURCE_FILES = [
+  ...SOURCE_FILES,
+  'packages/application/src/index.ts',
+  'packages/application/src/markdown-chunker.ts',
 ] as const;
 
 /**
@@ -66,7 +80,7 @@ describe('INV-DET-001: source ingestion is deterministic', () => {
 });
 
 describe('INV-DEP-002: source ingestion has no hidden inputs', () => {
-  it.each(SOURCE_FILES)('%s reads no clock, randomness, or ambient state', (relativePath) => {
+  it.each(ALL_SOURCE_FILES)('%s reads no clock, randomness, or ambient state', (relativePath) => {
     const source = readSource(relativePath);
     for (const forbidden of [
       'Math.random',
@@ -82,7 +96,7 @@ describe('INV-DEP-002: source ingestion has no hidden inputs', () => {
     }
   });
 
-  it.each(SOURCE_FILES)('%s performs no filesystem or network access', (relativePath) => {
+  it.each(ALL_SOURCE_FILES)('%s performs no filesystem or network access', (relativePath) => {
     const source = readSource(relativePath);
     for (const forbidden of [
       'node:fs',

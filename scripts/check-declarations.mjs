@@ -26,6 +26,7 @@ const DECLARATIONS = [
   'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
   'packages/application/dist/index.d.ts',
   'packages/application/dist/source-ingestion.d.ts',
+  'packages/application/dist/markdown-chunker.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -148,6 +149,70 @@ requireContains(
   'readonly code = "SOURCE_INGESTION_INVALID_INPUT"',
 );
 requireContains('packages/application/dist/index.d.ts', "} from './source-ingestion.js'");
+
+// The Markdown chunker keeps its documented constructor, its token policy, and
+// its project-owned error types, and exposes no internal scanner type.
+requireContains(
+  'packages/application/dist/markdown-chunker.d.ts',
+  'interface MarkdownChunkingOptions',
+);
+requireContains(
+  'packages/application/dist/markdown-chunker.d.ts',
+  'readonly targetTokens: number;',
+);
+requireContains('packages/application/dist/markdown-chunker.d.ts', 'readonly maxTokens: number;');
+requireContains(
+  'packages/application/dist/markdown-chunker.d.ts',
+  'declare class MarkdownChunkingValidationError extends Error',
+);
+requireContains(
+  'packages/application/dist/markdown-chunker.d.ts',
+  'readonly code = "MARKDOWN_CHUNKING_INVALID_INPUT"',
+);
+requireContains(
+  'packages/application/dist/markdown-chunker.d.ts',
+  'declare class MarkdownChunkingError extends Error',
+);
+requireContains('packages/application/dist/markdown-chunker.d.ts', 'declare class MarkdownChunker');
+requireContains(
+  'packages/application/dist/markdown-chunker.d.ts',
+  'constructor(tokenizer: Tokenizer, options: MarkdownChunkingOptions);',
+);
+requireContains(
+  'packages/application/dist/markdown-chunker.d.ts',
+  'chunk(source: IngestedSource): readonly ContextBlock[];',
+);
+requireContains('packages/application/dist/index.d.ts', "} from './markdown-chunker.js'");
+
+// Internal scanner vocabulary stays private to the module (DEC-029).
+const CHUNKER_INTERNAL_TYPES = [
+  'SourceLine',
+  'LogicalBlock',
+  'BlockGroup',
+  'HeadingInfo',
+  'Section',
+  'Fence',
+  'PieceBoundary',
+  'CountSlice',
+];
+
+{
+  const content = contents.get('packages/application/dist/markdown-chunker.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const type of CHUNKER_INTERNAL_TYPES) {
+      if (declarations.includes(type)) {
+        fail(`packages/application/dist/markdown-chunker.d.ts exposes the internal type "${type}"`);
+      }
+    }
+    // No Obsidian type may ever reach the public surface (INV-ADAPTER-001).
+    for (const type of ['obsidian', 'CachedMetadata', 'HeadingCache', 'TFile', 'Vault']) {
+      if (declarations.includes(type)) {
+        fail(`packages/application/dist/markdown-chunker.d.ts exposes the Obsidian type "${type}"`);
+      }
+    }
+  }
+}
 
 // The validation library and the Node standard library stay implementation
 // details of the use case: neither may appear in its published surface

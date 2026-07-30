@@ -74,6 +74,7 @@ A newer decision has replaced the previous one.
 | DEC-026 | Keep canonical ContextBlock data query-independent           | Accepted |
 | DEC-027 | Use js-tiktoken o200k_base as the first real tokenizer       | Accepted |
 | DEC-028 | Derive source document identity from explicit logical identity | Accepted |
+| DEC-029 | Chunk Markdown deterministically in the application layer      | Accepted |
 
 ---
 
@@ -1238,6 +1239,148 @@ Validation happens at the runtime boundary: the function accepts `unknown`, reje
 Chunking and `ContextBlock` identity are separate later decisions. This decision fixes source-level identity only and says nothing about how blocks are derived, how block identifiers are built, or whether block content is normalized before hashing.
 
 Reversing the identity algorithm would change every stored `SourceDocument` ID, so a change requires a new algorithm version and a documented migration.
+
+---
+
+## DEC-029: Chunk Markdown Deterministically in the Application Layer
+
+### Status
+
+Accepted
+
+### Decision
+
+Markdown chunking is an application-layer deterministic transformation. It lives in `@ctxalloc/application` as `MarkdownChunker`, one synchronous, offline class that turns one validated Markdown `IngestedSource` (DEC-028) into runtime-validated `ContextBlock` records.
+
+The chunker receives the project-owned `Tokenizer` port through constructor injection and an explicit token policy. It reads no file, opens no socket, queries no database, calls no model, reads no clock, and generates no random value.
+
+The domain does not gain Markdown parsing, and the compiler does not gain source ingestion or chunking. Reading bytes remains a future SourceReader adapter, which this decision does not create.
+
+### Reference Implementation
+
+The scanner design was adapted from the author's Obsidian plugin `zinverno/obsidian-ai-hub` at commit `e592cbc99d27259db77e05fa06a833f91169cf89`, which is MIT licensed. The license notice is preserved in `THIRD_PARTY_NOTICES.md`.
+
+Only structural scanning ideas were adapted: the CRLF-aware line scan with exact offsets, ATX heading recognition with a heading level stack, fence-aware heading detection for backtick and tilde fences, strict source-only frontmatter detection, and the treatment of lists, blockquotes and callouts, tables, and HTML blocks as atomic logical units.
+
+Obsidian APIs and cache types are excluded. `CachedMetadata`, `HeadingCache`, `TFile`, `Vault`, `App`, and `Plugin` do not appear in CtxAlloc, and no Obsidian package is a dependency (INV-ADAPTER-001). The plugin's architecture, its path-derived identity scheme, and its non-cryptographic `stableHash` are not reused.
+
+### Canonical Block Content
+
+`ContextBlock.content` is an exact substring of the ingested source:
+
+```text
+source.content.slice(startOffset, endOffset) === block.content
+```
+
+Nothing is trimmed, CRLF-normalized, blank-line collapsed, Unicode-normalized, truncated, or rewritten, and no breadcrumb, heading label, or ellipsis is inserted. Wiki links and embeds stay as written.
+
+This is a deliberate difference from the reference implementation, whose chunk text contains a generated breadcrumb followed by a normalized body. Heading context is preserved in `ContextBlock.headingPath` instead, so provenance is machine-readable and the extractive guarantee stays byte-exact (DEC-014, INV-ALLOC-004, INV-PROV-002).
+
+### Token Limits Replace Character Limits
+
+The policy is `targetTokens` and `maxTokens`, both finite positive safe integers with `targetTokens <= maxTokens`. Numeric strings, fractions, `NaN`, `Infinity`, zero, negatives, and unknown option fields are rejected, and no production default is injected (INV-BUDGET-005).
+
+Every boundary and grouping decision is validated by calling the injected tokenizer over the exact candidate substring. No character-count estimate, and in particular no characters-divided-by-four rule, participates in a decision.
+
+The recorded `tokenCount` describes `block.content` only. Heading path rendering, source labels, separators, compiler wrappers, and protocol overhead are not counted here: the final compiled total is measured by tokenizing the rendered context, which stays a compiler responsibility (INV-BUDGET-002, INV-RENDER-004).
+
+### No Overlap
+
+Canonical blocks never overlap and never duplicate source content. The reference implementation prepends an overlapping suffix of the previous chunk to improve embedding recall; that behavior is not reproduced.
+
+Overlap is deferred to a future retrieval or indexing adapter, where duplicated text would be a property of one index rather than of the canonical record. Introducing it requires its own decision and evidence, because overlapping canonical blocks would double-count tokens, duplicate content in a compiled context, and make block identity ambiguous.
+
+### Atomic Blocks
+
+Fenced code, lists, blockquotes and callouts, tables, and HTML blocks are atomic and are never split. Paragraphs are the only splittable kind.
+
+An atomic block larger than `maxTokens` is emitted as one block, preserved exactly, and marked `metadata.chunking.oversized: true`. It is never truncated and never cut inside a Unicode code point (INV-BLOCK-007, INV-RENDER-005). Deciding what to do with an oversized block belongs to the allocator, which must be able to see the whole unit.
+
+Paragraph splitting prefers a sentence boundary, then a whitespace boundary, then a Unicode-safe hard boundary. When a single indivisible code point cannot fit, it is emitted intact and marked oversized rather than dropped.
+
+### Frontmatter
+
+Frontmatter is detected from the source only, never from a metadata cache. The opener is accepted at the very beginning of the source as exactly `---`, optionally preceded by a BOM; the closing delimiter is exactly `---`; LF and CRLF are both supported. Leading whitespace before the opener, an indented closing delimiter, and an unclosed opener all mean there is no frontmatter, and a `---` later in the document is ordinary content.
+
+Valid frontmatter is excluded from block content. It is not parsed as YAML, its fields are not injected into metadata, and `SourceDocument.metadata` is not modified: source data must never become compiler input (INV-SEC-001). `SourceDocument.contentHash` remains the hash of the complete original source, including the frontmatter.
+
+### Setext Headings
+
+Setext headings are not recognized in this phase. A `Title` line followed by `===` or `---` stays ordinary paragraph content.
+
+The reference implementation supports them only through validated Obsidian cache data. Deciding source-only whether an underline belongs to a preceding paragraph requires full block-context tracking, and a wrong answer moves a section boundary and therefore every offset after it. The limitation is documented and tested rather than approximated. Adding Setext support later is a behavior change that requires updated fixtures, because it changes section boundaries and therefore block identity.
+
+### Heading Paths
+
+Heading paths are built with a heading level stack: a heading pops the stack until the top is shallower, skipped levels are allowed, duplicate heading text is allowed, and heading-like lines inside fences are ignored. A section body starts after its heading line, so heading markers never enter block content and a parent never repeats a child's body. A heading with no body produces no block.
+
+Heading text is the parsed ATX title with surrounding and repeated inner whitespace collapsed. That value is provenance metadata, not content, so normalizing it cannot alter source text.
+
+Content before the first heading forms a root section. When `SourceDocument.title` is present and not blank, the root heading path is `[title]`, used exactly as supplied; otherwise `headingPath` is omitted. A heading path is never derived from an absolute path or inferred from a filename, and the title is never trimmed or rewritten.
+
+### Source Ranges
+
+Every Markdown block carries a `text-range` source location with half-open offsets and one-based `startLine` and `endLine`, where `endLine` is the line containing the final source character. One-based numbering follows `SourceLocationSchema`, which requires positive integers; the reference implementation's zero-based lines are not copied.
+
+Ranges are in non-decreasing source order and never overlap.
+
+### Normalized Content Hash
+
+`ContextBlock.normalizedContentHash` is the SHA-256 of the block content after line-ending normalization only, represented as `sha256:<64 lowercase hexadecimal characters>`.
+
+Normalization replaces CRLF with LF and any remaining lone CR with LF. It does not trim, remove trailing spaces, collapse blank lines, or normalize Unicode. This makes an LF copy and a CRLF copy of the same text comparable without changing code indentation, Markdown spacing, or Unicode composition, each of which can carry meaning.
+
+The hash is cryptographic on purpose. A non-cryptographic hash such as the reference project's `stableHash` is not used for CtxAlloc identity.
+
+### ContextBlock Identity Algorithm
+
+The base identity payload is serialized with `JSON.stringify`:
+
+```json
+[
+  "ctxalloc-context-block-id",
+  1,
+  source.document.id,
+  headingPathOrNull,
+  normalizedContentHash
+]
+```
+
+`headingPathOrNull` is the exact `headingPath` array or `null`. `normalizedContentHash` is the block field value.
+
+Blocks are traversed in source order, and an occurrence counter is kept per exact serialized base payload: the first occurrence is `0`, the second `1`, and so on. The final payload appends that integer to the base array. The ID is the SHA-256 of the serialized final array encoded as UTF-8, represented as:
+
+```text
+context-block:sha256:<64 lowercase hexadecimal characters>
+```
+
+The literal integer `1` is the algorithm version. A change to the tuple, its order, or its meaning must raise it.
+
+The payload excludes absolute paths, current offsets, line numbers, token counts, tokenizer identity, title, timestamps, metadata, the current time, randomness, database identifiers, and process information.
+
+The consequences are intended:
+
+* unchanged normalized content under the same source and heading path keeps its ID even when unrelated earlier text shifts its offsets (INV-BLOCK-001);
+* duplicate identical blocks stay unique through deterministic occurrence (INV-BLOCK-002);
+* a heading change is a visible identity change;
+* a normalized content change is a visible identity change;
+* a source document change is a visible identity change.
+
+Committed golden vectors pin the algorithm.
+
+### Errors
+
+Two project-owned error types are exported. `MarkdownChunkingValidationError` with code `MARKDOWN_CHUNKING_INVALID_INPUT` reports invalid construction input and invalid chunking input, including a `contentHash` mismatch, which is an explicit machine-readable issue rather than an assertion failure.
+
+`MarkdownChunkingError` reports failures that the caller's input did not cause: `MARKDOWN_CHUNKING_TOKENIZER_FAILED` when the injected tokenizer throws or returns a value that is not a usable count, and `MARKDOWN_CHUNKING_INVALID_BLOCK` when an internally derived block fails domain validation. Both carry the source range being processed.
+
+No validation-library error, no tokenizer-library error, and no `DomainValidationError` escapes the public API (INV-ADAPTER-001, INV-ADAPTER-003).
+
+### Consequences
+
+`@ctxalloc/application` now declares `@ctxalloc/ports` in addition to `@ctxalloc/domain`. That edge is already permitted by the boundary allowlist. The chunker does not import `@ctxalloc/tokenization`, `js-tiktoken`, or any concrete tokenizer: the composition root or a test chooses the implementation.
+
+Because block identity depends on normalized content and heading path, any future change to section boundaries, atomic-block detection, paragraph splitting, or the normalization rule changes stored block identifiers and requires a new algorithm version and a documented migration.
 
 ---
 

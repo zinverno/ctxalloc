@@ -9,7 +9,7 @@ or agent framework.
 
 ## Status
 
-Phase 5 — deterministic source ingestion. The repository contains the TypeScript
+Phase 6 — deterministic Markdown chunking. The repository contains the TypeScript
 monorepo scaffolding from Phase 1 (workspace structure, strict compiler and
 linting configuration, test infrastructure, package boundaries, boundary
 checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
@@ -18,7 +18,7 @@ locations, `SourceDocument`, `ContextBlock`, `TokenBudget`, and a structured
 validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
 deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
 tokenizer contract test suite, a real offline tokenizer adapter in
-`@ctxalloc/tokenization`, and the first application use case in
+`@ctxalloc/tokenization`, and the first two application use cases in
 `@ctxalloc/application`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
@@ -46,10 +46,36 @@ UTF-8. Content is never normalized: line endings, whitespace, a BOM, a trailing
 newline, and composed or decomposed Unicode all survive unchanged and are all
 visible in the hash. Malformed UTF-16 is rejected before hashing.
 
-**No source reader exists.** Ingestion reads no file, walks no directory,
-fetches no URL, and infers no path or scope; the caller supplies the content.
-There is no Markdown parsing, no frontmatter handling, no chunking, and no
-`ContextBlock` creation from sources.
+`MarkdownChunker` turns one ingested Markdown source into validated
+`ContextBlock` records (see [DEC-029](./docs/DECISIONS.md)). It is synchronous,
+deterministic, and offline, takes the `Tokenizer` port through constructor
+injection, and takes an explicit `targetTokens` / `maxTokens` policy — token
+limits, never character estimates. Every block's `content` is an exact substring
+of the source: `source.content.slice(startOffset, endOffset) === block.content`.
+Heading context lives in `headingPath`, never inside the content, and canonical
+blocks never overlap.
+
+The chunker recognizes ATX headings, backtick and tilde fences, strict
+source-only frontmatter, loose and nested lists, blockquotes and callouts,
+tables, and HTML blocks. Fenced code, lists, quotes, tables, and HTML blocks are
+atomic and are never split; an atomic block larger than `maxTokens` is emitted
+intact and marked oversized rather than truncated. Only paragraphs are split, at
+a sentence, whitespace, or Unicode-safe boundary, and never inside a surrogate
+pair. Block IDs are SHA-256 over a versioned payload of source document, heading
+path, normalized content hash, and a deterministic duplicate occurrence, so a
+block keeps its identity when unrelated earlier text shifts its offsets.
+**Setext headings are not supported in this phase:** a title underlined with
+`===` or `---` stays ordinary paragraph content, a limitation documented in
+DEC-029 rather than approximated.
+
+Its structural scanning design was adapted from the MIT-licensed
+`zinverno/obsidian-ai-hub` plugin; see
+[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md). CtxAlloc imports no Obsidian
+API or metadata cache type.
+
+**No source reader exists.** Ingestion and chunking read no file, walk no
+directory, fetch no URL, and infer no path or scope; the caller supplies the
+content.
 
 **No compiler and no allocator exist yet.** Nothing decides which blocks fit a
 budget. There is no allocation, scoring, deduplication, ordering, rendering,

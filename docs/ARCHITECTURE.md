@@ -646,15 +646,21 @@ Application source ingestion, implemented:
   hashes exact source content
   returns SourceDocument plus unchanged content
 
-Chunker, future:
-  converts ingested content into ContextBlock records
+Application Markdown chunker, implemented:
+  scans Markdown structurally
+  preserves exact source text as block content
+  counts tokens through the injected Tokenizer port
+  derives stable ContextBlock identity
+  returns blocks in source order
 
 Compiler:
   receives blocks only
   never reads source content from files during compilation
 ```
 
-Only the application ingestion stage exists today. No SourceReader port and no source reader adapter has been implemented; ingestion receives content the caller has already read. Identity derivation and content hashing follow DEC-028.
+The application ingestion and chunking stages exist today. No SourceReader port and no source reader adapter has been implemented; ingestion receives content the caller has already read. Identity derivation and content hashing follow DEC-028, and Markdown chunking follows DEC-029.
+
+The chunker is an application-layer transformation, not a domain or compiler concern: the domain imports no Markdown parsing, and the compiler imports no ingestion or chunking behavior. It depends on the `Tokenizer` port rather than a tokenizer implementation, so the composition root chooses the adapter.
 
 ---
 
