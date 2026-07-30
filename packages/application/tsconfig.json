@@ -2,13 +2,14 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
-    // Source ingestion hashes with the Node standard library, so this package
-    // needs the Node ambient types. It uses no other global environment.
+    // Source ingestion and Markdown chunking hash with the Node standard
+    // library, so this package needs the Node ambient types. It uses no other
+    // global environment.
     "types": ["node"],
     "rootDir": "src",
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src"],
-  "references": [{ "path": "../domain" }]
+  "references": [{ "path": "../domain" }, { "path": "../ports" }]
 }
