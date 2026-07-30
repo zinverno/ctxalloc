@@ -1282,6 +1282,8 @@ The policy is `targetTokens` and `maxTokens`, both finite positive safe integers
 
 Every boundary and grouping decision is validated by calling the injected tokenizer over the exact candidate substring. No character-count estimate, and in particular no characters-divided-by-four rule, participates in a decision.
 
+Boundary selection evaluates every candidate in a class rather than stopping at the first one that exceeds `maxTokens`. The `Tokenizer` port guarantees deterministic exact counts but deliberately does not guarantee that a count grows as text is extended: a subword tokenizer can merge tokens so that a longer substring costs fewer of them. An overflowing candidate therefore proves nothing about a later one, and inferring otherwise would discard a boundary that genuinely fits. This decision does not add a monotonicity requirement to the port.
+
 The recorded `tokenCount` describes `block.content` only. Heading path rendering, source labels, separators, compiler wrappers, and protocol overhead are not counted here: the final compiled total is measured by tokenizing the rendered context, which stays a compiler responsibility (INV-BUDGET-002, INV-RENDER-004).
 
 ### No Overlap
@@ -1312,7 +1314,11 @@ The reference implementation supports them only through validated Obsidian cache
 
 ### Heading Paths
 
-Heading paths are built with a heading level stack: a heading pops the stack until the top is shallower, skipped levels are allowed, duplicate heading text is allowed, and heading-like lines inside fences are ignored. A section body starts after its heading line, so heading markers never enter block content and a parent never repeats a child's body. A heading with no body produces no block.
+Heading paths are built with a heading level stack: a heading pops the stack until the top is shallower, skipped levels are allowed, and duplicate heading text is allowed. A section body starts after its heading line, so heading markers never enter block content and a parent never repeats a child's body. A heading with no body produces no block.
+
+Section discovery and logical block parsing are one pass over the source, not two. A line becomes a heading only when it is reached at document level, so an ATX-looking line inside any atomic span — fenced code, a blockquote or callout, a basic HTML block or comment, a table, or indented list content — is part of that block and never a section. Two passes could disagree about which spans are protected, and a disagreement would split an atomic block at its interior and leak the inner text into a heading path; one pass makes that structurally impossible.
+
+A heading indented to at least a list item's content column is list content. A heading indented less than that column is document structure and closes the list.
 
 Heading text is the parsed ATX title with surrounding and repeated inner whitespace collapsed. That value is provenance metadata, not content, so normalizing it cannot alter source text.
 

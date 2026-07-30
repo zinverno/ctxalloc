@@ -59,6 +59,28 @@ export function brokenTokenizer(value: number): Tokenizer {
   return { id: 'test:broken', version: '1', countTokens: (): number => value };
 }
 
+/**
+ * A tokenizer whose counts come from an exact-text table, with a fallback.
+ *
+ * It is fully deterministic and returns finite non-negative integers, so it
+ * satisfies the `Tokenizer` port, but its counts are deliberately **not**
+ * monotonic in the length of the text: a longer string may cost fewer tokens than
+ * a shorter one. Real subword tokenizers can behave this way when extending a
+ * string lets tokens merge, and the port never promises monotonicity, so the
+ * chunker must not assume it.
+ */
+export function scriptedTokenizer(
+  counts: Readonly<Record<string, number>>,
+  fallback: number,
+): Tokenizer {
+  const table = new Map<string, number>(Object.entries(counts));
+  return {
+    id: 'test:scripted',
+    version: '1',
+    countTokens: (text: string): number => table.get(text) ?? fallback,
+  };
+}
+
 export interface SourceOverrides {
   readonly title?: string;
   readonly sourceType?: string;

@@ -300,29 +300,6 @@ function scanLines(content: string): readonly SourceLine[] {
   return lines;
 }
 
-function linesInRange(
-  lines: readonly SourceLine[],
-  startOffset: number,
-  endOffset: number,
-): readonly SourceLine[] {
-  let low = 0;
-  let high = lines.length;
-  while (low < high) {
-    const middle = (low + high) >> 1;
-    const line = lines[middle];
-    if (line !== undefined && line.fullEndOffset <= startOffset) low = middle + 1;
-    else high = middle;
-  }
-
-  const result: SourceLine[] = [];
-  for (let index = low; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (line === undefined || line.startOffset >= endOffset) break;
-    result.push(line);
-  }
-  return result;
-}
-
 /** One-based line number of the line containing `offset` (SourceLocationSchema requires >= 1). */
 function lineNumberAtOffset(lines: readonly SourceLine[], offset: number): number {
   let low = 0;
@@ -433,48 +410,6 @@ function isFenceClose(line: string, fence: Fence): boolean {
   return run !== undefined && run.startsWith(fence.marker) && run.length >= fence.length;
 }
 
-/**
- * Collects ATX headings outside fenced code.
- *
- * Setext headings (`Title` followed by `===` or `---`) are deliberately not
- * recognized. Deciding whether an underline belongs to a preceding paragraph
- * requires full block-context tracking — lazy continuation, list items, and
- * blockquotes all change the answer — and the reference implementation resolved
- * it by trusting the Obsidian metadata cache, which does not exist here. A
- * source-only approximation would misplace section boundaries and therefore
- * misplace block offsets, so the limitation is documented instead of guessed
- * (DEC-029): a Setext-underlined title stays ordinary paragraph content.
- */
-function scanHeadings(lines: readonly SourceLine[], contentStart: number): readonly HeadingInfo[] {
-  const headings: HeadingInfo[] = [];
-  let fence: Fence | null = null;
-
-  for (const line of lines) {
-    if (line.startOffset < contentStart) continue;
-    if (fence !== null) {
-      if (isFenceClose(line.text, fence)) fence = null;
-      continue;
-    }
-
-    const openedFence = parseFenceOpen(line.text);
-    if (openedFence !== null) {
-      fence = openedFence;
-      continue;
-    }
-
-    const parsed = parseAtxHeading(line.text);
-    if (parsed === null) continue;
-    headings.push({
-      level: parsed.level,
-      text: parsed.text,
-      startOffset: line.startOffset,
-      bodyStartOffset: line.fullEndOffset,
-    });
-  }
-
-  return headings;
-}
-
 interface Section {
   /** Empty when the section has no heading path at all. */
   readonly headingPath: readonly string[];
@@ -546,6 +481,8 @@ interface LogicalBlock {
 
 interface ListMarker {
   readonly indent: number;
+  /** Column where the item's own content begins, after the marker and its spacing. */
+  readonly contentIndent: number;
   readonly ordered: boolean;
 }
 
@@ -556,12 +493,35 @@ function isBlank(line: SourceLine): boolean {
 function parseListMarker(text: string): ListMarker | null {
   const match = /^( *)([-+*]|\d+[.)])[ \t]+/.exec(text);
   if (match === null) return null;
-  return { indent: (match[1] ?? '').length, ordered: /^\d/.test(match[2] ?? '') };
+  return {
+    indent: (match[1] ?? '').length,
+    // Column where the item's own content begins, used to decide whether an
+    // indented line belongs to the item or ends the list.
+    contentIndent: match[0].length,
+    ordered: /^\d/.test(match[2] ?? ''),
+  };
 }
 
 function isListStart(text: string): boolean {
   const marker = parseListMarker(text);
   return marker !== null && marker.indent <= 3;
+}
+
+function leadingSpaces(text: string): number {
+  return /^ */.exec(text)?.[0].length ?? 0;
+}
+
+/**
+ * True when an ATX-heading-looking line ends a list whose items start their content
+ * at `contentIndent`.
+ *
+ * A heading indented to at least the item's content column is list content, so it
+ * stays inside the atomic block and never becomes a document section. A heading
+ * indented less than that column is ordinary document structure and closes the
+ * list.
+ */
+function endsListWithHeading(text: string, contentIndent: number): boolean {
+  return parseAtxHeading(text) !== null && leadingSpaces(text) < contentIndent;
 }
 
 /**
@@ -580,6 +540,7 @@ function listBlockEnd(lines: readonly SourceLine[], start: number): number {
     const line = lines[index];
     if (line === undefined) break;
     if (!isBlank(line)) {
+      if (endsListWithHeading(line.text, rootMarker.contentIndent)) return index;
       index += 1;
       continue;
     }
@@ -630,21 +591,48 @@ function isTableStart(lines: readonly SourceLine[], index: number): boolean {
   );
 }
 
+/** Headings and logical blocks as understood by one single interpretation of the source. */
+interface StructuralScan {
+  readonly headings: readonly HeadingInfo[];
+  readonly blocks: readonly LogicalBlock[];
+}
+
 /**
- * Splits one section body into logical blocks.
+ * Interprets the whole document body once, producing both the section headings and
+ * the logical blocks.
  *
- * An unclosed fence runs to the end of its section, which keeps heading-like and
- * list-like text inside code from being reinterpreted as structure.
+ * Section discovery and block parsing deliberately share this one pass. When they
+ * were two passes, the heading scan only protected fenced code, so an
+ * ATX-looking line inside another atomic structure — an HTML block or comment, or
+ * indented list content — was recognized as a heading and cut that atomic block in
+ * half, with the inner text leaking into `headingPath`. Because a single walk
+ * consumes each atomic span before its interior can be examined, the two views can
+ * no longer disagree about what is protected.
+ *
+ * A line becomes a heading only when it is reached at document level. Fenced code
+ * is consumed first, so heading-like, list-like, and HTML-like text inside code is
+ * never reinterpreted, and an unclosed fence runs to the end of the document.
+ *
+ * Setext headings (`Title` followed by `===` or `---`) are deliberately not
+ * recognized. Deciding whether an underline belongs to a preceding paragraph
+ * requires full block-context tracking — lazy continuation, list items, and
+ * blockquotes all change the answer — and the reference implementation resolved
+ * it by trusting the Obsidian metadata cache, which does not exist here. A
+ * source-only approximation would misplace section boundaries and therefore
+ * misplace block offsets, so the limitation is documented instead of guessed
+ * (DEC-029): a Setext-underlined title stays ordinary paragraph content.
  */
-function parseLogicalBlocks(
+function scanStructure(
   content: string,
-  allLines: readonly SourceLine[],
-  startOffset: number,
-  endOffset: number,
-): readonly LogicalBlock[] {
-  const lines = linesInRange(allLines, startOffset, endOffset);
+  lines: readonly SourceLine[],
+  contentStart: number,
+): StructuralScan {
+  const headings: HeadingInfo[] = [];
   const blocks: LogicalBlock[] = [];
   let index = 0;
+  while (index < lines.length && (lines[index]?.startOffset ?? contentStart) < contentStart) {
+    index += 1;
+  }
 
   const push = (start: number, end: number, kind: LogicalBlockKind, atomic: boolean): void => {
     const first = lines[start];
@@ -681,6 +669,20 @@ function parseLogicalBlocks(
       continue;
     }
 
+    // Reached at document level only: every atomic span above and below consumes
+    // its own interior, so a heading-like line inside one never arrives here.
+    const heading = parseAtxHeading(line.text);
+    if (heading !== null) {
+      headings.push({
+        level: heading.level,
+        text: heading.text,
+        startOffset: line.startOffset,
+        bodyStartOffset: line.fullEndOffset,
+      });
+      index += 1;
+      continue;
+    }
+
     if (isTableStart(lines, index)) {
       const start = index;
       index += 2;
@@ -700,6 +702,10 @@ function parseLogicalBlocks(
       continue;
     }
 
+    // A blockquote, callout, or basic HTML block or comment spans consecutive
+    // non-blank lines. Its interior is never re-examined, so an ATX-looking line
+    // inside it stays part of the atomic block. A blank line still closes the
+    // span, which is the documented extent of basic HTML support.
     const groupedKind: LogicalBlockKind | null = isQuoteStart(line.text)
       ? 'quote'
       : isHtmlStart(line.text)
@@ -724,6 +730,7 @@ function parseLogicalBlocks(
       if (
         current === undefined ||
         isBlank(current) ||
+        parseAtxHeading(current.text) !== null ||
         parseFenceOpen(current.text) !== null ||
         isTableStart(lines, index) ||
         isListStart(current.text) ||
@@ -737,7 +744,7 @@ function parseLogicalBlocks(
     push(start, index, 'paragraph', false);
   }
 
-  return blocks;
+  return { headings, blocks };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -791,17 +798,21 @@ interface PieceBoundary {
 type CountSlice = (start: number, end: number) => number;
 
 /**
- * Chooses the boundary closest to `targetTokens` among candidates that fit.
+ * Chooses the boundary closest to `targetTokens` among the candidates that fit.
  *
- * Candidates are visited in source order and each one is measured with the exact
- * tokenizer over the exact substring it would produce — no character-count
- * estimate takes part in the decision. The scan stops at the first candidate that
- * exceeds `maxTokens`, which keeps the rule total and deterministic without
- * assuming that token counts grow monotonically with length. Equal distances
- * prefer the later boundary, so a tie never depends on iteration accidents
- * (INV-DET-005).
+ * Every candidate is measured with the exact tokenizer over the exact substring it
+ * would produce; no character-count estimate takes part in the decision.
+ *
+ * The scan deliberately never stops early. The `Tokenizer` port guarantees
+ * deterministic exact counts, but it does not guarantee that a count grows as text
+ * is extended, and a subword tokenizer can merge a longer substring into fewer
+ * tokens than a shorter one. An overflowing candidate therefore says nothing about
+ * a later candidate, so every candidate is evaluated rather than inferred away.
+ *
+ * Equal distances prefer the later boundary, so a tie never depends on iteration
+ * accidents (INV-DET-005).
  */
-function pickBoundary(
+function bestFittingBoundary(
   content: string,
   start: number,
   candidates: readonly number[],
@@ -815,7 +826,7 @@ function pickBoundary(
     const end = trimmedEnd(content, start, candidate);
     if (end <= start) continue;
     const tokens = countSlice(start, end);
-    if (tokens > options.maxTokens) break;
+    if (tokens > options.maxTokens) continue;
     const distance = Math.abs(tokens - options.targetTokens);
     if (distance <= bestDistance) {
       best = { endOffset: end, nextCursor: candidate };
@@ -832,14 +843,28 @@ function codePointWidth(content: string, offset: number): number {
   return codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
 }
 
+/** Every whole-code-point boundary in `(start, limit]`, so no surrogate pair is divided. */
+function codePointBoundaries(content: string, start: number, limit: number): readonly number[] {
+  const boundaries: number[] = [];
+  let cursor = start;
+  while (cursor < limit) {
+    cursor = Math.min(cursor + codePointWidth(content, cursor), limit);
+    boundaries.push(cursor);
+  }
+  return boundaries;
+}
+
 /**
- * Last resort when no sentence or whitespace boundary fits: advance whole code
- * points until the exact count would exceed `maxTokens`.
+ * Last resort when no sentence or whitespace boundary fits.
  *
- * A surrogate pair is never divided. When even the first code point does not fit,
- * it is emitted intact and the caller marks the block oversized: truncating or
- * splitting it would either lose source text or create a lone surrogate
- * (INV-BLOCK-007, INV-RENDER-005).
+ * The candidates are whole code points, so a surrogate pair is never divided, and
+ * all of them are measured: a shorter prefix that overflows never rules out a
+ * longer one that fits.
+ *
+ * Only when no non-empty whole-code-point candidate fits `maxTokens` is the first
+ * code point emitted intact, and the caller then marks the block oversized.
+ * Truncating it would lose source text and cutting it would create a lone
+ * surrogate (INV-BLOCK-007, INV-RENDER-005).
  */
 function hardBoundary(
   content: string,
@@ -848,19 +873,13 @@ function hardBoundary(
   options: MarkdownChunkingOptions,
   countSlice: CountSlice,
 ): PieceBoundary {
-  let cursor = start;
-  let fitting: PieceBoundary | null = null;
-
-  while (cursor < limit) {
-    const next = cursor + codePointWidth(content, cursor);
-    const end = trimmedEnd(content, start, Math.min(next, limit));
-    if (end > start) {
-      if (countSlice(start, end) > options.maxTokens) break;
-      fitting = { endOffset: end, nextCursor: Math.min(next, limit) };
-    }
-    cursor = Math.min(next, limit);
-  }
-
+  const fitting = bestFittingBoundary(
+    content,
+    start,
+    codePointBoundaries(content, start, limit),
+    options,
+    countSlice,
+  );
   if (fitting !== null) return fitting;
 
   const single = Math.min(start + codePointWidth(content, start), limit);
@@ -895,14 +914,14 @@ function splitParagraph(
       boundary = { endOffset: remainderEnd, nextCursor: block.endOffset };
     } else {
       boundary =
-        pickBoundary(
+        bestFittingBoundary(
           content,
           cursor,
           sentenceBoundaries(content, cursor, block.endOffset),
           options,
           countSlice,
         ) ??
-        pickBoundary(
+        bestFittingBoundary(
           content,
           cursor,
           whitespaceBoundaries(content, cursor, block.endOffset),
@@ -1128,23 +1147,32 @@ export class MarkdownChunker {
     const rootHeadingPath =
       title !== undefined && title.trim().length > 0 ? Object.freeze([title]) : [];
 
+    // One interpretation of the source produces both the headings and the logical
+    // blocks, so a section boundary can never fall inside an atomic block.
+    const structure = scanStructure(content, lines, contentStart);
     const sections = buildSections(
       rootHeadingPath,
       content.length,
       contentStart,
-      scanHeadings(lines, contentStart),
+      structure.headings,
     );
 
     const blocks: ContextBlock[] = [];
     const occurrences = new Map<string, number>();
+    // Both sections and blocks are in source order, so one cursor assigns every
+    // block to its section without rescanning.
+    let blockCursor = 0;
 
     for (const section of sections) {
-      const logical = parseLogicalBlocks(
-        content,
-        lines,
-        section.startOffset,
-        section.endOffset,
-      ).flatMap((block) =>
+      const sectionBlocks: LogicalBlock[] = [];
+      while (blockCursor < structure.blocks.length) {
+        const block = structure.blocks[blockCursor];
+        if (block === undefined || block.startOffset >= section.endOffset) break;
+        sectionBlocks.push(block);
+        blockCursor += 1;
+      }
+
+      const logical = sectionBlocks.flatMap((block) =>
         block.atomic ? [block] : splitParagraph(content, block, this.#options, countSlice),
       );
       if (logical.length === 0) continue;
