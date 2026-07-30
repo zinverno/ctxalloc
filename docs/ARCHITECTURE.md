@@ -634,6 +634,28 @@ Compilation must not perform:
 
 This separation keeps compilation predictable and fast.
 
+Current stage responsibilities:
+
+```text
+SourceReader adapter, future:
+  reads bytes/text and provider metadata
+
+Application source ingestion, implemented:
+  validates explicit input
+  derives SourceDocument identity
+  hashes exact source content
+  returns SourceDocument plus unchanged content
+
+Chunker, future:
+  converts ingested content into ContextBlock records
+
+Compiler:
+  receives blocks only
+  never reads source content from files during compilation
+```
+
+Only the application ingestion stage exists today. No SourceReader port and no source reader adapter has been implemented; ingestion receives content the caller has already read. Identity derivation and content hashing follow DEC-028.
+
 ---
 
 ## 10. Markdown and Obsidian Architecture

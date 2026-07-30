@@ -10,5 +10,9 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "dependencies": {
+    "@ctxalloc/domain": "workspace:*",
+    "zod": "^4.4.3"
   }
 }

@@ -73,6 +73,7 @@ A newer decision has replaced the previous one.
 | DEC-025 | Use stronger models selectively for reviews                  | Accepted |
 | DEC-026 | Keep canonical ContextBlock data query-independent           | Accepted |
 | DEC-027 | Use js-tiktoken o200k_base as the first real tokenizer       | Accepted |
+| DEC-028 | Derive source document identity from explicit logical identity | Accepted |
 
 ---
 
@@ -1138,6 +1139,105 @@ Those counts are not self-certified by the adapter. Before they were committed t
 Token budgets remain a domain concern. A tokenizer reports what text costs; deciding what fits belongs to the allocator (INV-DEP-003).
 
 This decision resolves OPEN-001 for the first adapter only. It does not decide the tokenizer for any other model family.
+
+---
+
+## DEC-028: Derive Source Document Identity From Explicit Logical Identity
+
+### Status
+
+Accepted
+
+### Decision
+
+Source ingestion is an application-layer use case. It lives in `@ctxalloc/application` as one synchronous, deterministic, offline function.
+
+The function receives an explicit scope, a closed `SourceType`, an explicit logical source identity, source content that the caller has already read, optional title and timestamps, and JSON-safe metadata. It returns a runtime-validated `SourceDocument` together with the exact unchanged content.
+
+It does not read a file, walk a directory, fetch a URL, infer a scope or a path, read the clock, generate a random value, normalize text, parse Markdown or frontmatter, split content, create `ContextBlock` records, count tokens, call a model, or persist anything.
+
+Reading bytes remains the responsibility of a future SourceReader adapter, which does not exist yet. This decision does not create that port.
+
+### Logical Source Identity
+
+A source is identified by two caller-controlled strings:
+
+```text
+namespace   the identity namespace the caller owns
+key         one logical source inside that namespace
+```
+
+Both are exact values. They are never trimmed, lowercased, or otherwise rewritten, and neither is a machine-specific absolute path by definition. A future file reader can build them from a stable vault identifier plus a relative path; a future conversation reader from a provider namespace plus a stable conversation identifier.
+
+Absolute paths, relative paths, and provider identifiers may travel in `metadata`, where they remain ordinary untrusted source metadata (INV-SEC-001). They are never project-owned identity by themselves (INV-ADAPTER-002).
+
+### Source Document Identity Algorithm
+
+The document ID is the SHA-256 of this canonical identity payload, serialized with `JSON.stringify` and encoded as UTF-8:
+
+```json
+[
+  "ctxalloc-source-document-id",
+  1,
+  scope.tenantId,
+  scope.workspaceId,
+  scope.projectId ?? null,
+  sourceType,
+  identity.namespace,
+  identity.key
+]
+```
+
+The result is represented as:
+
+```text
+source-document:sha256:<64 lowercase hexadecimal characters>
+```
+
+The literal integer `1` is the version of this algorithm. A future change to the tuple, its order, or its meaning must raise that number, which makes the change a visible new identity rather than a silent reinterpretation of existing records.
+
+A fixed-order array is hashed rather than an object, so property insertion order cannot affect the result (INV-DET-002).
+
+The payload deliberately excludes content, `contentHash`, title, timestamps, metadata, the current time, random values, process information, hostname, and any absolute local path. The identity is therefore independent of the source content: editing one logical source changes its `contentHash` and keeps its document identity (INV-BLOCK-001).
+
+Scope participates so the same logical key in another tenant, workspace, or project never reuses one project-owned document ID (INV-SCOPE-002). The source type participates so one key cannot silently change meaning between `markdown`, `text`, and `conversation`.
+
+UUIDs, absolute paths, and database-generated identifiers are not used (INV-DET-003).
+
+### Source Content Hash
+
+`SourceDocument.contentHash` is the SHA-256 of the exact source content encoded as UTF-8, represented as `sha256:<64 lowercase hexadecimal characters>`.
+
+The exact source content is the canonical content for this phase. Ingestion performs no trimming, no Unicode normalization, no line-ending conversion, no BOM removal, no Markdown or frontmatter parsing, no whitespace rewriting, and no trailing-newline adjustment.
+
+The observable consequences are intentional:
+
+* LF and CRLF variants hash differently;
+* NFC and NFD variants hash differently;
+* adding or removing a trailing newline changes the hash;
+* leading or trailing whitespace changes the hash;
+* identical exact content always produces the identical hash;
+* the empty string produces the standard SHA-256 empty-input digest.
+
+Preserving the exact bytes keeps the hash a statement about the source the caller actually holds (INV-PROV-005). A normalization policy, if one is ever needed for block-level deduplication, is a separate decision at the block layer.
+
+Content that is not well-formed UTF-16 is rejected before hashing. A lone surrogate has no UTF-8 encoding, and encoders substitute U+FFFD, which would produce a hash of text the caller never supplied (INV-BLOCK-007). Identity components are checked the same way. Scope values reach the identity payload through `JSON.stringify`, which escapes a lone surrogate instead of losing it, so the payload stays exactly recoverable either way.
+
+Hashing uses the Node.js standard library. No hashing dependency is added.
+
+### Determinism
+
+No clock, randomness, filesystem read, environment variable, database, network call, or tokenizer participates in ingestion. Identical canonical input always produces identical output, and input property order never affects the result (INV-DET-001, INV-DET-002, INV-DET-003, INV-DET-004).
+
+Validation happens at the runtime boundary: the function accepts `unknown`, rejects unknown fields instead of stripping them, coerces nothing, injects no default, and reports project-owned serializable issues. Validation-library errors do not escape the application API (INV-ADAPTER-001, INV-BLOCK-005).
+
+### Consequences
+
+`@ctxalloc/application` depends on `@ctxalloc/domain` and on the validation library it uses directly. It does not depend on the tokenizer, the ports package, or the compiler.
+
+Chunking and `ContextBlock` identity are separate later decisions. This decision fixes source-level identity only and says nothing about how blocks are derived, how block identifiers are built, or whether block content is normalized before hashing.
+
+Reversing the identity algorithm would change every stored `SourceDocument` ID, so a change requires a new algorithm version and a documented migration.
 
 ---
 

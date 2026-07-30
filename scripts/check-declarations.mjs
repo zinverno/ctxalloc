@@ -24,6 +24,8 @@ const DECLARATIONS = [
   'packages/testing/dist/fake-tokenizer.d.ts',
   'packages/tokenization/dist/index.d.ts',
   'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
+  'packages/application/dist/index.d.ts',
+  'packages/application/dist/source-ingestion.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -128,6 +130,49 @@ for (const relativePath of [
   }
   if (declarations.replaceAll('"js-tiktoken:o200k_base"', '').includes('js-tiktoken')) {
     fail(`${relativePath} references "js-tiktoken" outside the stable tokenizer identity`);
+  }
+}
+
+// Source ingestion keeps its documented runtime-boundary signature and its
+// project-owned error type.
+requireContains(
+  'packages/application/dist/source-ingestion.d.ts',
+  'declare function ingestSource(input: unknown): IngestedSource;',
+);
+requireContains(
+  'packages/application/dist/source-ingestion.d.ts',
+  'declare class SourceIngestionValidationError extends Error',
+);
+requireContains(
+  'packages/application/dist/source-ingestion.d.ts',
+  'readonly code = "SOURCE_INGESTION_INVALID_INPUT"',
+);
+requireContains('packages/application/dist/index.d.ts', "} from './source-ingestion.js'");
+
+// The validation library and the Node standard library stay implementation
+// details of the use case: neither may appear in its published surface
+// (INV-ADAPTER-001).
+const APPLICATION_LEAKED_TYPES = [
+  'zod',
+  'ZodType',
+  'ZodError',
+  'node:crypto',
+  'Buffer',
+  'BinaryLike',
+  'Hash',
+];
+
+for (const relativePath of [
+  'packages/application/dist/index.d.ts',
+  'packages/application/dist/source-ingestion.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const type of APPLICATION_LEAKED_TYPES) {
+    if (declarations.includes(type)) {
+      fail(`${relativePath} exposes the implementation type "${type}"`);
+    }
   }
 }
 
