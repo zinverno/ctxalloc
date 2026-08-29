@@ -1,14 +1,16 @@
 /**
- * UTF-16 well-formedness checks shared by the application use cases.
+ * UTF-16 well-formedness check shared by every layer that encodes a domain
+ * string as UTF-8.
  *
- * Both ingestion and chunking encode strings as UTF-8 before hashing, and
- * chunking additionally hands substrings to a tokenizer. A lone surrogate has no
- * UTF-8 encoding: encoders substitute U+FFFD, which would hash or count text the
- * caller never supplied. The check therefore lives in one place so the two use
- * cases cannot drift apart on a correctness rule (INV-BLOCK-007).
+ * A lone surrogate has no UTF-8 encoding: encoders substitute U+FFFD, so hashing
+ * or counting such a string describes text the caller never supplied
+ * (INV-BLOCK-007). Source ingestion, Markdown chunking, block content hashing,
+ * and candidate validation all depend on that rule, so it is owned once by the
+ * domain rather than copied into each consumer.
  *
- * This module is internal to `@ctxalloc/application` and is not exported from the
- * package entry point.
+ * The check is pure string arithmetic. It reads no clock, no environment, and no
+ * external system, so it does not weaken the domain's freedom from
+ * infrastructure (INV-DEP-001).
  */
 
 const HIGH_SURROGATE_FIRST = 0xd800;

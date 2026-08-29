@@ -29,7 +29,6 @@ const SOURCE_FILES = [
   'packages/application/src/index.ts',
   'packages/application/src/source-ingestion.ts',
   'packages/application/src/markdown-chunker.ts',
-  'packages/application/src/unicode.ts',
 ] as const;
 
 function readSource(relativePath: string): string {
@@ -114,6 +113,9 @@ describe('@ctxalloc/application public API', () => {
       'BlockGroup',
       'HeadingInfo',
       'findLoneSurrogate',
+      'calculateNormalizedContentHash',
+      'CandidateBlock',
+      'CandidateValidator',
     ]) {
       expect(Object.keys(application), `exports ${name}`).not.toContain(name);
     }
@@ -189,7 +191,7 @@ describe('@ctxalloc/application public API', () => {
     }
   });
 
-  it('keeps the domain package unchanged by this phase', () => {
+  it('INV-DEP-001: keeps application vocabulary out of the domain package', () => {
     const domainManifest = JSON.parse(
       readFileSync(new URL('packages/domain/package.json', rootUrl), 'utf8'),
     ) as Manifest;
