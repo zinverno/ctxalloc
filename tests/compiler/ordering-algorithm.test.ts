@@ -95,30 +95,55 @@ describe('DEC-034: text-range blocks follow source offsets', () => {
     expect(renderOrderOf(specs)).toEqual(['short', 'medium', 'long']);
   });
 
-  it('consults startLine only when both blocks carry one', () => {
+  it('does not order by startLine, however strongly it disagrees with the identifier', () => {
+    // Lines take no part in v1: offsets already establish position, and any rule
+    // reading optional line metadata either breaks transitivity or lets metadata
+    // completeness decide the layout.
     const specs: CandidateSpec[] = [
-      { id: 'later-line', sourceLocation: at(10, 20, [9, 9]) },
-      { id: 'earlier-line', sourceLocation: at(10, 20, [3, 3]) },
+      { id: 'a-later-line', sourceLocation: at(10, 20, [9, 9]) },
+      { id: 'z-earlier-line', sourceLocation: at(10, 20, [3, 3]) },
     ];
-    expect(renderOrderOf(specs)).toEqual(['earlier-line', 'later-line']);
+    expect(renderOrderOf(specs)).toEqual(['a-later-line', 'z-earlier-line']);
   });
 
-  it('breaks an equal startLine by endLine ascending', () => {
+  it('does not order by endLine either', () => {
     const specs: CandidateSpec[] = [
-      { id: 'wide', sourceLocation: at(10, 20, [3, 30]) },
-      { id: 'narrow', sourceLocation: at(10, 20, [3, 4]) },
+      { id: 'a-wide', sourceLocation: at(10, 20, [3, 30]) },
+      { id: 'z-narrow', sourceLocation: at(10, 20, [3, 4]) },
     ];
-    expect(renderOrderOf(specs)).toEqual(['narrow', 'wide']);
+    expect(renderOrderOf(specs)).toEqual(['a-wide', 'z-narrow']);
   });
 
-  it('falls to the block identifier when a line is present on only one block', () => {
-    // A present-versus-absent line comparison would order by which producer
-    // happened to record lines, so the identifier decides instead.
-    const specs: CandidateSpec[] = [
-      { id: 'z-with-line', sourceLocation: at(10, 20, [1, 2]) },
-      { id: 'a-without-line', sourceLocation: at(10, 20) },
+  it('gives the same order whether or not the optional line fields are recorded', () => {
+    const withLines: CandidateSpec[] = [
+      { id: 'b1', sourceLocation: at(0, 10, [1, 1]) },
+      { id: 'b2', sourceLocation: at(20, 30, [5, 5]) },
     ];
-    expect(renderOrderOf(specs)).toEqual(['a-without-line', 'z-with-line']);
+    const withoutLines: CandidateSpec[] = [
+      { id: 'b1', sourceLocation: at(0, 10) },
+      { id: 'b2', sourceLocation: at(20, 30) },
+    ];
+    // Optional metadata completeness must not change the layout.
+    expect(renderOrderOf(withLines)).toEqual(renderOrderOf(withoutLines));
+    expect(renderOrderOf(withLines)).toEqual(['b1', 'b2']);
+  });
+
+  it('lets endOffset order before the identifier, with lines present or absent', () => {
+    const specs: CandidateSpec[] = [
+      { id: 'a-long', sourceLocation: at(10, 90, [1, 9]) },
+      { id: 'z-short', sourceLocation: at(10, 20) },
+    ];
+    // `z-short` ends earlier, so it precedes despite the later identifier.
+    expect(renderOrderOf(specs)).toEqual(['z-short', 'a-long']);
+  });
+
+  it('orders identical offsets by block identifier whatever the line fields say', () => {
+    const specs: CandidateSpec[] = [
+      { id: 'a', sourceLocation: at(10, 20, [900, 900]) },
+      { id: 'b', sourceLocation: at(10, 20) },
+      { id: 'c', sourceLocation: at(10, 20, [1, 1]) },
+    ];
+    expect(renderOrderOf(specs)).toEqual(['a', 'b', 'c']);
   });
 
   it('INV-DET-005: breaks a complete positional tie by block identifier', () => {

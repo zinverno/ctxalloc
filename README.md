@@ -281,8 +281,11 @@ rendered, tokenized, measured, or cloned, and array position is the whole
 ordering contract — no index is written onto a block.
 
 **Blocks are grouped by source document, then follow that source's own order.**
-Text and Markdown blocks are ordered by character offset, then by line when both
-blocks record one. Conversation blocks follow `messageIndex`; a message that
+Text and Markdown blocks are ordered by character offset alone — `startLine` and
+`endLine` stay in the source location as provenance but never order anything,
+because comparing them only when both blocks record them is not transitive and
+ranking their presence would let optional metadata decide the layout.
+Conversation blocks follow `messageIndex`; a message that
 states no index comes after those that do, and `messageId` is only a
 deterministic code-unit fallback — never parsed for an embedded timestamp or
 sequence number, so `m-10` precedes `m-2`. A block with no source location is
@@ -293,8 +296,10 @@ block identifier.
 **Score and required status do not define render order.** A high-scoring block
 renders late when its source position is late, and a required block may render
 after an optional one from the same source. The score ranking, the allocation
-chronology, and the optional eviction order are three other sequences, and none
-of them is render order.
+chronology, and the optional eviction order are three other sequences: they share
+elements with the render order — the allocation chronology holds exactly the same
+decisions, and the eviction order a subset of them — but each answers a different
+question, so none may be derived from another.
 
 **No renderer exists yet.** Nothing produces a compiled string, no rendering
 overhead is measured, and there is still no final hard-budget guarantee. There is

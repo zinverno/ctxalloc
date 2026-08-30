@@ -1066,10 +1066,13 @@ that does not exist.
 
 Source-local position is the source's own chronology:
 
-* **text-range** — `startOffset` ascending, then `endOffset`, then `startLine`
-  and `endLine`, each consulted only when both blocks carry it. Offsets state
-  where the block sat in the original content; nothing is inferred from content,
-  heading path, or timestamps.
+* **text-range** — `startOffset` ascending, then `endOffset`, then the block
+  identifier. Offsets state where the block sat in the original content; nothing
+  is inferred from content, heading path, or timestamps. `startLine` and
+  `endLine` take no part: they remain in `SourceLocation` as provenance, but
+  comparing them only when both blocks carry one is not transitive, and ranking
+  their presence would let optional metadata completeness decide the layout
+  (DEC-034).
 * **conversation-message** — an indexed message precedes an unindexed one; two
   indexed messages compare by `messageIndex`, then `messageId`, then block ID;
   two unindexed messages compare by `messageId`, then block ID. `messageIndex` is
@@ -1079,9 +1082,12 @@ Source-local position is the source's own chronology:
   which are ordered by block ID alone. Position is never guessed
   (INV-PROV-002).
 
-The comparator is total: it ends in the block identifier, and falls back to the
-canonical serialization for a hand-assembled input carrying one identifier on two
-records (INV-DET-005). `localeCompare` and `Intl.Collator` are never used.
+The comparator is a total order by construction: a plain lexicographic
+composition of total orders, with no key that applies only when both blocks
+happen to carry it. It ends in the block identifier as the final semantic
+tie-break, and falls back to the canonical serialization for a hand-assembled
+input carrying one identifier on two different records (INV-DET-005).
+`localeCompare` and `Intl.Collator` are never used.
 
 #### What does not order
 
@@ -1100,8 +1106,14 @@ optionalEvictionOrder  what may be given back if rendering overruns  6.4
 render order           where does this content belong when read      6.5
 ```
 
-None is a reordering of another. In particular `optionalEvictionOrder` is carried
-through untouched and is not render order.
+These are distinct **semantic** sequences, not disjoint ones. Render order and
+allocation chronology hold the same decisions, so each is a permutation of the
+other; `optionalEvictionOrder` holds a subset of those block identifiers, ordered
+by eviction policy rather than by source position; and the score ranking also
+covers candidates allocation excluded. What separates them is that their ordering
+rules answer different questions, so **none may be derived from another**.
+`optionalEvictionOrder` in particular is carried through untouched and is not
+render order.
 
 #### Conservation
 

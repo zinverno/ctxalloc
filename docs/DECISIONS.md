@@ -2296,14 +2296,16 @@ It does not include, exclude, or evict a candidate, re-run allocation, score, de
 
 Phase 10 returns its inclusions in the order the budget was spent: required blocks, then category minimums, then score-selected optional blocks (DEC-033). That sequence records how the allocation was reached, and says nothing about how the content should read.
 
-Three orders now exist, and they are deliberately different questions:
+Four sequences now exist across the kernel, and they answer deliberately different questions:
 
 ```text
-score ranking          how useful is this candidate            Phase 9
-allocation chronology  in what order was the budget spent      Phase 10
-optionalEvictionOrder  what may be given back if rendering overruns   Phase 10
+score ranking          how useful is this candidate                  Phase 9
+allocation chronology  in what order was the budget spent            Phase 10
+optionalEvictionOrder  what may be given back if rendering overruns  Phase 10
 render order           where does this content belong when read      Phase 11
 ```
+
+They are distinct **semantic** sequences, not disjoint ones. Render order and allocation chronology hold exactly the same decisions, so each is literally a permutation of the other; `optionalEvictionOrder` holds a subset of those block identifiers; and the score ranking also covers candidates allocation excluded, so it is wider than all three. What separates them is that their ordering rules answer different questions, so none may be inferred or derived from another — not that their element sets differ.
 
 Leaving the renderer to sort for itself was rejected. Presentation would then be an implicit side effect of whichever array order happened to reach it, and INV-RENDER-001 requires the same ordered blocks and rendering policy to produce the same string — which presumes that "the ordered blocks" is something a stage decided, explicitly and reproducibly. So one stage owns render order, and it owns nothing else.
 
@@ -2338,9 +2340,23 @@ Grouping by source document first keeps one document's blocks contiguous, so the
 
 Position inside a source is the source's own chronology:
 
-**Text and Markdown** (`text-range`): `startOffset` ascending, then `endOffset` ascending, then `startLine` and then `endLine` — each consulted only when **both** blocks carry it, because a present-versus-absent comparison would order by which producer happened to record lines rather than by position.
+**Text and Markdown** (`text-range`): `startOffset` ascending, then `endOffset` ascending, then the block identifier. Nothing else.
 
 Offsets are the chronology of a text source: they state exactly where the block sat in the original content. Nothing is inferred from content, heading path, or timestamps, and `headingPath` in particular is provenance rather than sequence — two sections can share one heading path.
+
+`startLine` and `endLine` deliberately take no part in ordering. They stay in `SourceLocation` as provenance, and `CandidateValidator` still validates them; they simply are not an ordering signal in schema version 1.
+
+The first version of this decision compared them "only when both blocks carry one", and that rule was wrong. It is not transitive, so it is not an ordering at all. With identical offsets in one source:
+
+```text
+a   offsets 10-20   lines 2-2
+b   offsets 10-20   no lines
+c   offsets 10-20   lines 1-1
+```
+
+`a < b` and `b < c` both fell to the identifier, because `b` records no line; `c < a` came from the lines. The three results cannot hold together. A comparator with a cycle makes `Array.prototype.sort` an implementation detail rather than a contract — the specification leaves the result implementation-defined — so the stage would have promised a determinism it did not have (INV-DET-001, INV-DET-002, INV-DET-005).
+
+Ranking presence instead — every block with lines before every block without — is transitive, but it lets optional metadata completeness decide the layout: re-indexing a source with a producer that records lines would move blocks that did not change. Offsets already establish position exactly, so the line fields are redundant for this purpose, and ignoring them is the only v1 rule that is both a genuine total order and independent of which producer filled in optional provenance.
 
 **Conversation** (`conversation-message`): a message stating `messageIndex` precedes one that does not; two indexed messages compare by `messageIndex`, then `messageId`, then block ID; two unindexed messages compare by `messageId`, then block ID.
 
@@ -2373,7 +2389,7 @@ Nesting is deliberate. Every Phase 10 fact — scope, source registry, both earl
 
 **Array position is the whole of the ordering contract.** No index, rank, or position field is written onto a block or a decision: a block's position is a property of one compilation rather than of the block (DEC-026), and a stored index could disagree with the array holding it.
 
-`optionalEvictionOrder` is carried through untouched and is not render order. It answers what may be given back if rendering overruns, is restricted to optional blocks, and is neither a subset nor a reordering of the render sequence.
+`optionalEvictionOrder` is carried through untouched and is not render order. Viewed by block identity it *is* a subset of this sequence — the currently included optional blocks that are safely evictable — but it answers a different question, what may be given back if rendering overruns, and its relative order comes from eviction policy rather than from source position. Neither sequence may be derived from the other.
 
 ### Determinism
 

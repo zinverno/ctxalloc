@@ -28,6 +28,14 @@ import { canonicalJson, compareCodeUnits } from './canonical-json.js';
  * in that source: character offsets for text, message chronology for
  * conversations. A reader gets the source's own sequence rather than a ranking.
  *
+ * Four sequences now exist across the kernel — the Phase 9 score ranking, the
+ * Phase 10 allocation chronology, `optionalEvictionOrder`, and this render
+ * order. They are distinct *semantic* sequences, not disjoint ones: this order
+ * and the allocation chronology hold the same decisions, so each is literally a
+ * permutation of the other, and `optionalEvictionOrder` holds a subset of these
+ * block identifiers. What distinguishes them is that their ordering rules answer
+ * different questions, so none may be inferred or derived from another.
+ *
  * **It changes no decision.** Nothing is included, excluded, evicted, re-scored,
  * deduplicated, trimmed, or rewritten, and no block is cloned or synthesized:
  * `orderedIncluded` holds exactly the objects of `allocation.included`, by
@@ -104,9 +112,12 @@ export interface OrderedCandidateSet {
    * position is a property of one compilation rather than of the block
    * (DEC-026), and a stored index could disagree with the array holding it.
    *
-   * This is not `allocation.optionalEvictionOrder`, which answers a different
-   * question — what may be given back if rendering overruns — and is neither a
-   * subset nor a reordering of this sequence.
+   * This is not `allocation.optionalEvictionOrder`. By block identity that order
+   * is a subset of this sequence — the currently included optional blocks that
+   * are safely evictable — but it answers a different question, what may be
+   * given back if rendering overruns, and its relative order comes from eviction
+   * policy rather than from source position. Neither sequence may be derived
+   * from the other.
    */
   readonly orderedIncluded: readonly IncludedCandidateDecision[];
 }
@@ -216,18 +227,23 @@ function compareLocation(a: ContextBlock, b: ContextBlock): number {
 
   if (left.kind === 'text-range' && right.kind === 'text-range') {
     // Offsets are the chronology of a text source: they say exactly where the
-    // block sat in the original content. Lines are consulted only when both
-    // blocks carry them, because they are optional and a present-versus-absent
-    // comparison would order by which producer happened to record them.
+    // block sat in the original content, and they alone decide position here.
+    //
+    // `startLine` and `endLine` deliberately take no part. They are optional
+    // redundant provenance that offsets already establish, and any rule using
+    // them fails: comparing them only when both blocks carry one is not
+    // transitive, and ranking presence would order by which producer happened to
+    // record line metadata rather than by position.
+    //
+    // The non-transitivity is not hypothetical. With identical offsets, `a`
+    // (lines 2-2), `b` (no lines), and `c` (lines 1-1) gave `a < b` and `b < c`
+    // by identifier while `c < a` by line, a cycle that makes `Array.sort` an
+    // implementation detail rather than a contract (INV-DET-001, INV-DET-005).
+    // Ignoring the fields is the only v1 rule that is a genuine total order and
+    // keeps optional metadata completeness from changing the layout.
     return (
       compareNumbers(left.startOffset, right.startOffset) ||
-      compareNumbers(left.endOffset, right.endOffset) ||
-      (left.startLine !== undefined && right.startLine !== undefined
-        ? compareNumbers(left.startLine, right.startLine)
-        : 0) ||
-      (left.endLine !== undefined && right.endLine !== undefined
-        ? compareNumbers(left.endLine, right.endLine)
-        : 0)
+      compareNumbers(left.endOffset, right.endOffset)
     );
   }
 
