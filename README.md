@@ -9,7 +9,7 @@ or agent framework.
 
 ## Status
 
-Phase 8 — deterministic exact candidate deduplication. The repository contains
+Phase 9 — deterministic candidate scoring. The repository contains
 the TypeScript monorepo scaffolding from Phase 1 (workspace structure, strict
 compiler and linting configuration, test infrastructure, package boundaries,
 boundary checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
@@ -19,7 +19,7 @@ validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
 deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
 tokenizer contract test suite, a real offline tokenizer adapter in
 `@ctxalloc/tokenization`, the first two application use cases in
-`@ctxalloc/application`, and the first two compiler-kernel stages in
+`@ctxalloc/application`, and the first three compiler-kernel stages in
 `@ctxalloc/compiler`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
@@ -86,10 +86,11 @@ Candidates arrive as `CandidateBlock`, an ephemeral request-specific wrapper
 around one canonical `ContextBlock`. The wrapper carries optional
 retrieval-supplied data — provider identity, rank, and a provider-defined score
 with explicit `semantics` and `higherIsBetter` — so a `ContextBlock` stays
-query-independent. **Retrieval scores are carried but never normalized,
-compared, sorted by, or used to include anything;** scores from different
-providers or metrics are not assumed comparable. Retrieval data is never written
-back into the block.
+query-independent. **The validator carries retrieval scores without interpreting
+them:** it never normalizes, compares, or sorts by one, and scores from different
+providers or metrics are not assumed comparable. Only `CandidateScorer`
+interprets a score, and only under an exact normalization contract (see below).
+Retrieval data is never written back into the block.
 
 **Validation is strict and all-or-nothing.** Any problem rejects the whole batch
 with one structured `CandidateValidationError`. Nothing is silently removed,
@@ -120,9 +121,10 @@ block, with or without different retrieval metadata, pass through in input order
 for the next stage. What it rejects is one block ID attached to two _different_
 canonical records.
 
-Priority is restricted to finite safe integers, including negative values. No
-product-specific range exists yet; semantic bounds belong to the future
-`CompilationPolicy`.
+Priority is restricted to finite safe integers, including negative values. The
+block schema itself still declares no product-specific range: a semantic range
+exists only where a scoring policy states one, in the `authoredPriority`
+component described below.
 
 `CandidateDeduplicator` is the second stage of the kernel (see
 [DEC-031](./docs/DECISIONS.md)). It takes a `ValidatedCandidateSet` and returns
@@ -161,12 +163,58 @@ exists** either: it requires a versioned `CompilationPolicy`, so no candidate is
 excluded here for its category, source, timestamp, priority, score, rank,
 provider, relevance, freshness, or size.
 
+`CandidateScorer` is the third stage of the kernel (see
+[DEC-032](./docs/DECISIONS.md)). It takes a `DeduplicatedCandidateSet` and an
+explicit reference time and returns a `ScoredCandidateSet`: every group carries
+one `CandidateScore` with **five optional transparent components** — retrieval
+relevance, authored priority, source priority, category priority, and recency —
+each publishing its normalized value, the policy weight, the contribution, its
+aggregation rule, and the evidence behind it. It is driven by one narrow
+versioned `CandidateScoringPolicy`, not by the broad future `CompilationPolicy`,
+and it needs no tokenizer, provider, clock, or storage.
+
+**Retrieval scores require an exact normalization contract.** A provider score
+counts only when the policy owns a rule for its exact `providerId`,
+`providerVersion`, `semantics`, and `higherIsBetter`, with a fixed inclusive
+range. Ranges are policy input, never inferred from the provider, from a rank, or
+from the other candidates in the batch. A value outside its range rejects rather
+than clamps, and a scored record with no rule rejects rather than being read as
+zero or dropped. A retrieval record with no score is fine and simply carries no
+relevance; rank alone and provider identity alone never do.
+
+**Duplicate retrieval count cannot inflate a score.** Every component aggregates
+its group by maximum — across normalized retrieval evidence, and across the
+group's distinct blocks for the other four. The same content wrapped twenty times
+scores exactly as it does wrapped once, nothing is summed, averaged, or counted,
+and all evidence stays visible.
+
+**Required blocks are never boosted.** There is no required component, no boost,
+and no large constant: required content stays a separate allocation class for the
+future allocator, and a required candidate may score zero while an optional one
+scores higher.
+
+**Recency is driven by an explicit reference time** supplied per call and
+validated with the project `Timestamp` contract — never by the system clock. It
+uses `updatedAt ?? createdAt`, an explicit policy value when a block carries
+neither, and clamps a future timestamp to age zero.
+
+The result is **ranked by total then block ID**, compared by code unit rather
+than by locale. Weights need not sum to one, so a total is a policy-relative
+utility rather than a probability, comparable only within one run of one policy
+version.
+
+**No candidate is filtered.** Every deduplicated candidate appears exactly once
+in the result unless scoring fails as a whole; there is no minimum score
+threshold, no token budget is read, and no inclusion, exclusion, or eviction
+decision is made. No lexical, BM25, embedding, or LLM relevance scorer runs
+inside the compiler, and no redundancy or near-duplicate score exists.
+
 **No allocator exists yet.** Nothing decides which blocks fit a budget, and
 whether required content fits is the allocator's decision. There is no policy
-filtering, scoring, allocation, ordering, rendering, trace generation, compiler
-orchestration, retrieval provider, persistence, HTTP, or CLI behavior yet.
-CtxAlloc does not yet compile or optimize context, and it supports no Obsidian
-integration.
+filtering, `CandidateFilter`, allocation, ordering, rendering, trace generation,
+compiler orchestration, retrieval provider, persistence, HTTP, or CLI behavior
+yet. CtxAlloc does not yet compile or optimize context, and it supports no
+Obsidian integration.
 
 ## Prerequisites
 

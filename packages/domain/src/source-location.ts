@@ -42,7 +42,7 @@ const TextRangeLocationSchema = z
 
 /**
  * A single message inside a conversation source. Conversation messages are an
- * explicit MVP source type (MVP_SCOPE section 3.9), and a message identifier is
+ * explicit MVP source type (MVP_SCOPE section 3.10), and a message identifier is
  * documented lineage (INV-PROV-002).
  */
 const ConversationMessageLocationSchema = z.strictObject({

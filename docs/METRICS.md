@@ -59,6 +59,20 @@ A result that achieves high token reduction but loses required information is a 
 
 ---
 
+## 2.1 Three Different Meanings of "Score"
+
+Three unrelated numbers are called a score in this project. They are never comparable and must never be aggregated together or reported under one label.
+
+**Retrieval provider score.** A raw, provider-defined value carried on a `CandidateBlock` wrapper, with its own `semantics` and `higherIsBetter` direction. It is untrusted external input on an unknown scale: a cosine similarity, a vector distance, a BM25 score, or something else entirely, and two providers or two provider versions do not share a scale. It is reported with retrieval metrics (section 16) and is what the Top-K baseline (section 7.3) sorts by.
+
+**Compiler candidate score.** The `CandidateScore.total` that `CandidateScorer` calculates from explicitly configured, normalized signals under one `CandidateScoringPolicy` (DEC-032). It is a policy-relative utility, not a probability, and is not bounded by one: weights need not sum to one. Two totals are comparable only when they come from the same run under the same `policyId` and `policyVersion`. It is a compiler metric (sections 3.1 and 13) and an input to allocation, never an answer-quality measurement.
+
+**Answer quality score.** The 0–4 dimensional rating of a model's answer defined in section 11.5. It measures the downstream model's output, not the compiler's decision.
+
+A report that mixes them — for example ranking compilations by an average of provider scores, or presenting a compiler candidate score as evidence of answer quality — is invalid (section 16, "Retrieval metrics must not be combined with compiler metrics into one unexplained score").
+
+---
+
 # 3. Evaluation Levels
 
 Evaluation is divided into four levels.

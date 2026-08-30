@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * Source kinds supported by the current MVP (MVP_SCOPE section 3.9):
+ * Source kinds supported by the current MVP (MVP_SCOPE section 3.10):
  * Markdown documents, plain text documents, and conversation messages.
  *
  * The architecture sketch types this field as `string`, but the MVP scope

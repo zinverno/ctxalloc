@@ -153,7 +153,7 @@ mismatch is a rejection, not a repair.
 
 Impossible required-block budgets are **not** validated here. That decision
 depends on the complete required allocation and its rendering overhead, so it
-belongs to token budget allocation (section 3.5) and to INV-BUDGET-004.
+belongs to token budget allocation (section 3.6) and to INV-BUDGET-004.
 
 Invalid candidates must produce explicit errors or trace entries. In the
 implemented phase, an invalid batch fails explicitly and in full: any problem
@@ -216,7 +216,91 @@ See DEC-031.
 
 ---
 
-### 3.5 Token Budget Allocation
+### 3.5 Deterministic Candidate Scoring
+
+Deterministic candidate scoring is implemented. `CandidateScorer` consumes a
+`DeduplicatedCandidateSet` and an explicit reference time, and returns a
+`ScoredCandidateSet` in which every deduplicated group carries one transparent
+`CandidateScore`.
+
+Scoring is driven by one narrow versioned `CandidateScoringPolicy`, not by the
+broad future `CompilationPolicy`. It carries a schema version, a policy identity
+and version, and five optional components: retrieval relevance, authored
+priority, source priority, category priority, and recency. A policy that
+configures none of them is valid and gives every candidate a total of exactly
+zero.
+
+Policy validation is strict and is a runtime boundary, because a policy is
+external configuration. Unknown fields are rejected rather than stripped, nothing
+is coerced, no default is injected, exact strings are preserved, and duplicate
+rule identifiers, duplicate provider contracts, duplicate source entries, and
+duplicate category entries are all rejected rather than resolved by array order.
+Lookups are compiled only after validation, so the order in which the policy
+declares its rules cannot change a result.
+
+**Raw provider scores are never compared across contracts.** A retrieval score
+affects scoring only when the policy owns an exact rule for the tuple
+`providerId`, `providerVersion`, `semantics`, `higherIsBetter`, together with a
+fixed inclusive range. Ranges are policy input and are never inferred from the
+provider, from a rank, or from the values present in the current batch: a
+batch-relative range would make one candidate's score depend on which unrelated
+candidates happened to be retrieved. A value outside its declared range rejects
+rather than clamps, and a scored record with no exact rule rejects rather than
+being read as zero or silently dropped. A retrieval record carrying no score is
+valid and contributes no relevance; rank alone and provider identity alone are
+never treated as relevance.
+
+Every enabled component publishes a normalized value in `[0, 1]`, the policy
+weight, the contribution (normalized value times weight), its aggregation rule,
+and explicit evidence explaining the calculation. Authored priority is normalized
+over the policy's inclusive safe-integer range, and an out-of-range value
+rejects. Source priority uses exact source document rules with an explicit
+default, and never reads source metadata or source type. Category priority uses
+exact string rules with an explicit default, and applies no case folding,
+trimming, prefix matching, or hierarchy. Recency uses `updatedAt ?? createdAt`
+against the supplied reference time, with an explicit missing value when a block
+carries neither timestamp and age clamped to zero for a future one.
+
+**Duplicate evidence cannot inflate a score.** Every component aggregates its
+group by maximum — over normalized retrieval evidence, and over the distinct
+blocks of the group for the other four. Nothing is summed, averaged, or counted,
+and no wrapper is preferred for being canonical, lowest-ranked, or from a
+particular provider. The same content wrapped twenty times scores exactly as it
+does wrapped once, and all evidence stays visible.
+
+The total is the arithmetic sum of the present contributions in one fixed
+component order. Weights need not sum to one, so a total is a policy-relative
+utility rather than a probability, and is comparable only within one run of one
+policy identity and version. A non-finite contribution or total rejects the
+batch.
+
+**Required status is not a score.** There is no required component, no boost, and
+no large constant: required blocks stay a separate allocation class that the
+allocator resolves first, and a required candidate may legitimately score zero
+while an optional one scores higher.
+
+The result is ranked by total descending, then by the stable block identifier
+compared by code unit. Required status does not change that order.
+
+**No candidate is filtered and nothing is allocated.** Every deduplicated
+candidate appears exactly once in the result unless scoring fails as a whole, and
+no minimum score threshold exists. No token budget is read, no token cost is
+subtracted from a score, no score-per-token is computed, and no inclusion,
+exclusion, or eviction decision is made.
+
+The stage reads no clock, calls no tokenizer, retrieval provider, or model, and
+implements no lexical, BM25, embedding, or LLM relevance scorer of its own: query
+relevance arrives through `CandidateRetrieval` under an explicit provider
+contract. No redundancy or near-duplicate score exists.
+
+Policy filtering remains future work and requires the broader versioned
+`CompilationPolicy`.
+
+See DEC-032.
+
+---
+
+### 3.6 Token Budget Allocation
 
 The MVP includes a deterministic allocator that supports:
 
@@ -238,7 +322,7 @@ If required blocks exceed the available budget, compilation must fail with a str
 
 ---
 
-### 3.6 Context Compilation
+### 3.7 Context Compilation
 
 The MVP compiler must:
 
@@ -256,7 +340,7 @@ The compiler must not call an LLM.
 
 ---
 
-### 3.7 Compilation Trace
+### 3.8 Compilation Trace
 
 The trace must contain:
 
@@ -280,7 +364,7 @@ The trace must be serializable as JSON.
 
 ---
 
-### 3.8 Core Test Providers
+### 3.9 Core Test Providers
 
 The MVP includes:
 
@@ -293,7 +377,7 @@ These implementations allow the complete compiler and evaluation suite to run wi
 
 ---
 
-### 3.9 First Supported Sources
+### 3.10 First Supported Sources
 
 The MVP supports:
 
@@ -319,7 +403,7 @@ A CLI or local service integration is sufficient.
 
 ---
 
-### 3.10 Markdown Chunking
+### 3.11 Markdown Chunking
 
 The MVP includes the existing project-owned Markdown chunker or its extracted reusable implementation.
 
@@ -338,7 +422,7 @@ Chunking must remain independent from the retrieval backend.
 
 ---
 
-### 3.11 Candidate Retrieval
+### 3.12 Candidate Retrieval
 
 The compiler core must initially work without a real retrieval backend.
 
@@ -361,7 +445,7 @@ The MVP must not integrate both QMD and Qdrant.
 
 ---
 
-### 3.12 Single Model Provider
+### 3.13 Single Model Provider
 
 The MVP may include one model provider for end-to-end evaluation.
 
@@ -380,7 +464,7 @@ The compiler must remain fully testable without the provider.
 
 ---
 
-### 3.13 Evaluation Harness
+### 3.14 Evaluation Harness
 
 The MVP includes an evaluation harness that compares:
 
@@ -413,7 +497,7 @@ The harness must measure:
 
 ---
 
-### 3.14 CLI
+### 3.15 CLI
 
 The MVP includes a minimal CLI for development and validation.
 
@@ -439,7 +523,7 @@ The CLI is not required to provide a polished interactive interface.
 
 ---
 
-### 3.15 Minimal HTTP API
+### 3.16 Minimal HTTP API
 
 The MVP may expose:
 
@@ -457,7 +541,7 @@ Business logic must not be implemented inside HTTP route handlers.
 
 ---
 
-### 3.16 Local Persistence
+### 3.17 Local Persistence
 
 SQLite may be used for:
 

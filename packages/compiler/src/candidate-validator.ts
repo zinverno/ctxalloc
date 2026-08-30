@@ -16,6 +16,7 @@ import {
 import type { Tokenizer } from '@ctxalloc/ports';
 import { z } from 'zod';
 import { canonicalJson } from './canonical-json.js';
+import { pointerFor, quote, type IssuePath } from './validation-issues.js';
 
 /**
  * Strict candidate validation (DEC-030).
@@ -121,34 +122,12 @@ export class CandidateValidationError extends Error {
 /* Issue construction                                                          */
 /* -------------------------------------------------------------------------- */
 
-type IssuePath = readonly (string | number)[];
-
-/**
- * Renders a path the same way the domain renders one, so an issue raised by the
- * top-level schema and an issue raised by a cross-record rule are addressed
- * identically by a consumer.
- */
-function pointerFor(path: IssuePath): string {
-  return path.reduce<string>((pointer, segment) => {
-    if (typeof segment === 'number') return `${pointer}[${String(segment)}]`;
-    return pointer.length === 0 ? segment : `${pointer}.${segment}`;
-  }, '');
-}
-
 function issue(
   code: CandidateValidationIssueCode,
   path: IssuePath,
   message: string,
 ): ValidationIssue {
   return { code, path, pointer: pointerFor(path), message };
-}
-
-/** Bounded rendering of an untrusted string for an issue message. */
-function quote(value: string): string {
-  const MAX_CODE_POINTS = 60;
-  const codePoints = [...value];
-  if (codePoints.length <= MAX_CODE_POINTS) return JSON.stringify(value);
-  return `${JSON.stringify(codePoints.slice(0, MAX_CODE_POINTS).join(''))}... (${String(codePoints.length)} code points)`;
 }
 
 function describeScope(scope: Scope): string {

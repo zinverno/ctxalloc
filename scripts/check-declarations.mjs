@@ -33,6 +33,7 @@ const DECLARATIONS = [
   'packages/compiler/dist/index.d.ts',
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'packages/compiler/dist/candidate-scorer.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -466,6 +467,116 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './candidate-dedupl
   }
 }
 
+// The candidate scorer keeps its documented stage signature: it takes one
+// versioned policy at construction, consumes a DeduplicatedCandidateSet with an
+// explicit reference time, and returns readonly project-owned types (DEC-032).
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'declare class CandidateScorer');
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'constructor(policy: unknown);');
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'score(input: DeduplicatedCandidateSet, referenceTime: unknown): ScoredCandidateSet;',
+);
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'declare class CandidateScoringError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'readonly code = "CANDIDATE_SCORING_FAILED"',
+);
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'CANDIDATE_SCORING_POLICY_SCHEMA_VERSION = 1',
+);
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'interface CandidateScoringPolicy');
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'interface RetrievalNormalizationRule',
+);
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'readonly ruleId: string;');
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'readonly higherIsBetter: boolean;',
+);
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'interface ScoredCandidateSet');
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'readonly policyId: string;');
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'readonly policyVersion: string;');
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'readonly referenceTime: Timestamp;',
+);
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'readonly candidates: readonly ScoredCandidate[];',
+);
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'interface ScoredCandidate ');
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'readonly candidate: DeduplicatedCandidate;',
+);
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'readonly score: CandidateScore;');
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'interface CandidateScore ');
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'readonly total: number;');
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'type ScoreAggregation = ');
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'readonly contribution: number;');
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'readonly normalizedValue: number;',
+);
+requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'readonly weight: number;');
+requireContains('packages/compiler/dist/index.d.ts', "} from './candidate-scorer.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/candidate-scorer.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // The scored set is an ephemeral compiler-stage result, not a persisted
+    // record, so only the policy carries a schema version (INV-STORE-004).
+    if (/interface ScoredCandidateSet\s*\{[^}]*schemaVersion/.test(declarations)) {
+      fail('packages/compiler/dist/candidate-scorer.d.ts declares a persisted schemaVersion');
+    }
+    // Time is an explicit argument. No Date instance may reach the surface
+    // (INV-DET-004).
+    if (/\bDate\b/.test(declarations)) {
+      fail('packages/compiler/dist/candidate-scorer.d.ts exposes a Date');
+    }
+    // Required status is an allocation class, never a number (INV-SCORE-003),
+    // and no filtering, allocation, or future relevance vocabulary may appear
+    // before its phase implements it.
+    for (const forbidden of [
+      'requiredScore',
+      'requiredBoost',
+      'requiredWeight',
+      'scorePerToken',
+      'minimumScore',
+      'minScore',
+      'threshold',
+      'excluded',
+      'included',
+      'TokenBudget',
+      'tokenBudget',
+      'redundancy',
+      'Redundancy',
+      'nearDuplicate',
+      'NearDuplicate',
+      'embedding',
+      'Embedding',
+      'similarity',
+      'Similarity',
+      'bm25',
+      'BM25',
+      'CompilationPolicy',
+      'CompilationTrace',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/candidate-scorer.d.ts exposes the future or forbidden concept "${forbidden}"`,
+        );
+      }
+    }
+  }
+}
+
 // The validation library, the Node standard library, a provider SDK, an
 // application type, and an internal helper all stay implementation details of
 // the compiler kernel (INV-ADAPTER-001, INV-DEP-002).
@@ -492,12 +603,20 @@ const COMPILER_LEAKED_TYPES = [
   'pointerFor',
   'Group',
   'Ordered',
+  'RetrievalEntry',
+  'ComponentResult',
+  'retrievalContractKey',
+  'epochSecondsOf',
+  'canonicalNumber',
+  'maxNormalized',
+  'candidatePath',
 ];
 
 for (const relativePath of [
   'packages/compiler/dist/index.d.ts',
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'packages/compiler/dist/candidate-scorer.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
@@ -508,11 +627,11 @@ for (const relativePath of [
     }
   }
   // No later compiler stage may appear before its phase implements it.
-  // `Deduplicator` left this list in Phase 8, when `CandidateDeduplicator`
-  // became a published stage (DEC-031).
+  // `Deduplicator` left this list in Phase 8 and `Scorer` in Phase 9, when each
+  // became a published stage (DEC-031, DEC-032). `CandidateScorer` is therefore
+  // checked by name only where it must not appear.
   for (const stage of [
     'CandidateFilter',
-    'CandidateScorer',
     'BudgetAllocator',
     'ContextOrderer',
     'ContextRenderer',
