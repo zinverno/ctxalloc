@@ -9,6 +9,7 @@ import {
   type Timestamp,
   type TokenBudget,
   type ValidationIssue,
+  type ValidationResult,
 } from '@ctxalloc/domain';
 import { z } from 'zod';
 import type { ScoredCandidate, ScoredCandidateSet } from './candidate-scorer.js';
@@ -18,9 +19,9 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
 /**
  * Deterministic budget allocation (DEC-033).
  *
- * `BudgetAllocator` is the fourth stage of the compiler kernel. It turns a
- * `ScoredCandidateSet`, an explicit `TokenBudget`, and one narrow versioned
- * `BudgetAllocationPolicy` into an `AllocatedCandidateSet`: required candidates
+ * `BudgetAllocator` runs after `CandidateFilter` and before `ContextOrderer`. It
+ * turns a `ScoredCandidateSet`, an explicit `TokenBudget`, and one narrow
+ * versioned `BudgetAllocationPolicy` into an `AllocatedCandidateSet`: required candidates
  * are resolved first, exact category block-count constraints are enforced,
  * optional candidates are selected under the available block-content budget, and
  * every candidate leaves with exactly one machine-readable decision.
@@ -410,6 +411,39 @@ function detectDuplicateCategories(policy: BudgetAllocationPolicy): ValidationIs
   return issues;
 }
 
+/**
+ * Validates one allocation policy and returns it, or the structured issues that
+ * rejected it.
+ *
+ * The helper exists so that the broad `CompilationPolicy` validates its
+ * allocation slice through exactly the rules this stage enforces, rather than
+ * through a second copy of them that could drift (INV-DEP-003). The stage
+ * constructor uses the same helper, so the two paths cannot diverge. It is
+ * internal to the compiler kernel: the package entry point never re-exports it,
+ * and no public declaration names it (INV-ADAPTER-001).
+ */
+export function parseBudgetAllocationPolicy(
+  policy: unknown,
+): ValidationResult<BudgetAllocationPolicy> {
+  const parsed = safeParse(BudgetAllocationPolicySchema, policy);
+  if (!parsed.ok) {
+    // A policy whose shape is unsupported gets schema issues only: the
+    // duplicate-category rule reads a field the schema has not established, so
+    // running it over unparsed configuration could only guess.
+    return {
+      ok: false,
+      issues: parsed.issues.map((parsedIssue) => ({
+        ...parsedIssue,
+        code: 'invalid_policy' satisfies BudgetAllocationIssueCode,
+      })),
+    };
+  }
+
+  const duplicates = detectDuplicateCategories(parsed.value);
+  if (duplicates.length > 0) return { ok: false, issues: duplicates };
+  return { ok: true, value: parsed.value };
+}
+
 /* -------------------------------------------------------------------------- */
 /* Budget schema                                                               */
 /* -------------------------------------------------------------------------- */
@@ -548,20 +582,10 @@ export class BudgetAllocator {
    * @throws {BudgetAllocationError} when the policy is not valid.
    */
   constructor(policy: unknown) {
-    const parsed = safeParse(BudgetAllocationPolicySchema, policy);
-    if (!parsed.ok) {
-      // A policy whose shape is unsupported gets schema issues only: the
-      // duplicate-category rule below reads a field the schema has not
-      // established, so running it over unparsed configuration could only guess.
-      throw new BudgetAllocationError(
-        parsed.issues.map((parsedIssue) => ({ ...parsedIssue, code: 'invalid_policy' })),
-      );
-    }
+    const parsed = parseBudgetAllocationPolicy(policy);
+    if (!parsed.ok) throw new BudgetAllocationError(parsed.issues);
 
     const validated: BudgetAllocationPolicy = parsed.value;
-    const duplicates = detectDuplicateCategories(validated);
-    if (duplicates.length > 0) throw new BudgetAllocationError(duplicates);
-
     this.#policy = validated;
     const constraints = validated.categoryConstraints ?? [];
     this.#minBlocks = new Map(

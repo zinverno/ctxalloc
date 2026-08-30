@@ -9,7 +9,7 @@ or agent framework.
 
 ## Status
 
-Phase 12 — deterministic context rendering. The repository contains
+Phase 13 — compilation contracts and deterministic policy filtering. The repository contains
 the TypeScript monorepo scaffolding from Phase 1 (workspace structure, strict
 compiler and linting configuration, test infrastructure, package boundaries,
 boundary checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
@@ -19,8 +19,10 @@ validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
 deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
 tokenizer contract test suite, a real offline tokenizer adapter in
 `@ctxalloc/tokenization`, the first two application use cases in
-`@ctxalloc/application`, and the first six compiler-kernel stages in
-`@ctxalloc/compiler`.
+`@ctxalloc/application`, and the compiler kernel in `@ctxalloc/compiler`:
+structural request and policy validation plus seven components —
+`CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`,
+`CandidateFilter`, `BudgetAllocator`, `ContextOrderer`, and `ContextRenderer`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
 `js-tiktoken` (pinned to 1.0.21, see [DEC-027](./docs/DECISIONS.md)). It runs
@@ -78,8 +80,8 @@ API or metadata cache type.
 directory, fetch no URL, and infer no path or scope; the caller supplies the
 content.
 
-`@ctxalloc/compiler` adds `CandidateValidator`, the first stage of the compiler
-kernel (see [DEC-030](./docs/DECISIONS.md)). It is synchronous, deterministic,
+`@ctxalloc/compiler` opens with `CandidateValidator`, the compiler kernel's
+runtime trust boundary (see [DEC-030](./docs/DECISIONS.md)). It is synchronous, deterministic,
 and offline, and takes the `Tokenizer` port through constructor injection.
 
 Candidates arrive as `CandidateBlock`, an ephemeral request-specific wrapper
@@ -126,7 +128,7 @@ block schema itself still declares no product-specific range: a semantic range
 exists only where a scoring policy states one, in the `authoredPriority`
 component described below.
 
-`CandidateDeduplicator` is the second stage of the kernel (see
+`CandidateDeduplicator` runs after the validator (see
 [DEC-031](./docs/DECISIONS.md)). It takes a `ValidatedCandidateSet` and returns
 groups of exact duplicates. It needs no injected dependency and calls no
 tokenizer.
@@ -163,7 +165,7 @@ exists** either: it requires a versioned `CompilationPolicy`, so no candidate is
 excluded here for its category, source, timestamp, priority, score, rank,
 provider, relevance, freshness, or size.
 
-`CandidateScorer` is the third stage of the kernel (see
+`CandidateScorer` runs after deduplication (see
 [DEC-032](./docs/DECISIONS.md)). It takes a `DeduplicatedCandidateSet` and an
 explicit reference time and returns a `ScoredCandidateSet`: every group carries
 one `CandidateScore` with **five optional transparent components** — retrieval
@@ -209,7 +211,7 @@ threshold, no token budget is read, and no inclusion, exclusion, or eviction
 decision is made. No lexical, BM25, embedding, or LLM relevance scorer runs
 inside the compiler, and no redundancy or near-duplicate score exists.
 
-`BudgetAllocator` is the fourth stage of the kernel (see
+`BudgetAllocator` runs after scoring and policy filtering (described below; see
 [DEC-033](./docs/DECISIONS.md)). It takes a `ScoredCandidateSet`, an explicit
 `TokenBudget`, and one narrow versioned `BudgetAllocationPolicy`, and returns an
 `AllocatedCandidateSet` in which every candidate carries exactly one
@@ -266,7 +268,7 @@ and publishes `selectedBlockContentTokens` and `unallocatedBlockContentTokens`.
 It deliberately publishes no `compiledTokens` and no final `unusedTokens`: those
 belong to a settled selection, which only the future correction loop produces.
 
-`ContextOrderer` is the fifth stage of the kernel (see
+`ContextOrderer` runs after allocation (see
 [DEC-034](./docs/DECISIONS.md)). It takes an `AllocatedCandidateSet` and one
 narrow versioned `ContextOrderingPolicy`, and returns an `OrderedCandidateSet`
 whose `orderedIncluded` is the render order of the current selection. It exists
@@ -299,7 +301,7 @@ elements with the render order — the allocation chronology holds exactly the s
 decisions, and the eviction order a subset of them — but each answers a different
 question, so none may be derived from another.
 
-`ContextRenderer` is the sixth stage of the kernel (see
+`ContextRenderer` closes the implemented kernel (see
 [DEC-035](./docs/DECISIONS.md)). It takes an `OrderedCandidateSet`, one narrow
 versioned `ContextRenderingPolicy`, and one project-owned `Tokenizer`, and
 returns a `RenderedContextAttempt`: the current selection serialized as one
@@ -356,12 +358,76 @@ successful measurement, not an error. The renderer evicts nothing, drops no
 required block, replaces no category-minimum choice, re-runs no earlier stage,
 and never raises `REQUIRED_CONTENT_EXCEEDS_BUDGET`.
 
+### Compilation contracts and policy filtering
+
+`CompilationRequest` is the complete input of one compilation (see
+[DEC-036](./docs/DECISIONS.md)): scope, query, reference time, candidates, source
+registry, budget, and policy. `CompilationRequestValidator` accepts `unknown` and
+returns a validated record.
+
+**`referenceTime` is required.** The compiler never reads the clock, so the
+instant arrives with the request and flows to the scorer. **`id` is
+caller-supplied** and preserved exactly — the kernel generates no request
+identifier. **`query` is preserved verbatim:** an empty query is valid, and a
+whitespace-only or multi-line one is valid and is not trimmed, normalized, or
+truncated. No reserve is defaulted into the budget and no context window is
+guessed.
+
+**Request validation is structural, not a second `CandidateValidator`.** It
+proves the record is a well-formed request of well-formed domain values. Stale
+token counts, wrong content hashes, duplicate source identifiers, cross-scope
+candidates, missing or mismatched sources, and conflicting block identifiers stay
+`CandidateValidator`'s to reject, so a request can pass this validator and be
+rejected by the next one.
+
+`CompilationPolicy` composes **five required slices** — scoring, filtering,
+allocation, ordering, rendering — under its own schema version and identity. None
+is defaulted; a compilation that filters nothing states an explicit filtering
+slice with no minimum. The parent identity and the nested identities are
+independent and need not match, and nothing generates an identifier, version,
+hash, or fingerprint. Each slice is validated by the component that owns its
+rules, so the composed validator can neither accept nor reject what a component
+would not. **The policy is data:** it holds no component instance and owns no
+tokenizer.
+
+`CandidateFilter` runs between `CandidateScorer` and `BudgetAllocator`. It
+answers one question — **may this scored optional candidate participate in
+allocation under policy?** — and returns a `FilteredCandidateSet` in which every
+scored candidate carries exactly one eligibility decision.
+
+**Filtering policy v1 has one rule: an optional `minimumTotalScore`.** No block,
+source, category, `sourceType`, timestamp, provider, rank, raw-score, size,
+regex, metadata, tag, or callback rule exists. Filtering runs after exact
+deduplication, so its unit is a duplicate group whose members may come from
+different sources and carry different attributes, and hard exclusion over such a
+group has no single meaning yet. Recency, source, category, authored priority,
+and retrieval relevance already feed the scorer and arrive here normalized into
+`score.total`.
+
+**Equality survives.** A candidate at the minimum is eligible; one strictly below
+is filtered. Nothing is rounded, clamped, normalized, read as a probability, or
+divided by a token count. The total is policy-relative utility, so a threshold is
+meaningful only against the scoring policy it is paired with.
+
+**Required blocks bypass the threshold.** A required block scoring zero survives a
+threshold of one thousand, as `ELIGIBLE_REQUIRED`. It is never filtered, failed,
+or boosted: required content is a separate allocation class, not a large score.
+
+**The filter does not select.** Required resolution, category constraints, the
+token budget, eviction, and final inclusion all stay with `BudgetAllocator`, over
+the eligible candidates it is given. The eligible set is a `ScoredCandidateSet`,
+so the allocator consumes it with no change to its API. The filter reads exactly
+three things — `score.total`, `attributes.required`, and its own policy — takes
+no tokenizer, and is not an access-control boundary: scope isolation stays with
+request validation and `CandidateValidator`.
+
 **No correction loop and no `CompilationResult` yet.** Nothing consumes a render
 attempt to accept or reject a compilation, so there is still no final
-`compiledTokens`, no `unusedTokens`, and **no final hard-budget guarantee**. There
-is no trace builder, `CandidateFilter`, policy filtering, compiler orchestration,
-retrieval provider, persistence, HTTP, or CLI behavior, and CtxAlloc supports no
-Obsidian integration.
+`compiledTokens`, no `unusedTokens`, and **no final hard-budget guarantee**.
+Nothing composes the components either: there is no `ContextCompiler`, no request
+or compilation fingerprint, no trace builder, no retrieval provider, no
+persistence, and no HTTP or CLI behavior, and CtxAlloc supports no Obsidian
+integration.
 
 ## Prerequisites
 

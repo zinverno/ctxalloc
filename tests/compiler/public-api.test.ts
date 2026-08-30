@@ -4,12 +4,21 @@ import {
   BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION,
   BudgetAllocationError,
   BudgetAllocator,
+  CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION,
   CANDIDATE_SCORING_POLICY_SCHEMA_VERSION,
+  COMPILATION_POLICY_SCHEMA_VERSION,
+  COMPILATION_REQUEST_SCHEMA_VERSION,
   CandidateDeduplicator,
+  CandidateFilter,
+  CandidateFilteringError,
   CandidateScorer,
   CandidateScoringError,
   CandidateValidationError,
   CandidateValidator,
+  CompilationPolicyError,
+  CompilationPolicyValidator,
+  CompilationRequestError,
+  CompilationRequestValidator,
   CONTEXT_ORDERING_POLICY_SCHEMA_VERSION,
   CONTEXT_RENDERER_ID,
   CONTEXT_RENDERER_VERSION,
@@ -21,11 +30,16 @@ import {
   type AllocatedCandidateSet,
   type AllocationDecisionReason,
   type BudgetAllocationPolicy,
+  type CandidateFilteringDecision,
+  type CandidateFilteringDecisionReason,
+  type CandidateFilteringPolicy,
   type CandidateScore,
   type CandidateScoringPolicy,
   type CandidateValidationInput,
   type CanonicalSelectionReason,
   type CategoryAllocationConstraint,
+  type CompilationPolicy,
+  type CompilationRequest,
   type ContextOrderingPolicy,
   type ContextRenderingPolicy,
   type DeduplicatedCandidate,
@@ -33,6 +47,7 @@ import {
   type DeduplicatedCandidateSet,
   type DuplicateMatchReason,
   type ExcludedCandidateDecision,
+  type FilteredCandidateSet,
   type IncludedCandidateDecision,
   type OrderedCandidateSet,
   type RenderedContextAttempt,
@@ -52,6 +67,7 @@ import type {
   Timestamp,
   TokenBudget,
 } from '../../packages/domain/src/index.js';
+import { compilationPolicy as compilationPolicyFixture } from './compilation-fixtures.js';
 import { candidate, countWords, input, sourceDocument, wordTokenizer } from './fixtures.js';
 
 const rootUrl = new URL('../../', import.meta.url);
@@ -76,6 +92,9 @@ const SOURCE_FILES = [
   'packages/compiler/src/candidate-validator.ts',
   'packages/compiler/src/candidate-deduplicator.ts',
   'packages/compiler/src/candidate-scorer.ts',
+  'packages/compiler/src/candidate-filter.ts',
+  'packages/compiler/src/compilation-policy.ts',
+  'packages/compiler/src/compilation-request.ts',
   'packages/compiler/src/canonical-json.ts',
   'packages/compiler/src/validation-issues.ts',
 ] as const;
@@ -91,21 +110,30 @@ function importSpecifiers(relativePath: string): string[] {
 }
 
 describe('@ctxalloc/compiler public API', () => {
-  it('exports the six implemented compiler stages and their errors only', () => {
+  it('exports the implemented compiler stages, the request and policy contracts, and their errors only', () => {
     expect(Object.keys(compiler).sort()).toEqual([
       'BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION',
       'BudgetAllocationError',
       'BudgetAllocator',
+      'CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION',
       'CANDIDATE_SCORING_POLICY_SCHEMA_VERSION',
+      'COMPILATION_POLICY_SCHEMA_VERSION',
+      'COMPILATION_REQUEST_SCHEMA_VERSION',
       'CONTEXT_ORDERING_POLICY_SCHEMA_VERSION',
       'CONTEXT_RENDERER_ID',
       'CONTEXT_RENDERER_VERSION',
       'CONTEXT_RENDERING_POLICY_SCHEMA_VERSION',
       'CandidateDeduplicator',
+      'CandidateFilter',
+      'CandidateFilteringError',
       'CandidateScorer',
       'CandidateScoringError',
       'CandidateValidationError',
       'CandidateValidator',
+      'CompilationPolicyError',
+      'CompilationPolicyValidator',
+      'CompilationRequestError',
+      'CompilationRequestValidator',
       'ContextOrderer',
       'ContextOrderingError',
       'ContextRenderer',
@@ -125,6 +153,10 @@ describe('@ctxalloc/compiler public API', () => {
       'AuthoredPriorityScoringPolicy',
       'BudgetAllocationIssueCode',
       'BudgetAllocationPolicy',
+      'CandidateFilteringDecision',
+      'CandidateFilteringDecisionReason',
+      'CandidateFilteringIssueCode',
+      'CandidateFilteringPolicy',
       'CandidateScore',
       'CandidateScoringIssueCode',
       'CandidateScoringPolicy',
@@ -136,6 +168,10 @@ describe('@ctxalloc/compiler public API', () => {
       'CategoryPriorityScoreComponent',
       'CategoryPriorityScoreEvidence',
       'CategoryPriorityScoringPolicy',
+      'CompilationPolicy',
+      'CompilationPolicyIssueCode',
+      'CompilationRequest',
+      'CompilationRequestIssueCode',
       'ContextOrderingIssueCode',
       'ContextOrderingPolicy',
       'ContextRenderingIssueCode',
@@ -145,8 +181,11 @@ describe('@ctxalloc/compiler public API', () => {
       'DeduplicatedCandidateSet',
       'DuplicateMatchReason',
       'ExcludedCandidateDecision',
+      'FilteredCandidateDecision',
+      'FilteredCandidateSet',
       'IncludedCandidateDecision',
       'OrderedCandidateSet',
+      'PolicyEligibleCandidateDecision',
       'PolicyValueSource',
       'RecencyScoreComponent',
       'RecencyScoreEvidence',
@@ -154,6 +193,7 @@ describe('@ctxalloc/compiler public API', () => {
       'RecencyTimestampField',
       'RecencyValueSource',
       'RenderedContextAttempt',
+      'RequiredEligibleCandidateDecision',
       'RetrievalNormalizationRule',
       'RetrievalScoreComponent',
       'RetrievalScoreEvidence',
@@ -510,21 +550,147 @@ describe('@ctxalloc/compiler public API', () => {
     throw new Error('expected the empty object to be rejected');
   });
 
+  it('accepts a ScoredCandidateSet and returns the documented filtered result', () => {
+    const scored = new CandidateScorer({
+      schemaVersion: CANDIDATE_SCORING_POLICY_SCHEMA_VERSION,
+      policyId: 'baseline',
+      policyVersion: '1.0.0',
+    }).score(
+      new CandidateDeduplicator().deduplicate(
+        new CandidateValidator(wordTokenizer).validate(input()),
+      ),
+      '2026-06-01T12:00:00.000Z',
+    );
+
+    const filteringPolicy: CandidateFilteringPolicy = {
+      schemaVersion: CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION,
+      policyId: 'filtering',
+      policyVersion: '1.0.0',
+    };
+    const filtered: FilteredCandidateSet = new CandidateFilter(filteringPolicy).filter(scored);
+
+    const carried: ScoredCandidateSet = filtered.scored;
+    const eligible: ScoredCandidateSet = filtered.eligible;
+    const decisions: readonly CandidateFilteringDecision[] = filtered.decisions;
+    const decision = decisions[0];
+    if (decision === undefined) throw new Error('expected one filtering decision');
+    const reason: CandidateFilteringDecisionReason = decision.reason;
+
+    expect(carried).toBe(scored);
+    expect(filtered.filteringPolicyId).toBe('filtering');
+    expect(filtered.filteringPolicyVersion).toBe('1.0.0');
+    expect(eligible.candidates).toEqual(scored.candidates);
+    expect(eligible.referenceTime).toBe(scored.referenceTime);
+    expect(reason).toBe('ELIGIBLE_POLICY');
+    // The filtered set adds no schema version: it is an ephemeral result.
+    expect(Object.keys(filtered)).not.toContain('schemaVersion');
+    expect(CandidateFilteringError.prototype).toBeInstanceOf(Error);
+  });
+
+  it('accepts an unknown filtering policy at the runtime boundary', () => {
+    const untyped: unknown = { schemaVersion: 1, policyId: 'p', policyVersion: '1' };
+    expect(() => new CandidateFilter(untyped)).not.toThrow();
+  });
+
+  it('publishes a stable top-level filtering error code', () => {
+    try {
+      new CandidateFilter({});
+    } catch (error) {
+      expect((error as CandidateFilteringError).code).toBe('CANDIDATE_FILTERING_FAILED');
+      return;
+    }
+    throw new Error('expected the empty policy to be rejected');
+  });
+
+  it('accepts an unknown compilation policy and returns the documented five slices', () => {
+    const untyped: unknown = compilationPolicyFixture();
+    const policy: CompilationPolicy = new CompilationPolicyValidator().validate(untyped);
+
+    const scoring: CandidateScoringPolicy = policy.scoring;
+    const filtering: CandidateFilteringPolicy = policy.filtering;
+    const allocation: BudgetAllocationPolicy = policy.allocation;
+    const ordering: ContextOrderingPolicy = policy.ordering;
+    const rendering: ContextRenderingPolicy = policy.rendering;
+
+    expect(policy.schemaVersion).toBe(COMPILATION_POLICY_SCHEMA_VERSION);
+    expect(scoring.policyId).toBe('scoring');
+    expect(filtering.policyId).toBe('filtering');
+    expect(allocation.optionalSelection).toBe('score-desc-greedy');
+    expect(ordering.strategy).toBe('source-document-then-location');
+    expect(rendering.format).toBe('jsonl-blocks');
+    expect(CompilationPolicyError.prototype).toBeInstanceOf(Error);
+  });
+
+  it('accepts an unknown compilation request and returns the documented record', () => {
+    const untyped: unknown = {
+      id: 'req-1',
+      schemaVersion: COMPILATION_REQUEST_SCHEMA_VERSION,
+      scope: { tenantId: 'local', workspaceId: 'default' },
+      query: '',
+      referenceTime: '2026-06-01T12:00:00.000Z',
+      candidates: [],
+      sourceDocuments: [],
+      budget: { totalTokens: 100, reservedOutputTokens: 10 },
+      policy: compilationPolicyFixture(),
+    };
+    const parsed: CompilationRequest = new CompilationRequestValidator().validate(untyped);
+
+    const scope: Scope = parsed.scope;
+    const referenceTime: Timestamp = parsed.referenceTime;
+    const budget: TokenBudget = parsed.budget;
+    const candidates: readonly CandidateBlock[] = parsed.candidates;
+    const documents: readonly SourceDocument[] = parsed.sourceDocuments;
+    const policy: CompilationPolicy = parsed.policy;
+
+    expect(parsed.id).toBe('req-1');
+    expect(parsed.query).toBe('');
+    expect(scope.tenantId).toBe('local');
+    expect(referenceTime).toBe('2026-06-01T12:00:00.000Z');
+    expect(budget.totalTokens).toBe(100);
+    expect(candidates).toEqual([]);
+    expect(documents).toEqual([]);
+    expect(policy.policyId).toBe('composition');
+    expect(CompilationRequestError.prototype).toBeInstanceOf(Error);
+  });
+
+  it('publishes stable top-level policy and request error codes', () => {
+    try {
+      new CompilationPolicyValidator().validate({});
+    } catch (error) {
+      expect((error as CompilationPolicyError).code).toBe('COMPILATION_POLICY_INVALID');
+    }
+    try {
+      new CompilationRequestValidator().validate({});
+    } catch (error) {
+      expect((error as CompilationRequestError).code).toBe('COMPILATION_REQUEST_INVALID');
+      return;
+    }
+    throw new Error('expected the empty request to be rejected');
+  });
+
   it('exports no later compiler stage and no retrieval port', () => {
     for (const name of [
-      'CandidateFilter',
       'TraceBuilder',
       'ContextCompiler',
       'CandidateProvider',
       'FakeCandidateProvider',
       'CompilationRequestSchema',
-      'CompilationPolicy',
+      'CompilationPolicySchema',
       'CompilationResult',
       'CompilationTrace',
       'compile',
       'score',
       'allocate',
       'render',
+      'filter',
+      // The nested policy parsers the broad CompilationPolicy reuses are
+      // package-internal: they exist so one rule has one owner, not as API.
+      'parseCandidateScoringPolicy',
+      'parseCandidateFilteringPolicy',
+      'parseBudgetAllocationPolicy',
+      'parseContextOrderingPolicy',
+      'parseContextRenderingPolicy',
+      'parseCompilationPolicy',
     ]) {
       expect(Object.keys(compiler), `exports ${name}`).not.toContain(name);
     }
@@ -602,6 +768,9 @@ describe('@ctxalloc/compiler public API', () => {
       'packages/compiler/src/budget-allocator.ts',
       'packages/compiler/src/context-orderer.ts',
       'packages/compiler/src/context-renderer.ts',
+      'packages/compiler/src/candidate-filter.ts',
+      'packages/compiler/src/compilation-policy.ts',
+      'packages/compiler/src/compilation-request.ts',
     ]) {
       const declaredExports = readSource(file)
         .split('\n')
