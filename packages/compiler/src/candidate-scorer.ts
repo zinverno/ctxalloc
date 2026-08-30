@@ -747,6 +747,51 @@ function maxNormalized(values: readonly number[]): number {
   return canonicalNumber(maximum);
 }
 
+/**
+ * Maps one finite value onto `[0, 1]` across a strictly ordered finite range.
+ *
+ * The caller has already proved `min < max` and `min <= raw <= max`, so the
+ * result is mathematically in `[0, 1]`. Reaching it in double precision needs
+ * one extra step, because `max - min` can overflow even when `min`, `max`, and
+ * `raw` are all finite.
+ *
+ * The plain formula is wrong rather than merely imprecise in that case. For
+ * `[-MAX_VALUE, MAX_VALUE]` and `raw = 0` the span becomes `Infinity`, the
+ * numerator stays `MAX_VALUE`, and the quotient is exactly `0` — a finite,
+ * confidently published, mathematically wrong answer of `0` where `0.5` is
+ * correct. A finiteness check cannot catch that, because `0` is finite.
+ *
+ * Dividing every operand by the largest magnitude involved first keeps the
+ * ratio identical while bringing the span back inside the double range: the
+ * scaled bounds land in `[-1, 1]`, so the scaled span is at most `2`. The scale
+ * is positive because `min < max` forces at least one non-zero bound, and the
+ * scaled span cannot underflow to zero because an overflowing span is itself
+ * larger than `MAX_VALUE`.
+ *
+ * Ordinary ranges take the direct path and are bit-for-bit unchanged. No value
+ * is clamped, rounded, or formatted through a string (DEC-032).
+ */
+function normalizeInRange(
+  rawValue: number,
+  min: number,
+  max: number,
+  higherIsBetter: boolean,
+): number {
+  const span = max - min;
+  if (Number.isFinite(span)) {
+    return higherIsBetter ? (rawValue - min) / span : (max - rawValue) / span;
+  }
+
+  const scale = Math.max(Math.abs(min), Math.abs(max), Math.abs(rawValue));
+  const scaledMin = min / scale;
+  const scaledMax = max / scale;
+  const scaledRaw = rawValue / scale;
+  const scaledSpan = scaledMax - scaledMin;
+  return higherIsBetter
+    ? (scaledRaw - scaledMin) / scaledSpan
+    : (scaledMax - scaledRaw) / scaledSpan;
+}
+
 function compareNumbers(a: number, b: number): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -1055,7 +1100,8 @@ export class CandidateScorer {
    * such rule is a failure, not a zero and not a silent drop: treating it as zero
    * would state that the provider found the block irrelevant, and dropping it
    * would hide a policy that no longer covers the retrieval actually in use
-   * (INV-SCORE-002, INV-SCORE-004).
+   * (INV-SCORE-002, INV-SCORE-004). That holds whether the policy configures no
+   * matching rule or no retrieval component at all.
    *
    * Aggregation is `max` over the normalized evidence, so repeating one wrapper
    * twenty times leaves the value exactly where one wrapper left it, and a group
@@ -1066,8 +1112,15 @@ export class CandidateScorer {
     issues: ValidationIssue[],
   ): ComponentResult<RetrievalScoreComponent> | undefined {
     const policy = this.#policy.retrieval;
-    if (policy === undefined) return undefined;
 
+    // The scored records are inspected even when no retrieval component is
+    // configured. An absent component states that this policy weighs no
+    // relevance signal; it does not license discarding a provider measurement
+    // the batch actually carries. Returning early here would make an
+    // identity-only policy the one way to smuggle a scored candidate past the
+    // contract every other policy has to satisfy, and the rule lookup below
+    // already reports it correctly: `#retrievalRules` is empty in that case, so
+    // every scored record is uncovered (DEC-032).
     const canonicalId = group.canonicalBlock.id;
     const evidence: RetrievalScoreEvidence[] = [];
 
@@ -1104,16 +1157,12 @@ export class CandidateScorer {
         continue;
       }
 
-      const span = rule.max - rule.min;
-      const normalized = rule.higherIsBetter
-        ? (entry.rawValue - rule.min) / span
-        : (rule.max - entry.rawValue) / span;
+      const normalized = normalizeInRange(entry.rawValue, rule.min, rule.max, rule.higherIsBetter);
 
-      // Both operands are finite and the range is strictly ordered, so the
-      // quotient is in [0, 1] for every ordinary policy. It is still checked:
-      // a range spanning most of the double domain can overflow both the
-      // numerator and the span to infinity, and infinity divided by infinity is
-      // `NaN`, which must never reach a published component (INV-SCORE-004).
+      // `normalizeInRange` is total over the values that reach it, so this is a
+      // backstop rather than an expected path. It stays because a published
+      // score feeds every downstream allocation decision, and a non-finite one
+      // must fail loudly rather than propagate (INV-SCORE-004).
       if (!Number.isFinite(normalized)) {
         issues.push(
           issue(
@@ -1136,6 +1185,11 @@ export class CandidateScorer {
         ruleId: rule.ruleId,
       });
     }
+
+    // No component is published for a policy that configures none: an absent
+    // component means the score has no retrieval term, not a term worth zero.
+    // Any scored record has already been reported as uncovered above.
+    if (policy === undefined) return undefined;
 
     const normalizedValue = maxNormalized(evidence.map((record) => record.normalizedValue));
     const contribution = canonicalNumber(normalizedValue * policy.weight);

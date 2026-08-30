@@ -1886,6 +1886,8 @@ A raw value below `min` or above `max` rejects scoring rather than clamping. Cla
 
 A scored record with no exact rule also rejects, with `retrieval_score_rule_not_found`. Treating it as zero would state that the provider found the block irrelevant, and dropping it silently would hide a policy that no longer covers the retrieval actually in use (INV-SCORE-002, INV-SCORE-004).
 
+"No exact rule" includes "no retrieval component at all". An absent component states that this policy weighs no relevance signal; it does not license discarding a provider measurement the batch actually carries. Exempting it would make an identity-only policy the one way to smuggle a scored candidate past the contract every other policy must satisfy. A retrieval component configured with an empty rule list behaves identically, and neither case publishes a retrieval component in the score: an absent component means the score has no retrieval term, never a term worth zero.
+
 A retrieval record carrying no score is valid and contributes no relevance evidence. Rank alone is never relevance and provider identity alone is never relevance: a rank is the provider's own position, and neither is a measurement (INV-PROV-003, INV-ALLOC-002).
 
 ### Duplicate Evidence Aggregates by Maximum, Never by Count
@@ -1946,6 +1948,8 @@ Every enabled component publishes its `normalizedValue`, the policy `weight`, th
 `total` is the arithmetic sum of the present contributions taken in one fixed order — retrieval, authored priority, source priority, category priority, recency — rather than by iterating an object, so the floating-point result never depends on property insertion order (INV-DET-002).
 
 Weights need not sum to one. A total is therefore a policy-relative utility, not a probability, and is not bounded by one: it is comparable only against other totals produced in the same run by the same `policyId` and `policyVersion`. These are internal decision values, not financial arithmetic; JavaScript `Number` is sufficient and no decimal library is added.
+
+Sufficient still requires care at the edges of the double range. `max - min` can overflow to infinity while `min`, `max`, and `rawValue` are each finite and accepted, and the plain quotient is then wrong rather than merely imprecise: for `[-MAX_VALUE, MAX_VALUE]` and a raw value of `0` it yields exactly `0` where `0.5` is correct, which no finiteness check can catch because `0` is finite. Retrieval normalization therefore divides every operand by the largest magnitude involved before dividing, whenever the span overflows. The ratio is unchanged, the scaled bounds land in `[-1, 1]`, and ordinary ranges take the direct path bit-for-bit unchanged. Nothing is clamped, rounded for a decision, or formatted through a string.
 
 Every published number is canonicalized so that `-0` becomes `0`: the two compare equal but serialize, print, and deep-equal differently, and publishing one would make two runs that computed the same value look different. A contribution or total that becomes `NaN` or `Infinity` rejects with `non_finite_score_result` rather than being published.
 

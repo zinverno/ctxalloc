@@ -162,13 +162,6 @@ describe('CandidateScorer: retrieval normalization', () => {
     expect(first.candidates[0]?.score.retrieval?.normalizedValue).toBe(0.4);
   });
 
-  it('scores nothing from retrieval when the component is not configured', () => {
-    const result = score([candidate({}, scoredRetrieval(0.9))], policy());
-
-    expect(result.candidates[0]?.score.retrieval).toBeUndefined();
-    expect(result.candidates[0]?.score.total).toBe(0);
-  });
-
   it('publishes the raw value, the rule, and the contract behind every normalized value', () => {
     const result = score([candidate({}, scoredRetrieval(0.75))], CONTRACTS);
 
@@ -236,31 +229,203 @@ describe('CandidateScorer: retrieval normalization', () => {
   });
 });
 
-describe('CandidateScorer: retrieval normalization arithmetic', () => {
-  it('INV-SCORE-004: rejects a normalization that overflows to a non-finite value', () => {
-    const extreme = policy({
-      retrieval: {
-        weight: 1,
-        aggregation: 'max',
-        rules: [rule({ ruleId: 'extreme', min: -Number.MAX_VALUE, max: Number.MAX_VALUE })],
-      },
-    });
+describe('CandidateScorer: an absent retrieval component never swallows evidence', () => {
+  const IDENTITY = policy();
+  const EMPTY_RULES = policy({ retrieval: { weight: 1, aggregation: 'max', rules: [] } });
 
-    expect(
-      issueCodesOf(() => score([candidate({}, scoredRetrieval(Number.MAX_VALUE))], extreme)),
-    ).toEqual(['non_finite_score_result']);
+  it('accepts a candidate carrying no retrieval data at all', () => {
+    const result = score([candidate()], IDENTITY);
+
+    expect(result.candidates[0]?.score).toEqual({ total: 0 });
+    expect(result.candidates[0]?.score.retrieval).toBeUndefined();
   });
 
-  it('still normalizes an ordinary value inside a very wide range', () => {
-    const wide = policy({
+  it('accepts retrieval metadata and a rank when no score is present', () => {
+    const result = score(
+      [candidate({}, retrieval({ rank: 3, metadata: { pointId: 'p-1' } }))],
+      IDENTITY,
+    );
+
+    expect(result.candidates[0]?.score).toEqual({ total: 0 });
+    expect(result.candidates[0]?.score.retrieval).toBeUndefined();
+  });
+
+  it('INV-SCORE-002: rejects a scored record when the policy configures no retrieval component', () => {
+    const issues = issuesOf(() => score([candidate({}, scoredRetrieval(0.9))], IDENTITY));
+
+    expect(issues.map((issue) => issue.code)).toEqual(['retrieval_score_rule_not_found']);
+    expect(issues[0]?.pointer).toBe('candidates.block-1.members.block-1.retrieval.score');
+    expect(issues[0]?.message).toContain('"sqlite-fts5"');
+  });
+
+  it('INV-DET-002: reports every uncovered scored record deterministically', () => {
+    const run = (): unknown =>
+      score(
+        [
+          candidate({ id: 'block-2', content: 'Second block.' }, scoredRetrieval(0.4)),
+          candidate({ id: 'block-1', content: 'First block.' }, scoredRetrieval(0.9)),
+          candidate(
+            { id: 'block-1', content: 'First block.' },
+            scoredRetrieval(0.1, { providerId: 'other-provider' }),
+          ),
+          candidate({ id: 'block-3', content: 'Third block.' }),
+        ],
+        IDENTITY,
+      );
+    const issues = issuesOf(run);
+
+    expect(issues.map((issue) => issue.code)).toEqual([
+      'retrieval_score_rule_not_found',
+      'retrieval_score_rule_not_found',
+      'retrieval_score_rule_not_found',
+    ]);
+    // Addressed by stable identifier, in canonical group then evidence order,
+    // and identical on a repeated run.
+    expect(issues.map((issue) => issue.pointer)).toEqual([
+      'candidates.block-1.members.block-1.retrieval.score',
+      'candidates.block-1.members.block-1.retrieval.score',
+      'candidates.block-2.members.block-2.retrieval.score',
+    ]);
+    expect(issuesOf(run)).toEqual(issues);
+  });
+
+  it('rejects a scored record when the retrieval component configures no rules', () => {
+    expect(issueCodesOf(() => score([candidate({}, scoredRetrieval(0.9))], EMPTY_RULES))).toEqual([
+      'retrieval_score_rule_not_found',
+    ]);
+  });
+
+  it('still scores normally once an exact rule exists', () => {
+    const result = score([candidate({}, scoredRetrieval(0.9))], CONTRACTS);
+
+    expect(result.candidates[0]?.score.retrieval?.normalizedValue).toBe(0.9);
+    expect(result.candidates[0]?.score.total).toBe(0.9);
+  });
+});
+
+describe('CandidateScorer: overflow-safe range normalization', () => {
+  const MAX = Number.MAX_VALUE;
+
+  /** A rule spanning the whole double range, so `max - min` overflows. */
+  function extreme(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return policy({
       retrieval: {
         weight: 1,
         aggregation: 'max',
-        rules: [rule({ ruleId: 'wide', min: -Number.MAX_VALUE, max: Number.MAX_VALUE })],
+        rules: [rule({ ruleId: 'extreme', min: -MAX, max: MAX, ...overrides })],
       },
     });
-    const result = score([candidate({}, scoredRetrieval(0))], wide);
+  }
 
-    expect(Number.isFinite(result.candidates[0]?.score.retrieval?.normalizedValue)).toBe(true);
+  function normalizedUnder(
+    scoringPolicy: Record<string, unknown>,
+    rawValue: number,
+    scoreOverrides: Record<string, unknown> = {},
+  ): number | undefined {
+    const result = score(
+      [candidate({}, scoredRetrieval(rawValue, {}, scoreOverrides))],
+      scoringPolicy,
+    );
+    return result.candidates[0]?.score.retrieval?.normalizedValue;
+  }
+
+  it('INV-SCORE-004: maps the midpoint of an overflowing range to a half, not to zero', () => {
+    // The plain formula returns a finite, confidently wrong 0 here: the span
+    // overflows to Infinity while the numerator stays MAX_VALUE.
+    expect(normalizedUnder(extreme(), 0)).toBeCloseTo(0.5, 15);
+  });
+
+  it('maps the endpoints of an overflowing higher-is-better range to zero and one', () => {
+    expect(normalizedUnder(extreme(), -MAX)).toBe(0);
+    expect(normalizedUnder(extreme(), MAX)).toBe(1);
+  });
+
+  it('inverts an overflowing lower-is-better range correctly', () => {
+    const lower = extreme({ higherIsBetter: false, semantics: 'huge-distance' });
+    const inverted = { semantics: 'huge-distance', higherIsBetter: false };
+
+    expect(normalizedUnder(lower, 0, inverted)).toBeCloseTo(0.5, 15);
+    expect(normalizedUnder(lower, -MAX, inverted)).toBe(1);
+    expect(normalizedUnder(lower, MAX, inverted)).toBe(0);
+  });
+
+  it('normalizes an interior value of an asymmetric overflowing range correctly', () => {
+    const asymmetric = policy({
+      retrieval: {
+        weight: 1,
+        aggregation: 'max',
+        rules: [rule({ ruleId: 'asymmetric', min: -1e308, max: 1.5e308 })],
+      },
+    });
+
+    // Calculated independently of the implementation: the value sits 1e308
+    // above a range 2.5e308 wide, so 1e308 / 2.5e308 = 0.4.
+    expect(normalizedUnder(asymmetric, 0)).toBeCloseTo(0.4, 15);
+    expect(normalizedUnder(asymmetric, -1e308)).toBe(0);
+    expect(normalizedUnder(asymmetric, 1.5e308)).toBe(1);
+  });
+
+  it('leaves ordinary ranges bit-for-bit unchanged', () => {
+    expect(normalizedOf([candidate({}, scoredRetrieval(0.25))])).toBe(0.25);
+    expect(
+      normalizedOf([
+        candidate({}, scoredRetrieval(1, {}, { semantics: 'l2-distance', higherIsBetter: false })),
+      ]),
+    ).toBe(0.75);
+    expect(
+      normalizedOf([
+        candidate(
+          {},
+          scoredRetrieval(
+            15,
+            { providerId: 'bm25-provider', providerVersion: '2.0.0' },
+            { semantics: 'bm25' },
+          ),
+        ),
+      ]),
+    ).toBe(0.75);
+    expect(
+      normalizedOf([
+        candidate(
+          {},
+          scoredRetrieval(
+            -0.5,
+            { providerId: 'signed-provider', providerVersion: '1.0.0' },
+            { semantics: 'signed-relevance' },
+          ),
+        ),
+      ]),
+    ).toBe(0.25);
+  });
+
+  it('still rejects a value outside an overflowing range rather than scaling it in', () => {
+    // The range still overflows, but its upper bound now leaves finite values
+    // above it, so an out-of-range case is expressible.
+    const narrower = policy({
+      retrieval: {
+        weight: 1,
+        aggregation: 'max',
+        rules: [rule({ ruleId: 'wide', min: -MAX, max: 1e308 })],
+      },
+    });
+
+    expect(issueCodesOf(() => score([candidate({}, scoredRetrieval(1.1e308))], narrower))).toEqual([
+      'retrieval_score_out_of_range',
+    ]);
+  });
+
+  it('publishes no non-finite and no negative-zero value from an extreme range', () => {
+    const result = score([candidate({}, scoredRetrieval(-MAX))], extreme());
+    const numbers: number[] = [];
+    const walk = (value: unknown): void => {
+      if (typeof value === 'number') numbers.push(value);
+      else if (Array.isArray(value)) value.forEach(walk);
+      else if (typeof value === 'object' && value !== null) Object.values(value).forEach(walk);
+    };
+    walk(result);
+
+    expect(numbers.length).toBeGreaterThan(0);
+    expect(numbers.every((value) => Number.isFinite(value))).toBe(true);
+    expect(numbers.some((value) => Object.is(value, -0))).toBe(false);
   });
 });
