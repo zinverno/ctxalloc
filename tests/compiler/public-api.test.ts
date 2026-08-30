@@ -1,14 +1,25 @@
 import { readFileSync } from 'node:fs';
 import * as compiler from '@ctxalloc/compiler';
 import {
+  CandidateDeduplicator,
   CandidateValidationError,
   CandidateValidator,
   type CandidateValidationInput,
+  type CanonicalSelectionReason,
+  type DeduplicatedCandidate,
+  type DeduplicatedCandidateMember,
+  type DeduplicatedCandidateSet,
+  type DuplicateMatchReason,
   type ValidatedCandidateSet,
 } from '@ctxalloc/compiler';
 import type { Tokenizer } from '@ctxalloc/ports';
 import { describe, expect, it } from 'vitest';
-import type { CandidateBlock, Scope, SourceDocument } from '../../packages/domain/src/index.js';
+import type {
+  CandidateBlock,
+  ContextBlock,
+  Scope,
+  SourceDocument,
+} from '../../packages/domain/src/index.js';
 import { candidate, countWords, input, sourceDocument, wordTokenizer } from './fixtures.js';
 
 const rootUrl = new URL('../../', import.meta.url);
@@ -28,6 +39,8 @@ const manifest = JSON.parse(
 const SOURCE_FILES = [
   'packages/compiler/src/index.ts',
   'packages/compiler/src/candidate-validator.ts',
+  'packages/compiler/src/candidate-deduplicator.ts',
+  'packages/compiler/src/canonical-json.ts',
 ] as const;
 
 function readSource(relativePath: string): string {
@@ -41,8 +54,9 @@ function importSpecifiers(relativePath: string): string[] {
 }
 
 describe('@ctxalloc/compiler public API', () => {
-  it('exports the validator and its error type only', () => {
+  it('exports the two implemented compiler stages and the validation error only', () => {
     expect(Object.keys(compiler).sort()).toEqual([
+      'CandidateDeduplicator',
       'CandidateValidationError',
       'CandidateValidator',
     ]);
@@ -55,6 +69,11 @@ describe('@ctxalloc/compiler public API', () => {
     expect(exported).toEqual([
       'CandidateValidationInput',
       'CandidateValidationIssueCode',
+      'CanonicalSelectionReason',
+      'DeduplicatedCandidate',
+      'DeduplicatedCandidateMember',
+      'DeduplicatedCandidateSet',
+      'DuplicateMatchReason',
       'ValidatedCandidateSet',
     ]);
   });
@@ -81,6 +100,35 @@ describe('@ctxalloc/compiler public API', () => {
     expect(CandidateValidationError.prototype).toBeInstanceOf(Error);
   });
 
+  it('accepts a ValidatedCandidateSet and returns the documented deduplicated result', () => {
+    const validated: ValidatedCandidateSet = new CandidateValidator(wordTokenizer).validate(
+      input({ candidates: [candidate(), candidate()] }),
+    );
+    const deduplicated: DeduplicatedCandidateSet = new CandidateDeduplicator().deduplicate(
+      validated,
+    );
+
+    const scope: Scope = deduplicated.scope;
+    const documents: readonly SourceDocument[] = deduplicated.sourceDocuments;
+    const groups: readonly DeduplicatedCandidate[] = deduplicated.candidates;
+    const group = groups[0];
+    if (group === undefined) throw new Error('expected one group');
+
+    const canonical: ContextBlock = group.canonicalBlock;
+    const reason: CanonicalSelectionReason = group.canonicalSelectionReason;
+    const members: readonly DeduplicatedCandidateMember[] = group.members;
+    const member = members[0];
+    if (member === undefined) throw new Error('expected one member');
+    const wrapper: CandidateBlock = member.candidate;
+    const matchReason: DuplicateMatchReason = member.matchReason;
+
+    expect(scope).toEqual(validated.scope);
+    expect(documents).toHaveLength(1);
+    expect(canonical.id).toBe(wrapper.block.id);
+    expect(reason).toBe('single-block');
+    expect(matchReason).toBe('same-block-id');
+  });
+
   it('accepts unknown at the runtime boundary', () => {
     const validator = new CandidateValidator(wordTokenizer);
     const untyped: unknown = input();
@@ -100,7 +148,7 @@ describe('@ctxalloc/compiler public API', () => {
 
   it('exports no later compiler stage and no retrieval port', () => {
     for (const name of [
-      'Deduplicator',
+      'CandidateFilter',
       'CandidateScorer',
       'BudgetAllocator',
       'ContextOrderer',
@@ -114,7 +162,6 @@ describe('@ctxalloc/compiler public API', () => {
       'CompilationResult',
       'CompilationTrace',
       'compile',
-      'deduplicate',
       'score',
       'allocate',
       'render',
@@ -188,13 +235,22 @@ describe('@ctxalloc/compiler public API', () => {
     expect(entry).not.toContain('zod');
     expect(entry).not.toContain('node:');
 
-    const declaredExports = readSource('packages/compiler/src/candidate-validator.ts')
-      .split('\n')
-      .filter((line) => line.startsWith('export '))
-      .join('\n');
-    for (const leaked of ['z.', 'Zod', 'Buffer', 'Hash', 'createHash', 'Map<', 'Set<']) {
-      expect(declaredExports, `candidate-validator exposes ${leaked}`).not.toContain(leaked);
+    for (const file of [
+      'packages/compiler/src/candidate-validator.ts',
+      'packages/compiler/src/candidate-deduplicator.ts',
+    ]) {
+      const declaredExports = readSource(file)
+        .split('\n')
+        .filter((line) => line.startsWith('export '))
+        .join('\n');
+      for (const leaked of ['z.', 'Zod', 'Buffer', 'Hash', 'createHash', 'Map<', 'Set<']) {
+        expect(declaredExports, `${file} exposes ${leaked}`).not.toContain(leaked);
+      }
     }
+    // The shared canonical serializer is internal: the entry point never
+    // re-exports it (INV-ADAPTER-001).
+    expect(entry).not.toContain('canonicalJson');
+    expect(entry).not.toContain('canonical-json');
   });
 
   it('INV-ADAPTER-001: exposes no mutable collection in the public contract', () => {

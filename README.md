@@ -9,17 +9,17 @@ or agent framework.
 
 ## Status
 
-Phase 7 — candidate wrapper and strict candidate validation. The repository contains the TypeScript
-monorepo scaffolding from Phase 1 (workspace structure, strict compiler and
-linting configuration, test infrastructure, package boundaries, boundary
-checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
+Phase 8 — deterministic exact candidate deduplication. The repository contains
+the TypeScript monorepo scaffolding from Phase 1 (workspace structure, strict
+compiler and linting configuration, test infrastructure, package boundaries,
+boundary checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
 identifiers, content hash values, JSON-safe metadata, source types, source
 locations, `SourceDocument`, `ContextBlock`, `TokenBudget`, and a structured
 validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
 deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
 tokenizer contract test suite, a real offline tokenizer adapter in
 `@ctxalloc/tokenization`, the first two application use cases in
-`@ctxalloc/application`, and the first compiler-kernel stage in
+`@ctxalloc/application`, and the first two compiler-kernel stages in
 `@ctxalloc/compiler`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
@@ -115,21 +115,58 @@ and no location value is rewritten. This is provenance validation, not source
 reconstruction: `endOffset <= sourceLength` is still not checked, because
 `SourceDocument` carries no full content.
 
-**Duplicate wrappers are not deduplicated yet.** Two wrappers carrying the same
+`CandidateValidator` itself does not deduplicate: two wrappers carrying the same
 block, with or without different retrieval metadata, pass through in input order
-for the future deduplication phase. What is rejected is one block ID attached to
-two _different_ canonical records.
+for the next stage. What it rejects is one block ID attached to two _different_
+canonical records.
 
 Priority is restricted to finite safe integers, including negative values. No
 product-specific range exists yet; semantic bounds belong to the future
 `CompilationPolicy`.
 
+`CandidateDeduplicator` is the second stage of the kernel (see
+[DEC-031](./docs/DECISIONS.md)). It takes a `ValidatedCandidateSet` and returns
+groups of exact duplicates. It needs no injected dependency and calls no
+tokenizer.
+
+**Duplicates are decided by exact canonical normalized text, not by the hash
+alone.** The validated `normalizedContentHash` only picks a bucket; membership is
+settled by comparing the normalized strings, so no duplicate decision rests on
+digest collision resistance. Line endings are the only difference the rule
+ignores: an LF copy and a CRLF copy of one text deduplicate, while a trailing
+space, a different blank-line count, different indentation, NFC versus NFD, a
+case or punctuation change, a substring, or a paraphrase all stay distinct.
+Contradictory values — `timeout = 30` against `timeout = 60` — are never
+collapsed.
+
+**Required blocks win exact duplicate groups,** and the remaining tie-break is
+the lexicographically smallest block ID, compared by code unit rather than by
+locale. Retrieval score, retrieval rank, provider identity, authored priority,
+category, timestamps, token count, metadata richness, source location
+completeness, and input position never select the canonical block. The canonical
+block is always one of the group's own records, carried unchanged: nothing is
+merged, synthesized, or mutated into a required block.
+
+**Every wrapper and every retrieval record is preserved as evidence,** appearing
+exactly once inside exactly one group, so a duplicate's block ID, source
+document, source location, heading path, metadata, and provider data all stay
+recoverable. No retrieval record is merged and no score is compared or
+normalized. Output groups, members, and the returned source registry are ordered
+stably and do not depend on candidate input order.
+
+**No near-duplicate logic exists** — no embeddings, similarity thresholds, edit
+distance, stemming, containment, or heading heuristics — and no configuration
+flag is offered for a capability that is not implemented. **No policy filtering
+exists** either: it requires a versioned `CompilationPolicy`, so no candidate is
+excluded here for its category, source, timestamp, priority, score, rank,
+provider, relevance, freshness, or size.
+
 **No allocator exists yet.** Nothing decides which blocks fit a budget, and
-whether required content fits is the allocator's decision, not the validator's.
-There is no policy filtering, deduplication, scoring, allocation, ordering,
-rendering, trace generation, compiler orchestration, retrieval provider,
-persistence, HTTP, or CLI behavior yet. CtxAlloc does not yet compile or optimize
-context, and it supports no Obsidian integration.
+whether required content fits is the allocator's decision. There is no policy
+filtering, scoring, allocation, ordering, rendering, trace generation, compiler
+orchestration, retrieval provider, persistence, HTTP, or CLI behavior yet.
+CtxAlloc does not yet compile or optimize context, and it supports no Obsidian
+integration.
 
 ## Prerequisites
 

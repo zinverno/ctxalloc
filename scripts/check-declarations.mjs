@@ -32,6 +32,7 @@ const DECLARATIONS = [
   'packages/domain/dist/block-content-hash.d.ts',
   'packages/compiler/dist/index.d.ts',
   'packages/compiler/dist/candidate-validator.d.ts',
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -374,6 +375,97 @@ requireContains(
 );
 requireContains('packages/compiler/dist/index.d.ts', "} from './candidate-validator.js'");
 
+// The candidate deduplicator keeps its documented stage signature: it consumes a
+// ValidatedCandidateSet, needs no injected dependency, and returns readonly
+// project-owned types (DEC-031).
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'declare class CandidateDeduplicator',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'deduplicate(input: ValidatedCandidateSet): DeduplicatedCandidateSet;',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'type DuplicateMatchReason = ',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'type CanonicalSelectionReason = ',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'interface DeduplicatedCandidateMember',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'readonly candidate: CandidateBlock;',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'readonly matchReason: DuplicateMatchReason;',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'interface DeduplicatedCandidate ',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'readonly canonicalBlock: ContextBlock;',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'readonly canonicalSelectionReason: CanonicalSelectionReason;',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'readonly members: readonly DeduplicatedCandidateMember[];',
+);
+requireContains(
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'interface DeduplicatedCandidateSet',
+);
+requireContains('packages/compiler/dist/index.d.ts', "} from './candidate-deduplicator.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/candidate-deduplicator.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // The stage takes no constructor argument at all: no tokenizer, no policy,
+    // no clock, and no provider (INV-DET-003, INV-DEP-002).
+    if (/constructor\s*\(/.test(declarations)) {
+      fail('packages/compiler/dist/candidate-deduplicator.d.ts declares a constructor dependency');
+    }
+    // The deduplicated set is an ephemeral compiler-stage result, not a
+    // persisted record, so it carries no schema version (INV-STORE-004).
+    if (declarations.includes('schemaVersion')) {
+      fail('packages/compiler/dist/candidate-deduplicator.d.ts declares a persisted schemaVersion');
+    }
+    // No near-duplicate, scoring, or policy vocabulary may appear before its
+    // phase implements it (INV-DEDUP-004).
+    for (const forbidden of [
+      'similarity',
+      'Similarity',
+      'threshold',
+      'embedding',
+      'Embedding',
+      'nearDuplicate',
+      'NearDuplicate',
+      'CompilationPolicy',
+      'CandidateFilter',
+      'normalizedScore',
+      'finalScore',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/candidate-deduplicator.d.ts exposes the future concept "${forbidden}"`,
+        );
+      }
+    }
+  }
+}
+
 // The validation library, the Node standard library, a provider SDK, an
 // application type, and an internal helper all stay implementation details of
 // the compiler kernel (INV-ADAPTER-001, INV-DEP-002).
@@ -395,12 +487,17 @@ const COMPILER_LEAKED_TYPES = [
   'CountOutcome',
   'IssuePath',
   'canonicalize',
+  'canonicalJson',
+  'compareCodeUnits',
   'pointerFor',
+  'Group',
+  'Ordered',
 ];
 
 for (const relativePath of [
   'packages/compiler/dist/index.d.ts',
   'packages/compiler/dist/candidate-validator.d.ts',
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
@@ -411,8 +508,10 @@ for (const relativePath of [
     }
   }
   // No later compiler stage may appear before its phase implements it.
+  // `Deduplicator` left this list in Phase 8, when `CandidateDeduplicator`
+  // became a published stage (DEC-031).
   for (const stage of [
-    'Deduplicator',
+    'CandidateFilter',
     'CandidateScorer',
     'BudgetAllocator',
     'ContextOrderer',
