@@ -6,15 +6,26 @@
  * candidates and returns compiled context: it never searches an index, reads a
  * file, calls a model, or touches a database (INV-DEP-002).
  *
- * Only the first stage exists. `CandidateValidator` validates one candidate
- * batch strictly, all or nothing, before any policy stage can rely on it
- * (DEC-030).
+ * Two stages exist. `CandidateValidator` validates one candidate batch strictly,
+ * all or nothing, and is the runtime trust boundary of the kernel (DEC-030).
+ * `CandidateDeduplicator` then collapses exact duplicate content into groups,
+ * choosing an existing canonical block and preserving every candidate wrapper as
+ * evidence (DEC-031).
  *
- * Deduplication, scoring, allocation, ordering, rendering, trace construction,
- * and compiler orchestration are later phases and are deliberately absent, as is
- * the candidate provider port, which belongs outside the kernel entirely.
+ * Policy filtering, scoring, allocation, ordering, rendering, trace
+ * construction, and compiler orchestration are later phases and are deliberately
+ * absent, as is the candidate provider port, which belongs outside the kernel
+ * entirely.
  */
 
+export {
+  CandidateDeduplicator,
+  type CanonicalSelectionReason,
+  type DeduplicatedCandidate,
+  type DeduplicatedCandidateMember,
+  type DeduplicatedCandidateSet,
+  type DuplicateMatchReason,
+} from './candidate-deduplicator.js';
 export {
   CandidateValidationError,
   CandidateValidator,

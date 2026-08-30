@@ -231,10 +231,10 @@ Scope Validation
 Candidate Validation
         |
         v
-Policy Filtering
+Deterministic Deduplication
         |
         v
-Deterministic Deduplication
+Policy Filtering
         |
         v
 Required Block Resolution
@@ -537,19 +537,79 @@ The validator does not decide whether required content fits the budget. That
 depends on the complete required allocation and its rendering overhead, and
 belongs to the allocator (section 6.4, INV-BUDGET-004).
 
-### 6.2 Deduplicator
+### 6.2 CandidateDeduplicator
 
-Status: future phase.
+Status: implemented (DEC-031).
+
+It consumes a `ValidatedCandidateSet` and returns a `DeduplicatedCandidateSet`,
+the next compiler-stage type:
+
+```ts
+interface DeduplicatedCandidateSet {
+  readonly scope: Scope;
+  readonly sourceDocuments: readonly SourceDocument[];
+  readonly candidates: readonly DeduplicatedCandidate[];
+}
+
+interface DeduplicatedCandidate {
+  readonly canonicalBlock: ContextBlock;
+  readonly canonicalSelectionReason: CanonicalSelectionReason;
+  readonly members: readonly DeduplicatedCandidateMember[];
+}
+
+interface DeduplicatedCandidateMember {
+  readonly candidate: CandidateBlock;
+  readonly matchReason: DuplicateMatchReason;
+}
+```
+
+The structure is an ephemeral compiler-stage result and is never persisted, so it
+carries no schema version.
 
 Responsibilities:
 
-* exact identifier deduplication;
-* content hash deduplication;
-* normalized text deduplication;
-* canonical block selection;
-* duplicate trace generation.
+* exact duplicate grouping by canonical normalized block content;
+* canonical `ContextBlock` selection;
+* explicit machine-readable duplicate match reasons;
+* explicit machine-readable canonical selection reasons;
+* stable intermediate ordering of groups, members, and the source registry.
 
-The initial implementation must be deterministic and non-embedding-based.
+Two candidates are duplicates when `normalizeContextBlockContentForHash` maps
+their content to exactly equal strings. The validated `normalizedContentHash`
+accelerates grouping as an outer bucket, but the normalized text itself decides
+membership, so no correctness rule depends on digest collision resistance. Line
+endings are the only difference the rule ignores: trailing spaces, blank-line
+runs, indentation, letter case, punctuation, and Unicode composition all stay
+significant, so conflicting blocks are never collapsed (INV-DEDUP-005).
+
+Canonical selection uses two ordered rules over the distinct blocks in a group:
+required status first, then the lexicographically smallest `ContextBlock.id`
+compared by code unit. Retrieval score, retrieval rank, provider identity,
+authored priority, category, timestamps, token count, metadata richness, source
+location completeness, and input position are all excluded. The canonical block
+is always one of the group's own records, carried unchanged; no merged or
+synthesized block is created and no block is mutated into a required one.
+
+Every input `CandidateBlock` wrapper survives as evidence inside exactly one
+group, including wrappers that repeat a block ID, come from different providers,
+carry different ranks or scores, carry no retrieval data, or reference different
+source documents. Retrieval records are never merged, and no score is normalized,
+compared, or selected here.
+
+Output ordering is stable and independent of input order: groups by
+`canonicalBlock.id`, members by `candidate.block.id` then a canonical
+serialization of the wrapper, and `sourceDocuments` by `SourceDocument.id`. This
+is the first stage that intentionally normalizes candidate ordering for later
+compiler traversal (INV-DET-002).
+
+The stage takes no injected dependency, calls no tokenizer, and reads no clock,
+random value, file, environment variable, database, or network resource.
+
+Near-duplicate logic is absent, not merely disabled: no embedding, similarity
+threshold, edit distance, stemming, containment, or heading heuristic exists
+(INV-DEDUP-004). Policy filtering is also absent and remains future work, because
+it requires a versioned `CompilationPolicy`. Duplicate trace generation belongs
+to the trace phase, which can derive it from the groups this stage returns.
 
 ### 6.3 CandidateScorer
 
@@ -563,6 +623,11 @@ Responsibilities:
 * use stable tie-breaking.
 
 The score is an input to allocation, not an automatic inclusion decision.
+
+It consumes deduplicated candidate groups and their preserved member evidence.
+Deduplication keeps every wrapper and every retrieval record precisely so the
+scorer can read them; it must not reconstruct or approximate retrieval data that
+it believes was lost.
 
 ### 6.4 BudgetAllocator
 

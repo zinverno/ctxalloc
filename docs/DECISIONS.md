@@ -76,6 +76,7 @@ A newer decision has replaced the previous one.
 | DEC-028 | Derive source document identity from explicit logical identity | Accepted |
 | DEC-029 | Chunk Markdown deterministically in the application layer      | Accepted |
 | DEC-030 | Validate request-specific candidate wrappers before compiler policy stages | Accepted |
+| DEC-031 | Deduplicate exact candidate content before policy scoring | Accepted |
 
 ---
 
@@ -1612,6 +1613,189 @@ Required-budget feasibility cannot be decided here. It depends on the complete r
 Because `CandidateValidator` rejects rather than repairs, an out-of-date index becomes a visible failure at the compiler boundary instead of a silently corrected count. That is the intended cost: a stale token count is wrong data for a hard budget guarantee, not an approximation.
 
 Filtering, deduplication, scoring, required-block resolution, required-budget feasibility, allocation, ordering, rendering, traces, compiler orchestration, retrieval, persistence, the CLI, and the HTTP API remain later phases.
+
+---
+
+## DEC-031: Deduplicate Exact Candidate Content Before Policy Scoring
+
+### Status
+
+Accepted
+
+### Decision
+
+Exact candidate deduplication is the second stage of the compiler kernel. It lives in `@ctxalloc/compiler` as `CandidateDeduplicator`, one synchronous, pure, offline class that turns a `ValidatedCandidateSet` into a `DeduplicatedCandidateSet`.
+
+It takes no injected dependency at all. It reads no file, opens no socket, queries no database, calls no model, calls no retrieval provider, calls no tokenizer, reads no clock, and generates no random value (INV-DET-001, INV-DET-003, INV-DET-004, INV-DEP-002).
+
+It does not filter by policy, score, normalize or compare a provider score, resolve required blocks against a budget, allocate, order for rendering, render, build a trace, or persist anything.
+
+### CandidateValidator Remains the Trust Boundary
+
+The stage consumes a `ValidatedCandidateSet` and nothing else. It is deliberately downstream of `CandidateValidator`, which has already proved the schema, the request scope, the source registry, the source-location compatibility, the UTF-16 well-formedness, the token counts, the normalized content hashes, and that no block ID stands for two different canonical records.
+
+`CandidateDeduplicator` therefore accepts no unknown raw candidate, re-runs no validation, re-counts no token, re-hashes no content, re-checks no source registry or scope, and silently repairs nothing. That is a stage contract, not a runtime boundary: the future compiler orchestration will guarantee the stage order.
+
+No second validation framework and no runtime brand is introduced for it. A brand would add a second, weaker trust mechanism next to the one the validator already provides, and it would still not prove that the batch came from the validator rather than from a hand-built structure with the right shape.
+
+The supplied set is treated as immutable throughout. No candidate, block, attribute, metadata object, source location, retrieval record, source document, or array is mutated, and the result reuses those records by reference rather than rewriting them (INV-ALLOC-004).
+
+### Exact Normalized Content Defines a Duplicate Group
+
+Two candidate wrappers belong to the same duplicate group when their canonical normalized block content strings are exactly equal:
+
+```ts
+normalizeContextBlockContentForHash(block.content)
+```
+
+That is the shared domain rule fixed by DEC-030 and it is the single definition of equivalence. CRLF becomes LF and any remaining lone CR becomes LF; nothing is trimmed, no trailing space is removed, no blank-line run is collapsed, no space is coalesced, and Unicode composition is preserved.
+
+The consequences are exact:
+
+* repeated wrappers of one block ID group together;
+* different block IDs carrying identical normalized content group together;
+* an LF copy and a CRLF copy of the same text group together;
+* a lone-CR copy and an LF copy of the same text group together;
+* identical content from different source documents groups together;
+* identical content from different source types groups together;
+* a trailing-space difference does not group;
+* a blank-line-count difference does not group;
+* an indentation difference does not group;
+* an NFC and an NFD spelling of the same word do not group;
+* a letter-case or punctuation difference does not group;
+* a substring or containment relationship does not group;
+* a paraphrase does not group;
+* two blocks that discuss the same subject with contradictory values do not group (INV-DEDUP-005).
+
+### The Hash Accelerates Grouping and Never Decides It
+
+The validated `normalizedContentHash` is used as an outer bucket, because comparing 64 hexadecimal characters is cheaper than comparing whole documents. Inside a bucket, membership is decided by comparing the canonical normalized content strings themselves.
+
+The hash is therefore never the semantic test. A hypothetical hash collision could not merge two different texts into one group, because the texts are still compared. The pre-bucket also cannot split a real group, because the validator has proved every hash is the canonical hash of its own content, so equal normalized content always hashes equally.
+
+Making hash equality alone the rule was rejected: it would make correctness depend on the collision resistance of a digest rather than on the content the compiler actually holds, and a duplicate decision removes content from a compiled context.
+
+### Every Wrapper Survives as Evidence
+
+Deduplication collapses independently selectable logical content. It does not erase evidence.
+
+Every input `CandidateBlock` wrapper appears exactly once inside exactly one output `DeduplicatedCandidate.members` array, whatever its block ID, retrieval provider, provider rank, provider score, or source document, and whether or not it carries retrieval data at all. Nothing disappears between stages (INV-TRACE-001, INV-DEDUP-003).
+
+Wrappers are carried whole rather than summarized. Retrieval records are never merged into one fabricated object, and no "best" score is selected, averaged, normalized, maximized, minimized, or compared here: provider scales are not comparable at this stage (INV-SCORE-002), and a future scorer may need the individual records. `CandidateBlock` is unchanged, and no deduplication state is written back into `ContextBlock` or `CandidateBlock`.
+
+### Canonical Selection Uses Only Existing Invariant Semantics
+
+The canonical block of a group is chosen from the distinct `ContextBlock` records in that group, by two ordered rules:
+
+1. **Required status.** A block whose `attributes.required` is `true` wins over every block where `required` is `false` or absent. Absent and `false` are both simply optional. If exactly one distinct block is required it becomes canonical; if several are, rule 2 decides among the required blocks only; if none is, rule 2 decides among all of them.
+2. **Stable block identifier.** The lexicographically smallest `ContextBlock.id` wins, compared by UTF-16 code unit.
+
+Comparison never uses `localeCompare`: its result depends on the machine's locale and on the ICU data the runtime was built with, which would make one ordering decision differ between machines (INV-DET-002). The code-unit comparison is the project-owned final tie-breaker (INV-DET-005).
+
+Nothing else participates. Retrieval score, retrieval rank, provider identity, authored numeric priority, category, `createdAt`, `updatedAt`, token count, metadata richness, source-location completeness, source document, and input position are all excluded, because:
+
+* retrieval scores and ranks are unnormalized untrusted provider inputs that this stage is forbidden to compare (INV-SCORE-002, INV-PROV-003);
+* recency policy does not exist, and reading a timestamp as recency would be a policy decision taken without a policy (INV-DET-004);
+* source priority and category priority belong to the versioned `CompilationPolicy`;
+* DEC-030 deliberately gave authored numeric priority no semantic bounds or ordering meaning;
+* token count and metadata richness are not evidence of correctness, and under a real tokenizer a CRLF copy and an LF copy of one text can even differ in token count while being the same canonical content;
+* every duplicate's provenance is preserved in `members`, so canonical selection does not need to destroy any of it;
+* input order is forbidden as a decision source (INV-DET-002, INV-ALLOC-005).
+
+### Required Status Survives
+
+Any group containing at least one required distinct block gets a required canonical block.
+
+That is achieved by choosing an already-existing required `ContextBlock`, never by creating a merged block, never by copying `required: true` from one block onto another, and never by mutating a block. Canonical identity and INV-DEDUP-002 are both preserved, and required status remains a separate allocation class rather than a large score (INV-SCORE-003).
+
+### Reason Codes
+
+`canonicalSelectionReason` is set deterministically per group:
+
+```text
+single-block                     one distinct block ID, however many wrappers
+required-block                   several distinct block IDs, exactly one required
+required-then-stable-block-id    several distinct block IDs, several required
+stable-block-id                  several distinct block IDs, none required
+```
+
+`matchReason` is set per preserved member:
+
+```text
+same-block-id                    the wrapper carries the canonical block itself
+same-normalized-content          a different block with exactly equal normalized content
+```
+
+`same-block-id` is safe even when retrieval metadata differs, because the validator has already established that one block ID cannot stand for two different canonical records (INV-BLOCK-002). Differing retrieval data is never a canonical block conflict.
+
+Both are machine-readable codes rather than free text, so a future trace builder can turn a group into decisions without re-deriving meaning from a message (INV-TRACE-002).
+
+### Provenance Stays Recoverable
+
+The canonical `ContextBlock` keeps its own provenance unchanged. Source IDs are never concatenated into its metadata, the block is never rewritten, and no multi-source block schema is invented.
+
+Every duplicate's provenance stays reachable through the group's members:
+
+```text
+member.candidate.block.id
+member.candidate.block.sourceDocumentId
+member.candidate.block.sourceLocation
+member.candidate.block.headingPath
+member.candidate.block.metadata
+member.candidate.retrieval
+```
+
+Together with the canonical block, the canonical selection reason, and each member's match reason, that is everything INV-DEDUP-003 requires a trace to record, without implementing `CompilationTrace` now.
+
+### Stable Ordering
+
+`DeduplicatedCandidateSet.candidates` is ordered by `canonicalBlock.id` ascending, with the group's canonical normalized content as a final tie-breaker so the order stays total even for a caller that bypassed the validator. This is the first stage that intentionally normalizes candidate ordering for later compiler traversal (INV-DET-002); candidate input order is deliberately not preserved.
+
+`members` is ordered by `candidate.block.id` ascending, then by a canonical serialization of the whole wrapper. Wrappers that share a block ID but carry different retrieval evidence therefore have a fixed relative order that depends on neither input position nor JavaScript property insertion order. Two wrappers that serialize identically are indistinguishable, so their relative order has no observable effect.
+
+`sourceDocuments` returns the same validated records in `id` ascending order. The registry is already unique by validation, the array is copied before sorting so the caller's registry is never reordered in place, and no record is mutated.
+
+`scope` is returned unchanged. It is never inferred or rewritten.
+
+That canonical serialization is one compiler-internal helper, shared with the validator's conflicting-block-ID detection rather than reimplemented, because two implementations of one rule would be free to drift (INV-DEP-003). It sorts object keys recursively, preserves array order, and preserves exact strings; a plain `JSON.stringify` would emit keys in insertion order, which an adapter, a database driver, or a JSON parser can vary between runs. The helper stays internal: it is not re-exported from the package entry point and appears in no public declaration.
+
+### The Result Is an Ephemeral Stage Object
+
+`DeduplicatedCandidateSet`, `DeduplicatedCandidate`, and `DeduplicatedCandidateMember` are compiler-owned readonly interfaces, produced and consumed inside one compilation and never persisted. They carry no `schemaVersion`, because that field marks persisted domain records so an unsupported stored shape fails clearly (INV-STORE-004), and no persisted schema is added for a value that never leaves the process.
+
+`ContextBlockSchema` and `CandidateBlockSchema` are unchanged. No deduplication state is written back into either record. No `Map`, `Set`, mutable array, canonical-JSON helper, validation-library type, crypto type, or provider SDK type reaches the public surface (INV-ADAPTER-001).
+
+### No Near-Duplicate Logic
+
+Phase 8 implements no near-duplicate rule of any kind: no embedding, cosine similarity, edit distance, fuzzy match, stemming, token-set similarity, MinHash, SimHash, Levenshtein, LLM comparison, semantic equivalence, same-heading heuristic, substring rule, or containment rule.
+
+INV-DEDUP-004 requires any near-duplicate rule to be deterministic, explainable, tested against false positives, configurable, and disabled by default until validated. The rule is therefore left absent rather than added and switched off. No configuration flag is introduced either: there is no implementation for a flag to enable, and an inert flag would advertise a capability that does not exist.
+
+### No Policy Filtering
+
+No `CandidateFilter` and no `CompilationPolicy` is introduced. No candidate is excluded for its category, source, source type, timestamp, authored priority, retrieval score, retrieval rank, provider identity, query relevance, freshness, or token size. Every validated non-duplicate group survives this stage.
+
+Policy filtering requires a versioned `CompilationPolicy`, which does not exist. Inventing filtering rules here would place policy decisions in a stage that has no policy to apply, and INV-DEP-003 forbids two components owning one responsibility.
+
+MVP_SCOPE 3.4 lists source priority, source recency, and provenance completeness among *possible* canonical selection rules. Only required status and the stable identifier tie-break are implemented, because those are the only two whose semantics the active invariants already define. The rest are policy and remain future work.
+
+ARCHITECTURE 4 previously drew policy filtering before deterministic deduplication. The two stages are swapped, and deduplication now runs immediately after candidate validation. Filtering a group before its duplicates are known would let the surviving copy of one piece of content depend on which wrapper a filter happened to keep, and every filtering rule that exists is a policy rule, so it cannot run before the policy that defines it exists. Deduplication needs no policy at all, so it is the stage that can run now.
+
+### Source Snapshot Binding Remains Deferred
+
+A `SourceDocument.id` is stable across content edits by design (DEC-028), so a persisted `ContextBlock` can reference a document whose content has since changed. Phase 8 has no persistence or index-generation model and cannot prove which source content snapshot produced a block.
+
+Deduplication does not solve this and does not attempt to. No `sourceContentHash` is added to `ContextBlock` in this phase. The problem belongs to the persistence and retrieval design, where index freshness and re-indexing are decided.
+
+### Consequences
+
+`@ctxalloc/compiler` gains a second published stage and no new dependency: `CandidateDeduplicator` needs only `@ctxalloc/domain` types and the shared normalization helper. No external runtime dependency is added, the boundary allowlist is unchanged, and `@ctxalloc/application` and `@ctxalloc/tokenization` remain absent from the kernel.
+
+`CandidateValidator` is unchanged in behavior. Its private canonical serialization moved into a compiler-internal module that both stages now share; the values it produces, the conflicts it detects, and the issues it reports are identical.
+
+Because deduplication normalizes ordering, the candidate order a retrieval adapter happens to produce stops being observable from this stage onward. That is the intended effect: later stages traverse a stable sequence, and a provider cannot influence compiler decisions through array position.
+
+Policy filtering, scoring, required-block resolution, allocation, ordering, rendering, traces, compiler orchestration, retrieval, persistence, the CLI, and the HTTP API remain later phases.
 
 ---
 

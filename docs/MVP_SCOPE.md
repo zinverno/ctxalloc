@@ -168,24 +168,51 @@ See DEC-030.
 
 ### 3.4 Deterministic Deduplication
 
-The MVP includes deterministic deduplication based on:
+Deterministic exact deduplication by block identifier and by content is
+implemented. `CandidateDeduplicator` consumes a `ValidatedCandidateSet` and
+returns groups of exact duplicates, each with one canonical block.
 
-* identical block identifiers;
-* identical content hashes;
-* exact normalized text matches;
-* optional deterministic near-duplicate rules.
+Two candidates are duplicates when the canonical normalized form of their content
+is exactly equal. Correctness rests on that text, not on the hash alone: the
+validated `normalizedContentHash` only selects a bucket, and membership is
+decided by comparing the normalized strings, so no duplicate decision depends on
+digest collision resistance. Line endings are the only difference the rule
+ignores, so an LF copy and a CRLF copy of one text are duplicates while trailing
+spaces, blank-line runs, indentation, letter case, punctuation, and Unicode
+composition remain significant.
+
+Canonical selection uses two ordered rules: a required block wins over optional
+duplicates, and the lexicographically smallest block identifier breaks the
+remaining tie. The canonical block is always one of the group's own records,
+carried unchanged, so required status survives without any block being mutated,
+merged, or synthesized.
+
+Deduplication preserves evidence. Every candidate wrapper survives inside exactly
+one group, including repeated identifiers, wrappers from different providers,
+differing ranks and provider scores, wrappers with no retrieval data, and
+duplicates from different source documents. No retrieval record is merged and no
+score is compared, normalized, or selected. Group order, member order, and the
+returned source registry order are stable and independent of input order.
 
 Embedding-based deduplication is not required for the first core implementation.
+Near-duplicate rules are absent rather than disabled: no similarity threshold,
+edit distance, stemming, containment, or heading heuristic exists, and no
+configuration flag is offered for a capability that is not implemented.
 
-When duplicates are found, the compiler must select a canonical block according to explicit rules.
+Policy filtering is separate and remains future work: it requires a versioned
+`CompilationPolicy`, so no candidate is excluded here for its category, source,
+timestamp, authored priority, retrieval score or rank, provider, relevance,
+freshness, or size.
 
-Possible canonical selection rules include:
+Further canonical selection rules remain possible once policy exists:
 
-1. required block over optional block;
-2. higher source priority;
-3. newer source;
-4. more complete provenance;
-5. stable lexical identifier tie-break.
+1. required block over optional block — implemented;
+2. higher source priority — requires `CompilationPolicy`;
+3. newer source — requires an explicit recency policy and reference time;
+4. more complete provenance — requires policy;
+5. stable lexical identifier tie-break — implemented.
+
+See DEC-031.
 
 ---
 

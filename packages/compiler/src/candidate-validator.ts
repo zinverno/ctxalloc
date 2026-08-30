@@ -15,6 +15,7 @@ import {
 } from '@ctxalloc/domain';
 import type { Tokenizer } from '@ctxalloc/ports';
 import { z } from 'zod';
+import { canonicalJson } from './canonical-json.js';
 
 /**
  * Strict candidate validation (DEC-030).
@@ -154,38 +155,6 @@ function describeScope(scope: Scope): string {
   return `{tenantId: ${quote(scope.tenantId)}, workspaceId: ${quote(scope.workspaceId)}, projectId: ${
     scope.projectId === undefined ? 'absent' : quote(scope.projectId)
   }}`;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Canonical comparison                                                        */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Deterministic serialization of validated JSON-safe data.
- *
- * Object keys are sorted recursively and array order is preserved, so two
- * records that differ only in JavaScript property insertion order serialize
- * identically. A plain `JSON.stringify` would not: it emits keys in insertion
- * order, which an adapter, a database driver, or a JSON parser can vary between
- * runs, and comparing blocks with it would invent conflicts that do not exist
- * (INV-DET-002).
- *
- * The input is always a parsed `ContextBlock`, which the domain schemas have
- * already restricted to JSON-safe values, so no cyclic, `undefined`, `NaN`, or
- * class-instance value can reach this function.
- */
-function canonicalize(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalize).join(',')}]`;
-  }
-  if (typeof value === 'object' && value !== null) {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalize(entry)}`);
-    return `{${entries.join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
 }
 
 /* -------------------------------------------------------------------------- */
@@ -632,7 +601,7 @@ function detectConflictingBlockIds(candidates: readonly CandidateBlock[]): Valid
     const id: string = candidate.block.id;
     const group = groups.get(id) ?? { indices: [], variants: new Set<string>(), firstIndex: index };
     group.indices.push(index);
-    group.variants.add(canonicalize(candidate.block));
+    group.variants.add(canonicalJson(candidate.block));
     groups.set(id, group);
   });
 
