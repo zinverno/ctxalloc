@@ -1158,7 +1158,6 @@ interface RenderedContextAttempt {
   readonly tokenizerVersion: string;
   readonly renderedContext: string;
   readonly renderedTokens: number;
-  readonly renderedTokenDelta: number;
   readonly fitsAvailableInputBudget: boolean;
 }
 ```
@@ -1236,10 +1235,15 @@ tokenizer that throws or returns an unusable value produces a structured
 `CONTEXT_RENDERING_FAILED` with `tokenizer_failed` or
 `invalid_rendered_token_count`, never a partial attempt (INV-ADAPTER-003).
 
-`renderedTokenDelta` is `renderedTokens - selectedBlockContentTokens`, a
-**signed** value that may be negative, zero, or positive. Tokenization is not
-additive, so it is a diagnostic delta and not an additive attribution of wrapper,
-separator, or label tokens (METRICS 8.6).
+**No token delta is published.** Subtracting `selectedBlockContentTokens` from
+`renderedTokens` is meaningful only when one tokenizer identity produced both,
+and this stage cannot establish that: `renderedTokens` comes from the injected
+tokenizer, `selectedBlockContentTokens` from whichever tokenizer validated the
+block counts, and no stage contract from 6.1 to 6.5 carries a tokenizer identity
+to compare. A miscomposed chain would otherwise report the gap between two
+vocabularies as if it described rendering. The value stays reachable through the
+nested allocation; the final signed `renderingTokenDelta` belongs to the
+component that guarantees one tokenizer (METRICS 8.6, section 7.2).
 
 `fitsAvailableInputBudget` is `renderedTokens <= availableInputTokens`, and it is
 observational. `false` is a successful measurement of an over-budget attempt: the

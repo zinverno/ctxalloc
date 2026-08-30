@@ -1,8 +1,20 @@
-import { ContextRenderer, ContextRenderingError } from '@ctxalloc/compiler';
+import {
+  BudgetAllocator,
+  CandidateDeduplicator,
+  CandidateScorer,
+  CandidateValidator,
+  ContextOrderer,
+  ContextRenderer,
+  ContextRenderingError,
+} from '@ctxalloc/compiler';
 import { FakeTokenizer } from '@ctxalloc/testing';
 import { describe, expect, it } from 'vitest';
 import {
+  ALLOCATION_SCORING_POLICY,
+  allocationPolicy,
+  budget,
   candidate,
+  contextBlock,
   fixedTokenizer,
   issueCodesOf,
   issuesOf,
@@ -10,7 +22,9 @@ import {
   orderCandidates,
   orderSpecs,
   orderedBlocks,
+  orderingPolicy,
   recordingTokenizer,
+  recordsOf,
   render,
   renderingPolicy,
   sourceDocument,
@@ -172,57 +186,141 @@ describe('context rendering: tokenizer failure', () => {
   });
 });
 
-describe('context rendering: signed rendered token delta', () => {
+describe('context rendering: no token delta is published', () => {
   const ordered = orderCandidates([candidate()]);
 
-  it('is positive when the rendered string costs more than the block content', () => {
-    const result = render(withAllocation(ordered, { selected: 10 }), fixedTokenizer(31));
-    expect(result.renderedTokenDelta).toBe(21);
-  });
-
-  it('is zero when they are equal, and never negative zero', () => {
-    const result = render(withAllocation(ordered, { selected: 12 }), fixedTokenizer(12));
-    expect(result.renderedTokenDelta).toBe(0);
-    expect(Object.is(result.renderedTokenDelta, -0)).toBe(false);
-    expect(Object.is(result.renderedTokenDelta, 0)).toBe(true);
-  });
-
-  it('is negative when the complete string counts fewer tokens than the block sum, and is not clamped', () => {
-    // Tokenization is not additive: embedding content in a larger string can
-    // merge boundaries, so the whole may count fewer tokens than the parts. The
-    // old non-negative "rendering overhead" definition is invalid (METRICS 8.6).
-    const result = render(withAllocation(ordered, { selected: 40 }), fixedTokenizer(9));
-
-    expect(result.renderedTokenDelta).toBe(-31);
-    expect(result.renderedTokens).toBe(9);
-    expect(result.ordered.allocation.selectedBlockContentTokens).toBe(40);
-  });
-
-  it('reports a negative delta as success, with no error and no repair', () => {
-    const tokenizer = new FakeTokenizer([{ text: '', tokens: 0 }]);
-    const empty = withAllocation(orderSpecs([{ id: 'block-1', tokens: 5 }], { available: 0 }), {
-      selected: 25,
-    });
-    const result = render(empty, tokenizer);
-
-    expect(result.renderedContext).toBe('');
-    expect(result.renderedTokens).toBe(0);
-    expect(result.renderedTokenDelta).toBe(-25);
-  });
-
-  it('exposes no final compiled metric under a provisional value', () => {
+  it('publishes the exact result fields and nothing more', () => {
     const result = render(ordered, fixedTokenizer(5));
+
+    expect(Object.keys(result).sort()).toEqual([
+      'fitsAvailableInputBudget',
+      'ordered',
+      'renderedContext',
+      'renderedTokens',
+      'rendererId',
+      'rendererVersion',
+      'renderingPolicyId',
+      'renderingPolicyVersion',
+      'tokenizerId',
+      'tokenizerVersion',
+    ]);
+  });
+
+  it('exposes no token delta and no final compiled metric', () => {
+    const result = render(ordered, fixedTokenizer(5));
+
     for (const forbidden of [
+      // A delta against `selectedBlockContentTokens` needs one tokenizer
+      // identity behind both operands, and this stage cannot prove that.
+      'renderedTokenDelta',
+      'renderingTokenDelta',
+      'renderingOverheadTokens',
+      // Final metrics of a settled selection.
       'compiledTokens',
       'unusedTokens',
       'tokenReduction',
       'budgetUtilization',
-      'renderingOverheadTokens',
-      'renderingTokenDelta',
       'includedContentTokens',
     ]) {
       expect(Object.keys(result), `exposes ${forbidden}`).not.toContain(forbidden);
     }
+  });
+
+  it('leaves selectedBlockContentTokens reachable through the nested allocation', () => {
+    // The value is not hidden: it is simply not subtracted here, because this
+    // stage cannot establish that the two counts share a tokenizer.
+    const result = render(ordered, fixedTokenizer(5));
+
+    expect(result.ordered.allocation.selectedBlockContentTokens).toBe(
+      ordered.allocation.selectedBlockContentTokens,
+    );
+  });
+});
+
+describe('context rendering: mismatched tokenizers cannot produce a bogus delta', () => {
+  // A deliberately miscomposed stage chain, and the reason the attempt publishes
+  // no delta (DEC-035).
+  //
+  //   CandidateValidator runs under tok-A, which counts the block content as 100.
+  //   ContextRenderer runs under tok-B, which counts the whole rendered string
+  //   as 10.
+  //
+  // `100 - 10` describes nothing: the operands come from two vocabularies. A
+  // published `renderedTokenDelta` of `-90` would read as "rendering saved 90
+  // tokens", which is false.
+  const CONTENT = 'mismatched tokenizer counterexample content';
+
+  const tokenizerA = new FakeTokenizer([{ text: CONTENT, tokens: 100 }], {
+    id: 'tok-A',
+    version: '1',
+  });
+
+  function compileWith(available: number): {
+    readonly ordered: ReturnType<typeof orderCandidates>;
+    readonly renderedContext: string;
+  } {
+    const validated = new CandidateValidator(tokenizerA).validate({
+      scope: { tenantId: 'local', workspaceId: 'default' },
+      sourceDocuments: [sourceDocument()],
+      candidates: [
+        { schemaVersion: 1, block: contextBlock({ content: CONTENT, tokenCount: 100 }) },
+      ],
+    });
+    const scored = new CandidateScorer({ ...ALLOCATION_SCORING_POLICY }).score(
+      new CandidateDeduplicator().deduplicate(validated),
+      '2026-06-01T12:00:00.000Z',
+    );
+    const allocated = new BudgetAllocator(allocationPolicy()).allocate(scored, budget(available));
+    const ordered = new ContextOrderer(orderingPolicy()).order(allocated);
+    // The exact string tok-B will be asked to count.
+    return { ordered, renderedContext: render(ordered, fixedTokenizer(0)).renderedContext };
+  }
+
+  it("reports tok-B's count and tok-B's identity, and no delta at all", () => {
+    const { ordered, renderedContext } = compileWith(1000);
+    const tokenizerB = new FakeTokenizer([{ text: renderedContext, tokens: 10 }], {
+      id: 'tok-B',
+      version: '1',
+    });
+
+    const result = render(ordered, tokenizerB);
+
+    // The block-content sum came from tok-A.
+    expect(result.ordered.allocation.selectedBlockContentTokens).toBe(100);
+    // The rendered count came from tok-B, on the exact complete string.
+    expect(result.renderedTokens).toBe(10);
+    expect(result.tokenizerId).toBe('tok-B');
+    expect(result.tokenizerVersion).toBe('1');
+    // And the misleading `100 - 10` is never published.
+    expect(Object.keys(result)).not.toContain('renderedTokenDelta');
+    expect(Object.values(result)).not.toContain(-90);
+  });
+
+  it('observes the budget against the rendered count, not the block-content sum', () => {
+    // tok-A's 100 would not fit a budget of 50; tok-B's 10 does. The observation
+    // follows the string that was actually measured.
+    const { ordered, renderedContext } = compileWith(50);
+    const tokenizerB = new FakeTokenizer([{ text: renderedContext, tokens: 10 }], {
+      id: 'tok-B',
+      version: '1',
+    });
+
+    const result = render(ordered, tokenizerB);
+
+    expect(result.ordered.allocation.availableInputTokens).toBe(50);
+    expect(result.renderedTokens).toBe(10);
+    expect(result.fitsAvailableInputBudget).toBe(true);
+  });
+
+  it('renders the content unchanged regardless of which tokenizer measures it', () => {
+    const { ordered, renderedContext } = compileWith(1000);
+    const tokenizerB = new FakeTokenizer([{ text: renderedContext, tokens: 10 }], {
+      id: 'tok-B',
+      version: '1',
+    });
+
+    expect(render(ordered, tokenizerB).renderedContext).toBe(renderedContext);
+    expect(recordsOf(render(ordered, tokenizerB))[0]?.['content']).toBe(CONTENT);
   });
 });
 

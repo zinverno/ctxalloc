@@ -463,8 +463,13 @@ Records follow `orderedIncluded` exactly; the renderer never sorts.
 once, and the result may exceed the budget: that is reported as
 `fitsAvailableInputBudget: false`, not as an error. The renderer evicts nothing,
 changes no allocation, and returns no `CompilationResult`, `compiledTokens`, or
-`unusedTokens`. `renderedTokenDelta` is a **signed** diagnostic, because
-tokenization is not additive.
+`unusedTokens`.
+
+It also publishes **no token delta**. Subtracting the allocated block-content sum
+from the rendered count needs one tokenizer identity behind both numbers, and no
+stage contract reaching the renderer carries one, so the stage declines a
+subtraction it cannot justify. The final signed `renderingTokenDelta` belongs to
+the future orchestration that owns same-tokenizer composition.
 
 See DEC-035.
 

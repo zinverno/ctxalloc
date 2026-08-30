@@ -100,12 +100,26 @@ export interface ContextRenderingPolicy {
  * never persisted, so it carries no schema version.
  *
  * It is deliberately **not** a `CompilationResult`, and its names say so.
- * `renderedTokens` is not `compiledTokens` (METRICS 8.4) and
- * `renderedTokenDelta` is not `renderingTokenDelta` (METRICS 8.6): those are
- * final metrics of a settled selection, and this selection may still change. For
- * the same reason no `unusedTokens`, `tokenReduction`, or `budgetUtilization`
+ * `renderedTokens` is not `compiledTokens` (METRICS 8.4): that is the final
+ * metric of a settled selection, and this selection may still change. For the
+ * same reason no `unusedTokens`, `tokenReduction`, or `budgetUtilization`
  * appears here — each is defined against `compiledTokens`, which does not exist
  * until the correction loop has finished.
+ *
+ * **It publishes no token delta.** `renderingTokenDelta` (METRICS 8.6) subtracts
+ * `includedContentTokens` from a rendered count, and that subtraction is only
+ * meaningful when both operands were produced by the same tokenizer identity.
+ * This stage cannot establish that: `renderedTokens` comes from the tokenizer
+ * injected here, while `allocation.selectedBlockContentTokens` sums
+ * `ContextBlock.tokenCount` values that `CandidateValidator` checked under some
+ * other tokenizer, and no stage contract from `ValidatedCandidateSet` through
+ * `OrderedCandidateSet` carries a tokenizer identity to compare against. A
+ * caller that miscomposes the stages with two tokenizers would get a difference
+ * between two vocabularies reported as if it described rendering. The delta
+ * therefore belongs to the future composition root, which owns the
+ * same-tokenizer guarantee (DEC-035). `selectedBlockContentTokens` remains
+ * reachable through the nested allocation for a caller that has established
+ * comparability by other means.
  *
  * The ordered set is nested rather than flattened, exactly as
  * `OrderedCandidateSet` nests the allocation: every earlier fact stays reachable,
@@ -143,17 +157,6 @@ export interface RenderedContextAttempt {
    * never an estimate from string length (INV-BUDGET-002, INV-BUDGET-005).
    */
   readonly renderedTokens: number;
-
-  /**
-   * `renderedTokens - allocation.selectedBlockContentTokens`: a **signed** delta.
-   *
-   * It may be negative, zero, or positive, and it is diagnostic only. It is not
-   * an additive attribution of wrapper, separator, or source-label tokens,
-   * because tokenization is not additive: `tokenizer(a + b)` need not equal
-   * `tokenizer(a) + tokenizer(b)`, so embedding content in a larger string can
-   * move token boundaries in either direction (DEC-035, METRICS 8.6).
-   */
-  readonly renderedTokenDelta: number;
 
   /**
    * `renderedTokens <= allocation.availableInputTokens`, observational only.
@@ -357,7 +360,6 @@ export class ContextRenderer {
       .join(RECORD_SEPARATOR);
 
     const renderedTokens = this.#count(renderedContext);
-    const delta = renderedTokens - input.allocation.selectedBlockContentTokens;
 
     return {
       ordered: input,
@@ -369,10 +371,6 @@ export class ContextRenderer {
       tokenizerVersion: this.#tokenizer.version,
       renderedContext,
       renderedTokens,
-      // `-0` is canonicalized to `0`: the two are distinguishable through
-      // `Object.is` and through a canonical serialization, so publishing either
-      // one would make an equality check depend on how the value was reached.
-      renderedTokenDelta: delta === 0 ? 0 : delta,
       fitsAvailableInputBudget: renderedTokens <= input.allocation.availableInputTokens,
     };
   }

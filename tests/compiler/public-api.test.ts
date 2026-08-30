@@ -431,15 +431,23 @@ describe('@ctxalloc/compiler public API', () => {
     expect(attempt.tokenizerVersion).toBe(wordTokenizer.version);
     expect(attempt.renderedContext.split('\n')).toHaveLength(1);
     expect(attempt.renderedTokens).toBe(countWords(attempt.renderedContext));
-    expect(attempt.renderedTokenDelta).toBe(
-      attempt.renderedTokens - allocated.selectedBlockContentTokens,
-    );
     expect(attempt.fitsAvailableInputBudget).toBe(
       attempt.renderedTokens <= allocated.availableInputTokens,
     );
-    // The attempt is not a CompilationResult: no final metric appears on it.
-    for (const final of ['compiledTokens', 'unusedTokens', 'renderingOverheadTokens']) {
-      expect(Object.keys(attempt)).not.toContain(final);
+    // The block-content sum stays reachable, but is never subtracted here: this
+    // stage cannot prove both counts came from one tokenizer identity.
+    expect(attempt.ordered.allocation.selectedBlockContentTokens).toBe(
+      allocated.selectedBlockContentTokens,
+    );
+    // The attempt is not a CompilationResult, and it publishes no token delta.
+    for (const final of [
+      'renderedTokenDelta',
+      'renderingTokenDelta',
+      'renderingOverheadTokens',
+      'compiledTokens',
+      'unusedTokens',
+    ]) {
+      expect(Object.keys(attempt), `exposes ${final}`).not.toContain(final);
     }
     expect(ContextRenderingError.prototype).toBeInstanceOf(Error);
   });

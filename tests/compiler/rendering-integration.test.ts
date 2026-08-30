@@ -31,6 +31,10 @@ import {
  * `@ctxalloc/compiler` itself, which depends on the `Tokenizer` port alone
  * (INV-ADAPTER-001, INV-DEP-002).
  *
+ * Even here the attempt publishes no token delta. The stage has no way to
+ * observe that this composition used one tokenizer, so it declines the
+ * subtraction in every composition rather than in only the ones it could catch.
+ *
  * The adapter runs fully offline: it bundles the `o200k_base` ranks and makes no
  * network request (DEC-027).
  */
@@ -96,11 +100,18 @@ describe('context rendering: real tokenizer integration', () => {
     expect(recordsOf(result).map((record) => record['content'])).toEqual([...CONTENTS]);
   });
 
-  it('reports a signed delta against the block-content sum', () => {
-    expect(result.renderedTokenDelta).toBe(
-      result.renderedTokens - result.ordered.allocation.selectedBlockContentTokens,
-    );
-    expect(Number.isSafeInteger(result.renderedTokenDelta)).toBe(true);
+  it('publishes no attempt delta even when one tokenizer measured both counts', () => {
+    // This composition *is* same-tokenizer, so a delta would in fact be
+    // meaningful here — and the renderer still does not publish one, because it
+    // cannot tell this composition apart from a miscomposed one. Establishing
+    // that guarantee is the future ContextCompiler's job, and it is the
+    // component that may then report the final signed `renderingTokenDelta`
+    // (METRICS 8.6).
+    expect(Object.keys(result)).not.toContain('renderedTokenDelta');
+    expect(Object.keys(result)).not.toContain('renderingTokenDelta');
+    // The operands stay reachable for that future component.
+    expect(Number.isSafeInteger(result.ordered.allocation.selectedBlockContentTokens)).toBe(true);
+    expect(Number.isSafeInteger(result.renderedTokens)).toBe(true);
   });
 
   it('observes the budget without correcting the selection', () => {

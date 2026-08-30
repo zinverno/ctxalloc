@@ -905,7 +905,6 @@ for (const member of [
   'readonly tokenizerVersion: string;',
   'readonly renderedContext: string;',
   'readonly renderedTokens: number;',
-  'readonly renderedTokenDelta: number;',
   'readonly fitsAvailableInputBudget: boolean;',
 ]) {
   requireContains('packages/compiler/dist/context-renderer.d.ts', member);
@@ -927,7 +926,14 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './context-renderer
     // A render attempt is not a compilation. Final metrics belong to the future
     // orchestration loop, and the invalid non-negative "overhead" metric is gone
     // for good (DEC-035, METRICS 8.6).
+    //
+    // `renderedTokenDelta` is forbidden for a different reason: subtracting
+    // `selectedBlockContentTokens` from a rendered count is only meaningful when
+    // one tokenizer identity produced both, and no stage contract reaching this
+    // stage carries a tokenizer identity to prove it. The field may return only
+    // once cross-stage identity is available (DEC-035).
     for (const forbidden of [
+      'renderedTokenDelta',
       'compiledTokens',
       'unusedTokens',
       'renderingOverheadTokens',

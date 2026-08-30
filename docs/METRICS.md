@@ -432,14 +432,12 @@ of the compiler orchestration that settles the final selection.
 ## 8.4.2 Render-Attempt Metrics
 
 `ContextRenderer` (ARCHITECTURE 6.6) renders and tokenizes **one** selection. The
-selection may still change, so its measurement is reported under attempt names:
+selection may still change, so its measurement is reported under attempt names.
+There are exactly two:
 
 ```text id="v4t7ns"
 renderedTokens
   = tokenizer(renderedContext)
-
-renderedTokenDelta
-  = renderedTokens - selectedBlockContentTokens
 
 fitsAvailableInputBudget
   = renderedTokens <= availableInputTokens
@@ -448,13 +446,26 @@ fitsAvailableInputBudget
 `renderedTokens` is the exact count of the one complete rendered string, never a
 sum of block counts, record counts, or separator counts (INV-BUDGET-002).
 
-`renderedTokenDelta` is signed, for the reason given in 8.6, and is diagnostic
-only.
-
 `fitsAvailableInputBudget` is observational. A `false` value is a valid
 measurement of an over-budget attempt, not a budget violation: 8.11 counts only
 *successful compilations* whose `compiledTokens` exceed the budget, and a render
 attempt is not a compilation.
+
+**No attempt-level token delta is reported.** `selectedBlockContentTokens`
+(8.4.1) stays reachable through the nested allocation, and the render stage
+deliberately does not subtract it from `renderedTokens`.
+
+The reason is the same-tokenizer precondition of 8.6. `renderedTokens` comes from
+the tokenizer injected into the renderer; `selectedBlockContentTokens` sums block
+`tokenCount` values validated under whichever tokenizer ran at candidate
+validation. No stage contract from `ValidatedCandidateSet` through
+`OrderedCandidateSet` carries a tokenizer identity, so the render stage cannot
+establish that its two operands share a unit. Subtracting them anyway would
+publish the difference between two vocabularies as though it described rendering.
+
+That is why `renderingTokenDelta` stays an orchestration metric: the component
+that guarantees one tokenizer across the stages is the component that may report
+it.
 
 These are **not** 8.4, 8.6, 8.7, 8.9, or 8.10. A render attempt becomes those
 final metrics only once the correction loop has settled the final selection, at
@@ -507,8 +518,25 @@ Read it as a diagnostic only:
 * the only source of truth for the budget is `tokenizer(finalRenderedContext)`
   (8.4, INV-BUDGET-002).
 
-`renderedTokenDelta` (8.4.2) is the same quantity for one render attempt, before
-the selection is final.
+### Validity precondition: one tokenizer identity
+
+`renderingTokenDelta` is **defined only when `compiledTokens` and
+`includedContentTokens` were measured under the same tokenizer identity and
+version.**
+
+Counts from different tokenizers are not comparable, so their difference is not a
+quantity at all — it is the gap between two vocabularies wearing the units of
+one. The final `ContextCompiler` must guarantee that precondition, by composing
+one configured tokenizer for candidate-block validation and for final rendered
+measurement alike, **before** reporting this metric.
+
+If the tokenizer identity behind either operand cannot be proven, the metric
+**must not be reported**. Omitting it is correct; reporting an unverified value
+is a reporting error.
+
+`ContextRenderer` (8.4.2) therefore publishes no attempt-level equivalent: it
+receives no tokenizer identity from the earlier stages and so cannot discharge
+the precondition.
 
 ## 8.7 Token Reduction
 

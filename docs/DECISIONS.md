@@ -2441,7 +2441,7 @@ That is not a renderer error. The result reports it as `fitsAvailableInputBudget
 
 Owning correction here was rejected. The loop that consumes safe optional eviction candidates, re-orders the revised selection, renders again, reconsiders protected category-minimum choices against actual rendered cost, proves final infeasibility, and returns a success or a structured failure is a different responsibility with a different failure model, and INV-DEP-003 forbids two components owning one responsibility. So the renderer never evicts an optional block, never drops a required block, never replaces a category-minimum choice, never calls `BudgetAllocator` or `ContextOrderer`, never raises `REQUIRED_CONTENT_EXCEEDS_BUDGET`, and never fails merely because this attempt is too large.
 
-For the same reason the result is not a `CompilationResult` and its names say so. `renderedTokens` is not `compiledTokens`, and `renderedTokenDelta` is not `renderingTokenDelta` (METRICS 8.4, 8.6). No `unusedTokens`, `tokenReduction`, or `budgetUtilization` appears, because each is defined against a `compiledTokens` that only a settled selection has.
+For the same reason the result is not a `CompilationResult` and its names say so. `renderedTokens` is not `compiledTokens` (METRICS 8.4). No `unusedTokens`, `tokenReduction`, or `budgetUtilization` appears, because each is defined against a `compiledTokens` that only a settled selection has, and no token delta appears, for the separate reason given below.
 
 ### The Non-Negative Rendering Overhead Metric Was Wrong
 
@@ -2466,16 +2466,49 @@ A subword vocabulary can merge or split differently once content is embedded in 
 
 Forcing the implementation to satisfy the old rule would have meant clamping a real measurement, reporting a value the tokenizer did not produce, or attributing token counts to labels and separators that cannot be attributed. All three break INV-BUDGET-002 in spirit: they publish arithmetic instead of measurement.
 
-The metric is therefore renamed and redefined as a signed `renderingTokenDelta`, and this stage publishes the same quantity for one attempt as `renderedTokenDelta`:
+The metric is therefore renamed and redefined as a signed `renderingTokenDelta`:
 
 ```text id="r4dlta"
-renderedTokenDelta
-  = renderedTokens - selectedBlockContentTokens
+renderingTokenDelta
+  = compiledTokens - includedContentTokens
 ```
 
-It may be negative, zero, or positive; `-0` is canonicalized to `0`; it is never clamped; and a negative value is a valid successful result, not an error. It is diagnostic only and must not be read as an additive attribution of wrapper, separator, source-label, or heading tokens. No exact token count is attributed separately to any part of the rendered string.
+It may be negative, zero, or positive; it is never clamped; and a negative value is valid, not an error. It is diagnostic only and must not be read as an additive attribution of wrapper, separator, source-label, or heading tokens. No exact token count is attributed separately to any part of the rendered string.
 
-All rendering text is nevertheless inside `renderedContext`, and `renderedContext` is what gets tokenized, which is exactly what INV-RENDER-004 requires. The only budget source of truth remains `tokenizer(finalRenderedContext)`.
+All rendering text is nevertheless inside the rendered string, and that string is what gets tokenized, which is exactly what INV-RENDER-004 requires. The only budget source of truth remains `tokenizer(finalRenderedContext)`.
+
+### Phase 12 Publishes No Attempt Delta
+
+An earlier draft of this decision had `ContextRenderer` publish the same quantity for one attempt, as `renderedTokens - selectedBlockContentTokens`. That is removed, because this stage cannot justify the subtraction from its own accepted inputs.
+
+The two operands need not share a unit:
+
+* `renderedTokens` is produced by the tokenizer injected into `ContextRenderer`;
+* `selectedBlockContentTokens` sums `ContextBlock.tokenCount` values that `CandidateValidator` checked under whichever tokenizer it was given.
+
+No stage contract from `ValidatedCandidateSet` through `DeduplicatedCandidateSet`, `ScoredCandidateSet`, and `AllocatedCandidateSet` to `OrderedCandidateSet` carries a tokenizer identity, so the renderer has nothing to compare against and cannot detect a mismatch, let alone label one.
+
+A manually miscomposed chain makes the failure concrete:
+
+```text id="r9mism"
+CandidateValidator with tokenizer  id "tok-A" version "1"
+  countTokens(block content) = 100
+BudgetAllocator publishes
+  selectedBlockContentTokens = 100
+
+ContextRenderer with tokenizer     id "tok-B" version "1"
+  countTokens(complete rendered string) = 10
+
+renderedTokenDelta would be -90
+```
+
+`-90` does not mean rendering saved 90 tokens. It is the difference between two vocabularies, reported in the units of neither. Publishing it would be worse than publishing nothing, because a consumer has no field with which to discover that the number is meaningless.
+
+The rule that a future composition root will use one tokenizer is correct, and it is recorded below — but it is a promise about a component that does not exist, and it does not license this stage to publish a number now that its own inputs do not support.
+
+Several repairs were considered and rejected. An optional number, `null`, or `NaN` moves the problem to every consumer and still offers no way to tell "not comparable" from "not measured". A boolean claiming the counts are probably comparable states a guess as a fact. A caller-supplied tokenizer identity is unverifiable: a miscomposing caller is exactly the one who would supply the wrong value. And propagating a tokenizer identity through five published stage contracts, in Phase 12, purely so this stage can expose an early diagnostic, is not a justified redesign when the composition root must own the invariant regardless.
+
+Phase 12 therefore publishes only what it can prove from its own inputs: `renderedContext`, `renderedTokens`, `fitsAvailableInputBudget`, the renderer identity, the tokenizer identity, and the ordered set and rendering-policy identity. Nothing is lost: `selectedBlockContentTokens` stays reachable through the nested allocation, and the delta is needed for none of exact rendering, INV-BUDGET-002 measurement, the budget observation, or any future correction decision. It is deferred, not discarded — the final `renderingTokenDelta` arrives once comparability is established, in the component that establishes it.
 
 ### A Narrow Versioned Rendering Policy
 
@@ -2581,6 +2614,8 @@ The requirement is recorded here instead. **The future `ContextCompiler` composi
 
 Phase 12 exposes `tokenizerId` and `tokenizerVersion` on every attempt so the future trace and orchestration can record and enforce that identity. It does not, and cannot, prove cross-stage identity on its own.
 
+That limitation is not merely documented, it is respected: because this stage cannot discharge the same-tokenizer precondition, it publishes no metric that depends on it. Establishing comparability and reporting the final `renderingTokenDelta` are the same component's work (METRICS 8.6).
+
 ### Renderer Identity
 
 The result always exposes `rendererId` (`ctxalloc-jsonl`) and `rendererVersion` (`1`). They are project-owned constants: never derived from package manager state, git, the clock, or an environment variable, all of which would make a recorded identity depend on where the code happened to run (INV-DET-003, INV-DET-004, INV-TRACE-005).
@@ -2601,7 +2636,7 @@ Phase 12 supplies the exact measurement primitive. The later orchestration phase
 
 Phases 7 through 11 are unchanged in behavior.
 
-METRICS changes: 8.6 is renamed and redefined as a signed `renderingTokenDelta`, 8.4.1 loses its stale cross-reference, and a new 8.4.2 defines the render-attempt metrics.
+METRICS changes: 8.6 is renamed and redefined as a signed `renderingTokenDelta` carrying an explicit same-tokenizer validity precondition, 8.4.1 loses its stale cross-reference, and a new 8.4.2 defines the two render-attempt metrics and states why no attempt-level delta joins them.
 
 `CandidateFilter`, the broad `CompilationPolicy`, `CompilationRequest`, render-aware correction and reallocation, `TraceBuilder`, `CompilationTrace`, `CompilationResult`, `ContextCompiler`, retrieval, persistence, the CLI, the HTTP API, and the evaluation harness remain later phases.
 

@@ -337,13 +337,18 @@ counts, record counts, or separator counts, and never a character estimate. A
 tokenizer that throws or returns an unusable value produces a structured
 `CONTEXT_RENDERING_FAILED`, never a partial result.
 
-**The token delta is signed.** `renderedTokenDelta` is
-`renderedTokens - selectedBlockContentTokens`, and it may be negative.
-Tokenization is not additive — `tokenizer(a + b)` need not equal
-`tokenizer(a) + tokenizer(b)` — so the difference is a diagnostic delta, not an
-additive attribution of separator or label tokens. The old non-negative
-`renderingOverheadTokens` definition was invalid and has been replaced (see
-[METRICS 8.6](./docs/METRICS.md)).
+**No token delta is published.** Subtracting the allocated block-content sum from
+the rendered count is only meaningful when one tokenizer identity produced both,
+and the renderer cannot establish that: its count comes from the tokenizer it was
+given, while `selectedBlockContentTokens` comes from whichever tokenizer
+validated the block counts, and no stage contract reaching the renderer carries a
+tokenizer identity to compare. Compose the stages with two tokenizers and the
+subtraction would report the gap between two vocabularies as if it described
+rendering. The sum stays reachable through the nested allocation, and the final
+signed `renderingTokenDelta` belongs to the future orchestration that guarantees
+one tokenizer throughout — where the old non-negative `renderingOverheadTokens`
+definition has been replaced by a signed value with an explicit same-tokenizer
+precondition (see [METRICS 8.6](./docs/METRICS.md)).
 
 **The renderer can report an over-budget attempt.** `fitsAvailableInputBudget` is
 `renderedTokens <= availableInputTokens` and is observational: `false` is a

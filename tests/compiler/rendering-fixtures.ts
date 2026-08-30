@@ -136,20 +136,14 @@ export function withOrder(
   return { ...ordered, orderedIncluded };
 }
 
-/** The same ordered set with overridden allocation metrics, for the budget tests. */
+/** The same ordered set with an overridden available budget, for the budget tests. */
 export function withAllocation(
   ordered: OrderedCandidateSet,
-  overrides: { readonly available?: number; readonly selected?: number },
+  overrides: { readonly available: number },
 ): OrderedCandidateSet {
   return {
     ...ordered,
-    allocation: {
-      ...ordered.allocation,
-      ...(overrides.available === undefined ? {} : { availableInputTokens: overrides.available }),
-      ...(overrides.selected === undefined
-        ? {}
-        : { selectedBlockContentTokens: overrides.selected }),
-    },
+    allocation: { ...ordered.allocation, availableInputTokens: overrides.available },
   };
 }
 
