@@ -12,6 +12,7 @@ import {
   type CompilationRequest,
   type RenderedContextAttempt,
 } from '@ctxalloc/compiler';
+import type { Tokenizer } from '@ctxalloc/ports';
 import { describe, expect, it } from 'vitest';
 import { compilationPolicy } from './compilation-fixtures.js';
 import { candidateOf } from './filtering-fixtures.js';
@@ -82,10 +83,13 @@ interface PipelineRun {
  *   -> CandidateFilter -> BudgetAllocator -> ContextOrderer -> ContextRenderer
  * ```
  */
-function run(input: Record<string, unknown> = requestInput()): PipelineRun {
+function run(
+  input: Record<string, unknown> = requestInput(),
+  tokenizer: Tokenizer = wordTokenizer,
+): PipelineRun {
   const request = new CompilationRequestValidator().validate(input);
 
-  const validated = new CandidateValidator(wordTokenizer).validate({
+  const validated = new CandidateValidator(tokenizer).validate({
     scope: request.scope,
     sourceDocuments: request.sourceDocuments,
     candidates: request.candidates,
@@ -101,7 +105,7 @@ function run(input: Record<string, unknown> = requestInput()): PipelineRun {
     request.budget,
   );
   const ordered = new ContextOrderer(request.policy.ordering).order(allocated);
-  const attempt = new ContextRenderer(request.policy.rendering, wordTokenizer).render(ordered);
+  const attempt = new ContextRenderer(request.policy.rendering, tokenizer).render(ordered);
 
   return { request, filtered, allocated, attempt };
 }
@@ -227,5 +231,97 @@ describe('named compiler pipeline', () => {
       expect(source).not.toContain('class ContextCompiler');
       expect(source).not.toContain('renderingTokenDelta');
     }
+  });
+});
+
+/**
+ * INV-DET-001 and DEC-036: the request is caller-supplied request data, not the
+ * whole deterministic input.
+ *
+ * The tokenizer is configured composition, external to the request. Composing
+ * one byte-identical request with two different tokenizers is a legitimate pair
+ * of runs whose measurements may differ — which is exactly why the request alone
+ * does not determine the result. Neither run is wrong, and the two are
+ * deliberately not asserted equal.
+ */
+describe('INV-DET-001: the deterministic input is the request plus its composition', () => {
+  /**
+   * Counts words plus double quotes.
+   *
+   * On quote-free block content it agrees with `wordTokenizer` exactly, so both
+   * tokenizers accept the same candidates at validation. The rendered JSONL is
+   * full of quotes, so the two disagree about the rendered string.
+   */
+  const quoteAwareTokenizer: Tokenizer = {
+    id: 'test:word-plus-quotes',
+    version: '1',
+    countTokens: (text: string): number => countWords(text) + (text.match(/"/g) ?? []).length,
+  };
+
+  it('the request value carries no tokenizer, compiler version, or component instance', () => {
+    const { request } = run();
+
+    for (const composition of [
+      'tokenizer',
+      'tokenizerId',
+      'tokenizerVersion',
+      'compilerVersion',
+      'rendererId',
+      'rendererVersion',
+      'renderer',
+      'validator',
+      'scorer',
+      'allocator',
+    ]) {
+      expect(Object.keys(request), `request carries ${composition}`).not.toContain(composition);
+    }
+    // Nothing reachable from the request is a component instance or a function.
+    expect(JSON.parse(JSON.stringify(request))).toEqual(request);
+  });
+
+  it('accepts the same request data under two different configured tokenizers', () => {
+    const input = requestInput();
+    expect(() => run(input, wordTokenizer)).not.toThrow();
+    expect(() => run(input, quoteAwareTokenizer)).not.toThrow();
+  });
+
+  it('renders the same string but measures it differently under each tokenizer', () => {
+    const input = requestInput();
+    const a = run(input, wordTokenizer);
+    const b = run(input, quoteAwareTokenizer);
+
+    // The request decides the content: same selection, same rendered bytes.
+    expect(b.attempt.renderedContext).toBe(a.attempt.renderedContext);
+    // The composition decides the measurement.
+    expect(a.attempt.tokenizerId).toBe('test:word');
+    expect(b.attempt.tokenizerId).toBe('test:word-plus-quotes');
+    expect(b.attempt.renderedTokens).not.toBe(a.attempt.renderedTokens);
+    expect(b.attempt.renderedTokens).toBeGreaterThan(a.attempt.renderedTokens);
+  });
+
+  it('can reach different budget feasibility from one identical request', () => {
+    const measured = run(requestInput(), wordTokenizer).attempt.renderedTokens;
+    const larger = run(requestInput(), quoteAwareTokenizer).attempt.renderedTokens;
+    // A budget one tokenizer's measurement fits and the other's does not.
+    const available = Math.floor((measured + larger) / 2);
+    expect(available).toBeGreaterThanOrEqual(measured);
+    expect(available).toBeLessThan(larger);
+
+    const input = requestInput({
+      budget: { totalTokens: available + 10, reservedOutputTokens: 10 },
+    });
+    const a = run(input, wordTokenizer);
+    const b = run(input, quoteAwareTokenizer);
+
+    expect(a.attempt.fitsAvailableInputBudget).toBe(true);
+    expect(b.attempt.fitsAvailableInputBudget).toBe(false);
+    // Neither run is wrong. Determinism holds only when the tokenizer input is
+    // identical too, which is why the request alone is not the whole input.
+    expect(run(input, wordTokenizer).attempt).toEqual(a.attempt);
+    expect(run(input, quoteAwareTokenizer).attempt).toEqual(b.attempt);
+  });
+
+  it('introduces no ContextCompiler to bind that composition', () => {
+    expect(Object.keys(compiler)).not.toContain('ContextCompiler');
   });
 });

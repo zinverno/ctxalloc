@@ -369,9 +369,18 @@ reject what a stage would not, and nothing generates an identifier, version,
 hash, or fingerprint. The policy is data: it holds no component instance and owns
 no tokenizer.
 
-**`CompilationRequest` carries an explicit required `referenceTime`.** The
-compiler never reads the clock, so the instant arrives with the request and flows
-to the scorer (INV-DET-004). `id` is caller-supplied and preserved exactly — the
+**`CompilationRequest` is the caller-supplied request data for one
+compilation**, and not by itself the whole deterministic input. INV-DET-001
+defines determinism over the request plus the configured tokenizer identity and
+version, the compiler version, and any other explicit compiler configuration, and
+DEC-035 keeps tokenizer identity out of every stage contract. The request
+therefore carries no tokenizer, compiler version, or component instance: those
+are configured composition a future `ContextCompiler` binds and a future trace
+records, and nothing hidden fills the gap.
+
+**It carries an explicit required `referenceTime`,** because that *is*
+per-compilation data. The compiler never reads the clock, so the instant arrives
+with the request and flows to the scorer (INV-DET-004). `id` is caller-supplied and preserved exactly — the
 kernel generates none — and `query` is preserved verbatim, with an empty or
 whitespace-only query valid and untrimmed. `budget` is the existing `TokenBudget`
 with no guessed context window and no defaulted reserve.

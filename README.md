@@ -360,10 +360,22 @@ and never raises `REQUIRED_CONTENT_EXCEEDS_BUDGET`.
 
 ### Compilation contracts and policy filtering
 
-`CompilationRequest` is the complete input of one compilation (see
-[DEC-036](./docs/DECISIONS.md)): scope, query, reference time, candidates, source
-registry, budget, and policy. `CompilationRequestValidator` accepts `unknown` and
-returns a validated record.
+`CompilationRequest` is the complete **caller-supplied request data** for one
+compilation (see [DEC-036](./docs/DECISIONS.md)): scope, query, reference time,
+candidates, source registry, budget, and policy. `CompilationRequestValidator`
+accepts `unknown` and returns a validated record.
+
+**The request is not, by itself, the whole deterministic input.** INV-DET-001
+defines determinism over the request _plus_ the configured tokenizer identity and
+version, the compiler version, and any other explicit compiler configuration —
+and DEC-035 records that no stage contract carries a tokenizer identity. One
+byte-identical request compiled under two different tokenizers can legitimately
+produce different `renderedTokens` and different allocation feasibility; that is
+not a determinism violation, it is why the request alone is not sufficient. So
+the request carries no tokenizer, no compiler version, and no component instance:
+those are configured composition that a future `ContextCompiler` binds and a
+future trace records. Nothing hidden fills the gap — no clock, no random value,
+no environment lookup.
 
 **`referenceTime` is required.** The compiler never reads the clock, so the
 instant arrives with the request and flows to the scorer. **`id` is

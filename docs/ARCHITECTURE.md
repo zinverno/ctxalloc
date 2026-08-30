@@ -517,7 +517,32 @@ interface CompilationRequest {
 }
 ```
 
-The request must contain all information required for deterministic compilation.
+The request must contain all **caller-supplied, per-compilation** data the kernel
+needs. It is not, by itself, the complete deterministic input.
+
+INV-DET-001 defines determinism over more than the request: the tokenizer
+implementation and version, the compiler version, and any other explicit compiler
+configuration are inputs too, and DEC-035 records that no stage contract carries a
+tokenizer identity. So the deterministic input of one compilation is:
+
+```text
+CompilationRequest
+  + configured tokenizer identity and version
+  + compiler implementation and version
+  + any other explicit compiler configuration the invariants allow
+```
+
+The counterexample is concrete. One byte-identical request compiled under a
+tokenizer `tok-A/1` and again under `tok-B/1` can produce different block-count
+feasibility and a different `renderedTokens`. Neither run violates INV-DET-001,
+because the tokenizer input differed — which is exactly why the request alone is
+not sufficient. No hidden clock, random value, or environment lookup may fill
+those gaps; the missing inputs are explicit configuration a future
+`ContextCompiler` binds and a future trace records (DEC-035, DEC-036).
+
+The request therefore carries **no** tokenizer instance, tokenizer identity or
+version, compiler implementation or version, renderer instance, or any other
+component instance. Those are configured composition, not request data.
 
 `referenceTime` is **required**. Recency scoring measures against an instant, and
 the compiler must not read the clock, so the instant arrives with the request and
@@ -573,7 +598,10 @@ The policy defines:
 
 Policies must be versioned.
 
-The same policy version and request must produce the same result.
+Given the same validated request, policy composition, tokenizer implementation and
+version, compiler implementation and version, and other explicit compiler
+configuration, the compiler must produce the same result (INV-DET-001). Policy and
+request are not the only determinism inputs; see section 5.5.
 
 `CompilationPolicy` composes the five narrow versioned slices the stages already
 own:

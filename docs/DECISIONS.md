@@ -2658,7 +2658,7 @@ Three contracts are added to `@ctxalloc/compiler`.
 
 `CompilationPolicy` is the broad versioned policy of ARCHITECTURE 5.6, composing the five narrow slices the components already own.
 
-`CompilationRequest` is the complete input of one compilation, carrying a **required** `referenceTime`.
+`CompilationRequest` is the complete caller-supplied request data for one compilation, carrying a **required** `referenceTime`.
 
 None of the three retrieves, reads a file, opens a socket, queries a database, calls a model, reads a clock, or generates a random value (INV-DET-001, INV-DET-003, INV-DET-004, INV-DEP-002). No new dependency is added.
 
@@ -2852,6 +2852,49 @@ ARCHITECTURE 5.5 previously described a request with no `referenceTime`, which c
 `query` is preserved verbatim and read by nothing. **An empty query is valid**, and so is a whitespace-only or multi-line one; none of them is trimmed, collapsed, normalized, lowercased, or truncated. A caller may compile standing context with no question at all, and deciding that a blank query is meaningless is the caller's judgement. Only malformed UTF-16 is rejected. No kernel component consults the query: retrieval already answered it, and the compiler must not become a second retrieval system.
 
 `budget` is the existing `TokenBudgetSchema`, with no guessed context window, no defaulted reserve, and no hidden rendering reserve.
+
+### CompilationRequest Is Request Data, Not the Composition Root
+
+An earlier draft of this decision called the request "the complete, self-contained input of one compilation" and said everything a deterministic compilation needs is in the record. That is too strong, and it contradicts two accepted contracts.
+
+INV-DET-001 already defines determinism over more than the request. It lists the compilation request, the candidates, the policy version, **the tokenizer implementation and version**, **the compiler version**, and the supplied reference time. DEC-035 goes further and records deliberately that no stage contract from `ValidatedCandidateSet` through `OrderedCandidateSet` carries a tokenizer identity, and that using one tokenizer consistently is a requirement on the future composition root rather than a property any current component can verify.
+
+The counterexample is concrete:
+
+```text id="m6tokz"
+CompilationRequest R, byte-identical in both runs
+
+Run A   configured tokenizer  tok-A / 1
+        block counts validated and rendered string measured with tok-A
+
+Run B   configured tokenizer  tok-B / 1
+        block counts validated and rendered string measured with tok-B
+
+R is identical; allocation feasibility, renderedTokens, and the selected
+result may still differ.
+```
+
+Neither run violates INV-DET-001, because the tokenizer input differed. What the example proves is narrower and exact: **the request alone is not the complete deterministic input.** The same holds for the compiler implementation — a new compiler version may change behavior without changing a byte of the request.
+
+The contract is therefore stated as:
+
+```text id="m7dinp"
+deterministic input
+  = CompilationRequest
+  + configured tokenizer identity and version
+  + compiler implementation and version
+  + any other explicit compiler configuration the invariants allow
+```
+
+`CompilationRequest` owns the first line and only the first line: every **caller-supplied, per-compilation** datum — request id, scope, query, reference time, candidates, source registry, budget, and policy.
+
+It owns none of the rest. No tokenizer instance, tokenizer identity or version, compiler implementation or version, renderer instance, or component instance appears on the request, and none is added in this phase.
+
+The division follows from what the value *is*, not from convenience. `referenceTime` belongs in the request because it is per-compilation data: two compilations of the same content legitimately measure recency against two different instants, and only the caller knows which. The tokenizer does not belong in the request because it is configured compiler composition: it is the same for every compilation a given deployment runs, a caller has no way to honestly supply it, and a caller-supplied identity would be unverifiable — the miscomposing caller is precisely the one who would state the wrong value (DEC-035).
+
+What is not permitted either way is a hidden dependency. The gap between the request and the full deterministic input is filled by **explicit** configuration, never by a clock, a random value, an environment variable, or an ambient default (INV-DET-003, INV-DET-004).
+
+The future `ContextCompiler` binds those composition inputs — including the same-tokenizer requirement DEC-035 records — and the future `CompilationTrace` records them alongside the request, so a recorded compilation states every input it actually depended on (INV-TRACE-005). Neither exists yet, and neither is implemented here.
 
 ### Request Validation Is Structural; CandidateValidator Stays the Trust Boundary
 

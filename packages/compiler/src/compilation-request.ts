@@ -24,12 +24,27 @@ import { pointerFor, type IssuePath } from './validation-issues.js';
 /**
  * The compilation request (DEC-036, ARCHITECTURE 5.5).
  *
- * `CompilationRequest` is the complete, self-contained input of one compilation:
- * who is asking (`scope`), what they asked (`query`), when the request is
- * measured against (`referenceTime`), what may be selected (`candidates`,
- * `sourceDocuments`), how much may be spent (`budget`), and under which rules
- * (`policy`). Everything a deterministic compilation needs is in the record, so
- * the same request compiled twice cannot differ (INV-DET-001).
+ * `CompilationRequest` is the complete **caller-supplied request data** for one
+ * compilation: who is asking (`scope`), what they asked (`query`), when the
+ * request is measured against (`referenceTime`), what may be selected
+ * (`candidates`, `sourceDocuments`), how much may be spent (`budget`), and under
+ * which rules (`policy`).
+ *
+ * Every request-specific datum deterministic compilation needs is explicit in
+ * the record — nothing is filled in from a clock, a random value, or the
+ * environment. The record is deliberately **not** the whole deterministic input,
+ * though. INV-DET-001 defines that over more than the request: the tokenizer
+ * implementation and version, the compiler version, and any other explicit
+ * compiler configuration count too, and DEC-035 records that no stage contract
+ * carries a tokenizer identity. Those are composition inputs a future
+ * `ContextCompiler` binds and a future trace records, not request fields
+ * (DEC-036).
+ *
+ * The consequence is concrete: one byte-identical request compiled twice under
+ * two different configured tokenizers can produce different block-count
+ * feasibility and different `renderedTokens`. That is not a determinism
+ * violation, because the tokenizer input differed — it is why the request alone
+ * is not the complete deterministic input.
  *
  * Validation here is **structural**. It proves the request is a well-formed
  * record of well-formed domain values; it does not prove the batch is
@@ -65,6 +80,12 @@ export const COMPILATION_REQUEST_SCHEMA_VERSION = 1;
  * or any other random or time-derived identifier: a kernel that invented request
  * identities would produce a different record for the same input on every run
  * (INV-DET-003).
+ *
+ * The record carries no tokenizer instance, tokenizer identity or version,
+ * compiler implementation or version, renderer instance, or any other component
+ * instance. Those are configured composition, not per-compilation request data,
+ * and adding one here would make a caller responsible for a value only the
+ * composition root can honestly supply (DEC-035, DEC-036).
  */
 export interface CompilationRequest {
   readonly id: string;
