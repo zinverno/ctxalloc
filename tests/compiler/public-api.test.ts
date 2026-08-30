@@ -1,20 +1,29 @@
 import { readFileSync } from 'node:fs';
 import * as compiler from '@ctxalloc/compiler';
 import {
+  BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION,
+  BudgetAllocationError,
+  BudgetAllocator,
   CANDIDATE_SCORING_POLICY_SCHEMA_VERSION,
   CandidateDeduplicator,
   CandidateScorer,
   CandidateScoringError,
   CandidateValidationError,
   CandidateValidator,
+  type AllocatedCandidateSet,
+  type AllocationDecisionReason,
+  type BudgetAllocationPolicy,
   type CandidateScore,
   type CandidateScoringPolicy,
   type CandidateValidationInput,
   type CanonicalSelectionReason,
+  type CategoryAllocationConstraint,
   type DeduplicatedCandidate,
   type DeduplicatedCandidateMember,
   type DeduplicatedCandidateSet,
   type DuplicateMatchReason,
+  type ExcludedCandidateDecision,
+  type IncludedCandidateDecision,
   type RetrievalNormalizationRule,
   type ScoredCandidate,
   type ScoredCandidateSet,
@@ -25,9 +34,11 @@ import { describe, expect, it } from 'vitest';
 import type {
   CandidateBlock,
   ContextBlock,
+  ContextBlockId,
   Scope,
   SourceDocument,
   Timestamp,
+  TokenBudget,
 } from '../../packages/domain/src/index.js';
 import { candidate, countWords, input, sourceDocument, wordTokenizer } from './fixtures.js';
 
@@ -47,6 +58,7 @@ const manifest = JSON.parse(
 
 const SOURCE_FILES = [
   'packages/compiler/src/index.ts',
+  'packages/compiler/src/budget-allocator.ts',
   'packages/compiler/src/candidate-validator.ts',
   'packages/compiler/src/candidate-deduplicator.ts',
   'packages/compiler/src/candidate-scorer.ts',
@@ -65,8 +77,11 @@ function importSpecifiers(relativePath: string): string[] {
 }
 
 describe('@ctxalloc/compiler public API', () => {
-  it('exports the three implemented compiler stages and their errors only', () => {
+  it('exports the four implemented compiler stages and their errors only', () => {
     expect(Object.keys(compiler).sort()).toEqual([
+      'BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION',
+      'BudgetAllocationError',
+      'BudgetAllocator',
       'CANDIDATE_SCORING_POLICY_SCHEMA_VERSION',
       'CandidateDeduplicator',
       'CandidateScorer',
@@ -81,15 +96,20 @@ describe('@ctxalloc/compiler public API', () => {
       .map((match) => match[1])
       .sort();
     expect(exported).toEqual([
+      'AllocatedCandidateSet',
+      'AllocationDecisionReason',
       'AuthoredPriorityScoreComponent',
       'AuthoredPriorityScoreEvidence',
       'AuthoredPriorityScoringPolicy',
+      'BudgetAllocationIssueCode',
+      'BudgetAllocationPolicy',
       'CandidateScore',
       'CandidateScoringIssueCode',
       'CandidateScoringPolicy',
       'CandidateValidationInput',
       'CandidateValidationIssueCode',
       'CanonicalSelectionReason',
+      'CategoryAllocationConstraint',
       'CategoryPriorityRule',
       'CategoryPriorityScoreComponent',
       'CategoryPriorityScoreEvidence',
@@ -98,6 +118,8 @@ describe('@ctxalloc/compiler public API', () => {
       'DeduplicatedCandidateMember',
       'DeduplicatedCandidateSet',
       'DuplicateMatchReason',
+      'ExcludedCandidateDecision',
+      'IncludedCandidateDecision',
       'PolicyValueSource',
       'RecencyScoreComponent',
       'RecencyScoreEvidence',
@@ -215,6 +237,77 @@ describe('@ctxalloc/compiler public API', () => {
     expect(CandidateScoringError.prototype).toBeInstanceOf(Error);
   });
 
+  it('accepts a ScoredCandidateSet with an unknown budget and returns the documented allocation', () => {
+    const scored = new CandidateScorer({
+      schemaVersion: CANDIDATE_SCORING_POLICY_SCHEMA_VERSION,
+      policyId: 'baseline',
+      policyVersion: '1.0.0',
+    }).score(
+      new CandidateDeduplicator().deduplicate(
+        new CandidateValidator(wordTokenizer).validate(input()),
+      ),
+      '2026-06-01T12:00:00.000Z',
+    );
+
+    const constraint: CategoryAllocationConstraint = { category: 'facts', maxBlocks: 3 };
+    const allocationPolicy: BudgetAllocationPolicy = {
+      schemaVersion: BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION,
+      policyId: 'allocation',
+      policyVersion: '1.0.0',
+      optionalSelection: 'score-desc-greedy',
+      categoryConstraints: [constraint],
+    };
+    // The budget crosses a runtime boundary, so the parameter is `unknown`.
+    const untypedBudget: unknown = { totalTokens: 100, reservedOutputTokens: 10 };
+
+    const allocated: AllocatedCandidateSet = new BudgetAllocator(allocationPolicy).allocate(
+      scored,
+      untypedBudget,
+    );
+
+    const scope: Scope = allocated.scope;
+    const documents: readonly SourceDocument[] = allocated.sourceDocuments;
+    const referenceTime: Timestamp = allocated.referenceTime;
+    const tokenBudget: TokenBudget = allocated.tokenBudget;
+    const included: readonly IncludedCandidateDecision[] = allocated.included;
+    const excluded: readonly ExcludedCandidateDecision[] = allocated.excluded;
+    const evictionOrder: readonly ContextBlockId[] = allocated.optionalEvictionOrder;
+    const decision = included[0];
+    if (decision === undefined) throw new Error('expected one included decision');
+    const entry: ScoredCandidate = decision.candidate;
+    const reason: AllocationDecisionReason = decision.reason;
+
+    expect(scope).toEqual(scored.scope);
+    expect(documents).toHaveLength(1);
+    expect(referenceTime).toBe('2026-06-01T12:00:00.000Z');
+    expect(tokenBudget.totalTokens).toBe(100);
+    expect(allocated.availableInputTokens).toBe(90);
+    expect(allocated.scoringPolicyId).toBe('baseline');
+    expect(allocated.allocationPolicyId).toBe('allocation');
+    expect(allocated.allocationPolicyVersion).toBe('1.0.0');
+    expect(reason).toBe('INCLUDED_SCORE_ORDER');
+    expect(entry.candidate.canonicalBlock.id).toBe('block-1');
+    expect(allocated.selectedBlockContentTokens).toBe(
+      countWords(entry.candidate.canonicalBlock.content),
+    );
+    expect(allocated.unallocatedBlockContentTokens).toBe(
+      allocated.availableInputTokens - allocated.selectedBlockContentTokens,
+    );
+    expect(excluded).toEqual([]);
+    expect(evictionOrder).toEqual([entry.candidate.canonicalBlock.id]);
+    expect(BudgetAllocationError.prototype).toBeInstanceOf(Error);
+  });
+
+  it('publishes a stable top-level allocation error code', () => {
+    try {
+      new BudgetAllocator({});
+    } catch (error) {
+      expect((error as BudgetAllocationError).code).toBe('BUDGET_ALLOCATION_FAILED');
+      return;
+    }
+    throw new Error('expected the empty policy to be rejected');
+  });
+
   it('accepts unknown policy and reference time at the runtime boundary', () => {
     const untypedPolicy: unknown = { schemaVersion: 1, policyId: 'p', policyVersion: '1' };
     const scorer = new CandidateScorer(untypedPolicy);
@@ -246,7 +339,6 @@ describe('@ctxalloc/compiler public API', () => {
   it('exports no later compiler stage and no retrieval port', () => {
     for (const name of [
       'CandidateFilter',
-      'BudgetAllocator',
       'ContextOrderer',
       'ContextRenderer',
       'TraceBuilder',
@@ -335,6 +427,7 @@ describe('@ctxalloc/compiler public API', () => {
       'packages/compiler/src/candidate-validator.ts',
       'packages/compiler/src/candidate-deduplicator.ts',
       'packages/compiler/src/candidate-scorer.ts',
+      'packages/compiler/src/budget-allocator.ts',
     ]) {
       const declaredExports = readSource(file)
         .split('\n')

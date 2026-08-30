@@ -9,7 +9,7 @@ or agent framework.
 
 ## Status
 
-Phase 9 — deterministic candidate scoring. The repository contains
+Phase 10 — deterministic budget allocation. The repository contains
 the TypeScript monorepo scaffolding from Phase 1 (workspace structure, strict
 compiler and linting configuration, test infrastructure, package boundaries,
 boundary checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
@@ -19,7 +19,7 @@ validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
 deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
 tokenizer contract test suite, a real offline tokenizer adapter in
 `@ctxalloc/tokenization`, the first two application use cases in
-`@ctxalloc/application`, and the first three compiler-kernel stages in
+`@ctxalloc/application`, and the first four compiler-kernel stages in
 `@ctxalloc/compiler`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
@@ -209,12 +209,69 @@ threshold, no token budget is read, and no inclusion, exclusion, or eviction
 decision is made. No lexical, BM25, embedding, or LLM relevance scorer runs
 inside the compiler, and no redundancy or near-duplicate score exists.
 
-**No allocator exists yet.** Nothing decides which blocks fit a budget, and
-whether required content fits is the allocator's decision. There is no policy
-filtering, `CandidateFilter`, allocation, ordering, rendering, trace generation,
-compiler orchestration, retrieval provider, persistence, HTTP, or CLI behavior
-yet. CtxAlloc does not yet compile or optimize context, and it supports no
-Obsidian integration.
+`BudgetAllocator` is the fourth stage of the kernel (see
+[DEC-033](./docs/DECISIONS.md)). It takes a `ScoredCandidateSet`, an explicit
+`TokenBudget`, and one narrow versioned `BudgetAllocationPolicy`, and returns an
+`AllocatedCandidateSet` in which every candidate carries exactly one
+machine-readable decision. It needs no tokenizer, renderer, provider, clock, or
+storage.
+
+**Required blocks are resolved first.** They are included before every optional
+block, in stable block-identifier order, and are never boosted by a score, never
+silently removed, and never evictable. Required block content that alone exceeds
+the available budget fails with a structured error, and required content over a
+category maximum fails rather than relaxing the maximum.
+
+**Reserves are exact.** The budget is validated with the existing `TokenBudget`
+contract and the ceiling comes from `availableInputTokens()`. The model context
+window is never guessed, no reserve is defaulted or injected, and no hidden
+rendering reserve is added.
+
+**Category minimums and maximums are block counts,** spelled `minBlocks` and
+`maxBlocks`: at least or at most that many independently selectable canonical
+blocks of one exact category. They are not token quotas or percentage shares.
+Categories match by exact string equality, an absent category is unconstrained,
+and duplicate wrappers never count as extra blocks.
+
+**Hard minimums use the minimum-content-cost selection.** Required blocks count
+toward a minimum, and the shortfall is filled with the cheapest candidates of that
+category — token count ascending, then score, then block identifier — so a
+minimum is reported as infeasible only when no selection satisfying it would have
+fit.
+
+**Optional selection is score-desc greedy.** Candidates are considered by score
+descending, then block identifier. A category maximum is checked before the
+budget, so a blocked candidate spends nothing, and a candidate that does not fit
+is skipped while smaller lower-scoring ones are still considered. There is no
+score-per-token ratio, no knapsack, and no total-utility optimization.
+
+**Failures are structured and all-or-nothing:** an invalid policy, a duplicate
+category constraint, an invalid budget, required content over the budget, required
+content over a category maximum, an unreachable category minimum, and category
+minimums that exceed the content budget each produce a machine-readable issue, and
+no partial result is ever returned.
+
+**A deterministic eviction order is precomputed** for the future
+render-correction loop. Required blocks never appear in it, and a block enters it
+only when removing it would keep its category at or above its minimum, so every
+prefix is safe to remove from the current selection. It is a **safe removal order,
+not a feasibility proof**: exhausting it shows only that no more currently
+selected optional surplus can be given back, never that no other allocation fits
+the rendered budget, because hard minimums were satisfied at minimum
+block-content cost and rendering overhead may vary per block.
+
+**Selected block-content tokens are not final rendered tokens.** The allocator
+proves `sum(included canonicalBlock.tokenCount) <= availableInputTokens` exactly
+and publishes `selectedBlockContentTokens` and `unallocatedBlockContentTokens`.
+It deliberately publishes no `compiledTokens` and no final `unusedTokens`: source
+labels, separators, wrappers, and other rendering overhead are not measured,
+because the renderer does not exist yet. **There is no final hard budget guarantee
+until the renderer and its orchestration loop exist.**
+
+**No later stage exists yet.** There is no `ContextOrderer`, renderer, trace
+builder, `CandidateFilter`, policy filtering, compiler orchestration, retrieval
+provider, persistence, HTTP, or CLI behavior. CtxAlloc does not yet compile or
+render context, and it supports no Obsidian integration.
 
 ## Prerequisites
 

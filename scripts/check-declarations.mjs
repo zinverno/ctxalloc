@@ -34,6 +34,7 @@ const DECLARATIONS = [
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/budget-allocator.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -577,6 +578,191 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './candidate-scorer
   }
 }
 
+// The budget allocator keeps its documented stage signature: it takes one
+// versioned policy at construction, consumes a ScoredCandidateSet with an
+// unknown budget, and returns readonly project-owned data (DEC-033).
+requireContains('packages/compiler/dist/budget-allocator.d.ts', 'declare class BudgetAllocator');
+requireContains('packages/compiler/dist/budget-allocator.d.ts', 'constructor(policy: unknown);');
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'allocate(input: ScoredCandidateSet, budget: unknown): AllocatedCandidateSet;',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'declare class BudgetAllocationError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly code = "BUDGET_ALLOCATION_FAILED"',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION = 1',
+);
+requireContains('packages/compiler/dist/budget-allocator.d.ts', 'interface BudgetAllocationPolicy');
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  "readonly optionalSelection: 'score-desc-greedy';",
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'interface CategoryAllocationConstraint',
+);
+// Category constraints are block counts in schema version 1, never token quotas.
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly minBlocks?: number | undefined;',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly maxBlocks?: number | undefined;',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly categoryConstraints?: readonly CategoryAllocationConstraint[] | undefined;',
+);
+requireContains('packages/compiler/dist/budget-allocator.d.ts', 'interface AllocatedCandidateSet');
+// The budget is project-owned, and so is every published metric.
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly tokenBudget: TokenBudget;',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly availableInputTokens: number;',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly selectedBlockContentTokens: number;',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly unallocatedBlockContentTokens: number;',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly included: readonly IncludedCandidateDecision[];',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly excluded: readonly ExcludedCandidateDecision[];',
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'readonly optionalEvictionOrder: readonly ContextBlockId[];',
+);
+// The decision reason union stays visible: a machine-readable reason is the
+// primary contract, not a free-text message (INV-TRACE-002).
+requireContains('packages/compiler/dist/budget-allocator.d.ts', 'type AllocationDecisionReason = ');
+requireContains('packages/compiler/dist/budget-allocator.d.ts', "'INCLUDED_REQUIRED'");
+requireContains('packages/compiler/dist/budget-allocator.d.ts', "'INCLUDED_CATEGORY_MINIMUM'");
+requireContains('packages/compiler/dist/budget-allocator.d.ts', "'INCLUDED_SCORE_ORDER'");
+requireContains('packages/compiler/dist/budget-allocator.d.ts', "'EXCLUDED_CATEGORY_MAXIMUM'");
+requireContains('packages/compiler/dist/budget-allocator.d.ts', "'EXCLUDED_BUDGET_EXHAUSTED'");
+// Each decision record is discriminated: an inclusion accepts only INCLUDED_*
+// reasons and an exclusion only EXCLUDED_* ones, so the published contract
+// cannot express a state the runtime never produces (DEC-033, INV-TRACE-002).
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  "readonly reason: 'INCLUDED_REQUIRED' | 'INCLUDED_CATEGORY_MINIMUM' | 'INCLUDED_SCORE_ORDER';",
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  "readonly reason: 'EXCLUDED_CATEGORY_MAXIMUM' | 'EXCLUDED_BUDGET_EXHAUSTED';",
+);
+
+{
+  const content = contents.get('packages/compiler/dist/budget-allocator.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // Catches a regression that widens either record back to the full union.
+    if (declarations.includes('readonly reason: AllocationDecisionReason;')) {
+      fail(
+        'packages/compiler/dist/budget-allocator.d.ts widens a decision reason back to AllocationDecisionReason',
+      );
+    }
+    for (const [record, forbidden] of [
+      ['IncludedCandidateDecision', /'EXCLUDED_/],
+      ['ExcludedCandidateDecision', /'INCLUDED_/],
+    ]) {
+      const start = declarations.indexOf(`interface ${record} `);
+      if (start === -1) {
+        fail(`packages/compiler/dist/budget-allocator.d.ts does not declare interface ${record}`);
+        continue;
+      }
+      const body = declarations.slice(start, declarations.indexOf('}', start));
+      if (forbidden.test(body)) {
+        fail(
+          `packages/compiler/dist/budget-allocator.d.ts lets ${record} carry a ${forbidden.source} reason`,
+        );
+      }
+    }
+  }
+}
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'type BudgetAllocationIssueCode = ',
+);
+requireContains('packages/compiler/dist/index.d.ts', "} from './budget-allocator.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/budget-allocator.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // The allocated set is an ephemeral compiler-stage result, not a persisted
+    // record, so only the policy carries a schema version (INV-STORE-004).
+    if (/interface AllocatedCandidateSet\s*\{[^}]*schemaVersion/.test(declarations)) {
+      fail('packages/compiler/dist/budget-allocator.d.ts declares a persisted schemaVersion');
+    }
+    // Time is carried through, never read. No Date instance may reach the
+    // surface (INV-DET-004).
+    if (/\bDate\b/.test(declarations)) {
+      fail('packages/compiler/dist/budget-allocator.d.ts exposes a Date');
+    }
+    // Phase 10 allocates block content. It must not publish a final rendered
+    // token count, a final unused budget, a fabricated rendering overhead, or
+    // any renderer vocabulary: INV-BUDGET-002 belongs to the future renderer and
+    // its orchestration loop (DEC-033).
+    for (const forbidden of [
+      'compiledTokens',
+      'unusedTokens',
+      'renderingOverheadTokens',
+      'renderedTokens',
+      'includedContentTokens',
+      'compiledContext',
+      'renderedContext',
+      'sourceLabel',
+      'separator',
+      'renderingPolicy',
+      // Category constraints are counts in schema version 1: no token,
+      // percentage, byte, or character quota exists.
+      'minTokens',
+      'maxTokens',
+      'tokenQuota',
+      'tokenShare',
+      'percentage',
+      // Scoring and allocation stay separate responsibilities.
+      'scorePerToken',
+      'utilityPerToken',
+      'knapsack',
+      'requiredBoost',
+      'requiredScore',
+      // No tokenizer, renderer, or trace reaches this stage.
+      'Tokenizer',
+      'countTokens',
+      'CompilationPolicy',
+      'CompilationTrace',
+      'CompilationResult',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/budget-allocator.d.ts exposes the future or forbidden concept "${forbidden}"`,
+        );
+      }
+    }
+  }
+}
+
 // The validation library, the Node standard library, a provider SDK, an
 // application type, and an internal helper all stay implementation details of
 // the compiler kernel (INV-ADAPTER-001, INV-DEP-002).
@@ -610,6 +796,16 @@ const COMPILER_LEAKED_TYPES = [
   'canonicalNumber',
   'maxNormalized',
   'candidatePath',
+  'categoryPath',
+  'AllocationCandidate',
+  'AllocationState',
+  'compareNumbers',
+  'compareRequired',
+  'compareMinimumCost',
+  'compareScoreOrder',
+  'compareEviction',
+  'reconcile',
+  'viewOf',
 ];
 
 for (const relativePath of [
@@ -617,6 +813,7 @@ for (const relativePath of [
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/budget-allocator.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
@@ -627,12 +824,12 @@ for (const relativePath of [
     }
   }
   // No later compiler stage may appear before its phase implements it.
-  // `Deduplicator` left this list in Phase 8 and `Scorer` in Phase 9, when each
-  // became a published stage (DEC-031, DEC-032). `CandidateScorer` is therefore
-  // checked by name only where it must not appear.
+  // `Deduplicator` left this list in Phase 8, `Scorer` in Phase 9, and
+  // `BudgetAllocator` in Phase 10, when each became a published stage (DEC-031,
+  // DEC-032, DEC-033). Each is therefore checked by name only where it must not
+  // appear.
   for (const stage of [
     'CandidateFilter',
-    'BudgetAllocator',
     'ContextOrderer',
     'ContextRenderer',
     'TraceBuilder',

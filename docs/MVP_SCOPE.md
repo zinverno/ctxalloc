@@ -302,23 +302,90 @@ See DEC-032.
 
 ### 3.6 Token Budget Allocation
 
-The MVP includes a deterministic allocator that supports:
+Deterministic budget allocation is implemented. `BudgetAllocator` consumes a
+`ScoredCandidateSet`, an explicit `TokenBudget`, and one narrow versioned
+`BudgetAllocationPolicy`, and returns an `AllocatedCandidateSet` in which every
+scored candidate carries exactly one machine-readable allocation decision.
 
-* total context budget;
-* reserved response budget;
-* required blocks;
-* optional blocks;
-* source priorities;
-* recency boosts;
-* relevance scores;
-* category limits;
-* minimum and maximum category allocations;
-* stable tie-breaking;
-* unused budget reporting.
+**This stage enforces the canonical block-content budget, not the final rendered
+budget.** It proves `sum(included canonicalBlock.tokenCount) <=
+availableInputTokens` exactly, and makes no claim about `compiledTokens`.
+Rendering overhead — source labels, headings, separators, wrappers, emitted
+metadata, fixed prefixes and suffixes — is **not** measured by the allocator,
+because `ContextRenderer` does not exist yet. Its two published metrics,
+`selectedBlockContentTokens` and `unallocatedBlockContentTokens`, are provisional
+block-content values rather than final compiled tokens and unused tokens, and no
+hidden rendering reserve is added to compensate. A final hard-budget guarantee
+arrives with the renderer and its render/evict/re-render loop, which will consume
+the deterministic eviction order this stage precomputes.
 
-The allocator must never silently remove a required block.
+The budget is validated with the existing `TokenBudget` contract and its ceiling
+comes from the existing `availableInputTokens()` helper. The model context window
+is never guessed and no reserve is defaulted or injected.
 
-If required blocks exceed the available budget, compilation must fail with a structured error.
+Policy validation is strict and is a runtime boundary, because a policy is
+external configuration. Unknown fields are rejected rather than stripped, nothing
+is coerced, no default is injected, exact strings are preserved, a constraint must
+declare at least one bound with `minBlocks <= maxBlocks`, and two constraints
+owning the same exact category are rejected rather than resolved by array order.
+
+**Category minimums and maximums are block counts in schema version 1.** They are
+spelled `minBlocks` and `maxBlocks` and mean at least or at most that many
+independently selectable canonical blocks of one exact category. They are not
+token quotas, percentage shares, or byte quotas; a token-share quota remains
+possible in a later policy schema version. A category is the canonical block's own
+`attributes.category`, matched by exact string equality with no case folding,
+trimming, prefix matching, or hierarchy, and an absent category is unconstrained.
+Duplicate members are provenance, never additional selectable blocks.
+
+**Required blocks are a separate allocation class.** They are resolved before
+every optional block, in stable block-identifier order, and are never boosted by a
+score, never silently removed, and never evictable. They count toward both
+category bounds and consume block-content budget. Required block content that
+alone exceeds the available ceiling fails with a structured error, because
+rendering overhead could only make it worse; required content over a category
+maximum fails the same way rather than relaxing the maximum.
+
+**Category minimums use the minimum-content-cost selection.** Required blocks
+count toward a minimum, so only the shortfall is reserved from optional
+candidates, chosen by token count ascending, then score descending, then block
+identifier. Taking the cheapest blocks that reach the count minimizes the content
+cost of satisfying it, and categories are disjoint, so the union is minimum cost
+overall: when it does not fit, the failure is a real block-content infeasibility
+rather than an artifact of traversal order.
+
+**Optional selection is `score-desc-greedy`.** Remaining candidates are
+considered by score descending, then block identifier ascending. A category
+maximum is checked before the budget, so a blocked candidate spends nothing, and a
+candidate that does not fit is skipped rather than ending the traversal. No score
+is divided by a token count, no token cost is subtracted from a score, and no
+knapsack, dynamic programming, integer programming, or total-utility optimization
+is performed.
+
+Every candidate leaves with one of `INCLUDED_REQUIRED`,
+`INCLUDED_CATEGORY_MINIMUM`, `INCLUDED_SCORE_ORDER`, `EXCLUDED_CATEGORY_MAXIMUM`,
+or `EXCLUDED_BUDGET_EXHAUSTED`, together with its exact content tokens and budget
+transition. The included order is allocation chronology, not render order.
+
+A deterministic optional eviction order is precomputed for the future
+render-correction loop: required blocks never appear, and a block enters the order
+only when removing it would keep its category at or above its minimum, so every
+prefix is safe to remove from the current selection.
+
+That order is a safe removal order, **not** a proof of rendered infeasibility.
+Exhausting it shows only that no more currently selected optional surplus can be
+removed under the current hard constraints. Because hard minimums are satisfied at
+minimum block-content cost while the rendered budget counts per-block overhead
+that may differ between blocks, a protected block may render more expensively than
+an unselected candidate of the same category. Future orchestration must therefore
+be able to reconsider those hard-minimum choices against actual rendered cost, or
+otherwise prove no allocation fits, before failing (DEC-033).
+
+Failures are structured and all-or-nothing, and no partial result is ever
+returned. Ordering, rendering, final rendered token validation, trace generation,
+and compiler orchestration remain later phases.
+
+See DEC-033.
 
 ---
 
