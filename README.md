@@ -92,16 +92,28 @@ providers or metrics are not assumed comparable. Retrieval data is never written
 back into the block.
 
 **Validation is strict and all-or-nothing.** Any problem rejects the whole batch
-with one structured `CandidateValidationError` carrying every discoverable issue.
-Nothing is silently removed, repaired, reordered, or re-counted.
+with one structured `CandidateValidationError`. Nothing is silently removed,
+repaired, reordered, or re-counted. A top-level schema failure reports the schema
+issues alone; once the schema passes, every cross-record problem in the batch is
+collected before failing.
 
 Both `tokenCount` and `normalizedContentHash` are recomputed — the count through
 the injected tokenizer over the exact block content, the hash through the shared
 domain helper — and a mismatch is a rejection, not a repair. Source references
 are validated against an explicit `SourceDocument` registry supplied with the
 batch, and scope matching is exact, so an absent `projectId` and an explicit one
-are different scopes. `SourceDocument.contentHash` is not recomputed: the
-complete original source content is intentionally absent during compilation.
+are different scopes. A duplicated source ID resolves to no record at all, so no
+duplicate becomes authoritative and the reported issues cannot depend on registry
+order. `SourceDocument.contentHash` is not recomputed: the complete original
+source content is intentionally absent during compilation.
+
+Provenance must also be internally consistent: a block's `sourceLocation` kind
+must match its own source type — `markdown` and `text` blocks are located by a
+character range, `conversation` blocks by a message — so a block cannot claim
+provenance its source type cannot produce. An absent source location stays valid,
+and no location value is rewritten. This is provenance validation, not source
+reconstruction: `endOffset <= sourceLength` is still not checked, because
+`SourceDocument` carries no full content.
 
 **Duplicate wrappers are not deduplicated yet.** Two wrappers carrying the same
 block, with or without different retrieval metadata, pass through in input order

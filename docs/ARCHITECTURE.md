@@ -351,6 +351,12 @@ The compiler does not read files during compilation.
 
 All required source information must already be present in the block.
 
+`sourceLocation` is optional, and its kind must match the block's source type: a
+`markdown` or `text` block is located by a `text-range`, a `conversation` block
+by a `conversation-message`. That compatibility is enforced by
+`CandidateValidator` (section 6.1), because the location record does not carry
+the source type and cannot check it alone.
+
 A ContextBlock contains only source-derived or explicitly authored block data.
 
 Its content is query-independent: the same block record is valid for every query
@@ -506,7 +512,9 @@ Responsibilities:
   candidate;
 * exact scope matching against the request scope;
 * source reference validation against the explicit `sourceDocuments` registry;
-* duplicate source identifier detection;
+* duplicate source identifier detection, after which the duplicated identifier
+  resolves to no record, so no duplicate becomes authoritative;
+* source location kind compatibility with the block's own source type;
 * conflicting block identifier detection, where one block ID is attached to
   different canonical block data;
 * exact token count recomputation through the injected `Tokenizer` port;
@@ -517,9 +525,13 @@ Priority is restricted to finite safe integers only, including negative values.
 No product-specific minimum or maximum exists yet: semantic priority bounds and
 any policy boost belong to the versioned `CompilationPolicy`.
 
-Validation is strict and all-or-nothing: any problem rejects the whole batch with
-a structured error carrying every safely discoverable issue. Nothing is silently
-removed, repaired, re-counted, re-hashed, reordered, or deduplicated.
+Validation is strict and all-or-nothing: any problem rejects the whole batch.
+Nothing is silently removed, repaired, re-counted, re-hashed, reordered, or
+deduplicated.
+
+A top-level schema failure short-circuits cross-record validation and reports the
+schema issues alone. Once the schema passes, every cross-record problem in the
+batch is collected before failing.
 
 The validator does not decide whether required content fits the budget. That
 depends on the complete required allocation and its rendering overhead, and

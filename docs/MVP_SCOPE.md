@@ -141,7 +141,12 @@ A block's source is proven by membership in that registry and by nothing else:
 not by a path, not by metadata, not by the adapter that produced it, and not by
 array position. Source document identifiers must be unique inside the registry,
 and every referenced document must agree with the block on both scope and source
-type.
+type. A duplicated identifier resolves to no record at all, so no duplicate
+becomes authoritative and the reported issues cannot depend on registry order.
+
+A block's `sourceLocation` kind must also be compatible with its own source type:
+`markdown` and `text` blocks are located by a character range, `conversation`
+blocks by a message. An absent source location remains valid.
 
 Token counts and normalized content hashes are recomputed and compared exactly; a
 mismatch is a rejection, not a repair.
@@ -152,9 +157,10 @@ belongs to token budget allocation (section 3.5) and to INV-BUDGET-004.
 
 Invalid candidates must produce explicit errors or trace entries. In the
 implemented phase, an invalid batch fails explicitly and in full: any problem
-rejects the whole batch with a structured error carrying every discoverable
-issue, and no candidate is silently removed or repaired. Translating such issues
-into rejected-candidate trace decisions belongs to the trace phase.
+rejects the whole batch, and no candidate is silently removed or repaired. A
+schema failure reports the schema issues alone; once the schema passes, every
+cross-record problem is collected before failing. Translating such issues into
+rejected-candidate trace decisions belongs to the trace phase.
 
 See DEC-030.
 

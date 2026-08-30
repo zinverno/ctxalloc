@@ -1481,6 +1481,7 @@ The rules are:
 
 * every source document passes `SourceDocumentSchema`;
 * source document IDs are unique inside the registry, and a repetition is rejected even when the two records are byte-identical, because resolving it by first or last write would make the array's order significant and would hide an upstream merge defect (INV-BLOCK-002);
+* a duplicated ID resolves to no record at all, so no duplicate becomes authoritative;
 * every source document scope equals the request scope;
 * every candidate block scope equals the request scope;
 * every `block.sourceDocumentId` exists in the registry;
@@ -1491,11 +1492,45 @@ The rules are:
 
 Scope matching is exact, using `scopesEqual`. An absent `projectId` and an explicit `projectId` are different scopes (INV-SCOPE-003). Cross-scope data produces an explicit error, never a silent exclusion, because silent removal can hide an upstream security failure (INV-SCOPE-004).
 
+#### An Ambiguous Source ID Resolves to Nothing
+
+The candidate lookup is built only from IDs that occur exactly once.
+
+Rejecting the duplicate is not sufficient on its own. If the lookup took the first (or last) occurrence of a duplicated ID, that record would become authoritative for every candidate referencing it, and the *semantic* issue set would depend on the array's order: two documents sharing an ID but differing in `sourceType` yield a `source_type_mismatch` in one order and not in the other. The batch is rejected either way, but which rules fired must not change with input order (INV-DET-002).
+
+A candidate referencing an ambiguous ID is therefore compared against no record. The registry-dependent checks — `source_scope_mismatch` and `source_type_mismatch` — are skipped for it, because performing them would require choosing one conflicting record.
+
+It does not produce `source_not_found` either. The ID is present; it is only ambiguous, and reporting it as absent would misdescribe the defect. The `duplicate_source_document_id` issue already names the real problem and already rejects the batch.
+
+Everything that does not depend on a source record keeps running for that candidate: scope matching against the request, the source-location kind rule, the normalized content hash, the token count, UTF-16 well-formedness, and block ID conflict detection.
+
+Neither a first-wins nor a last-wins rule exists anywhere in this component.
+
 ### Source Location Is Validated, Not Reconstructed
 
 `ContextBlockSchema` validates the shape and internal ordering of `SourceLocation`. The validator does not claim more than it can prove: `SourceDocument` intentionally does not carry full content, so `endOffset <= sourceLength` cannot be checked here.
 
-Phase 7 validates the `SourceLocation` schema and the source reference. It does not read or reconstruct the source. Complete source-length bounds remain the source and chunker contract, verified by source-reconstruction tests (INV-BLOCK-006). Adding source content to compilation solely to repeat chunker work would defeat the separation the architecture depends on.
+Phase 7 validates the `SourceLocation` schema, the source reference, and the compatibility of the location kind with the block's own source type. It does not read or reconstruct the source. Complete source-length bounds remain the source and chunker contract, verified by source-reconstruction tests (INV-BLOCK-006). Adding source content to compilation solely to repeat chunker work would defeat the separation the architecture depends on.
+
+### Source Location Kind Must Match the Source Type
+
+Each source type can be located exactly one way:
+
+```text
+markdown      -> text-range
+text          -> text-range
+conversation  -> conversation-message
+```
+
+The domain already defines the two kinds this way: a character range inside a text or Markdown document, and a message inside a conversation source. The rule encodes that existing definition rather than inventing a policy, and it adds no source type and changes no schema.
+
+The schema alone cannot enforce it. `SourceLocationSchema` is a discriminated union that validates each kind's own shape, and the registry check proves only that the block and its source document agree on `sourceType`. Between them, a block could still describe itself with provenance its own source type cannot produce: a Markdown block located by a conversation message, or a conversation block located by a character range into a document that has none. Such a block cannot be located in its source at all, which makes every later provenance decision unsound (INV-PROV-002).
+
+The check is therefore a cross-field rule in `CandidateValidator`, reported as `source_location_type_mismatch` at `candidates[i].block.sourceLocation.kind`. It compares two fields of the same block, so unlike the registry rules it needs no source document and stays available even when the referenced ID is missing or ambiguous.
+
+`sourceLocation` remains optional, because `ContextBlockSchema` permits its absence; an absent location is not a contradiction. No location value is ever rewritten.
+
+Expressing the rule inside `SourceLocationSchema` was rejected: the location record does not carry the source type, so the union would have to be re-parsed in the context of a block, which is exactly the cross-field validation the compiler already performs.
 
 ### Exact Token-Count Recomputation
 
@@ -1536,7 +1571,13 @@ CandidateValidationError
 code: CANDIDATE_VALIDATION_FAILED
 ```
 
-Every safely discoverable issue is collected before failing, so one call reports the whole batch rather than its first defect. When the top-level schema fails, the schema issues are everything that is safely discoverable, because cross-record rules read fields the schema has not yet established.
+Validation runs in two stages, and the collection guarantee differs between them.
+
+The top-level schema runs first. **A schema failure short-circuits cross-record validation entirely**: the error carries the schema issues alone. Those rules read fields the schema has not established, so running them over unparsed data could only guess. The short-circuit applies to every schema failure, including one whose only cause is an unknown top-level key.
+
+Once the schema passes, every cross-record problem in the batch is collected before failing, so one call reports the whole batch rather than its first defect.
+
+Re-parsing leniently to salvage a few more issues from a batch that carries an unrecognized top-level key was considered and rejected. The batch is invalid either way, so it buys little; it would make the guarantee harder to state rather than simpler, since every other schema failure would still short-circuit; and it would run semantic rules over a shape the validator has just declared unsupported.
 
 No candidate is silently removed, silently repaired, re-counted, re-hashed, reordered, or collapsed, and no partial `ValidatedCandidateSet` is returned. This satisfies the MVP rule that invalid candidates produce explicit errors. A later compiler trace may translate these issues into rejected-candidate decisions (INV-TRACE-001).
 
@@ -1546,9 +1587,10 @@ Issues reuse the project-owned `ValidationIssue` shape and are serializable, det
 invalid_input                     invalid_priority
 duplicate_source_document_id      scope_mismatch
 source_not_found                  source_scope_mismatch
-source_type_mismatch              conflicting_block_id
-invalid_unicode                   invalid_normalized_content_hash
-invalid_token_count               tokenizer_failed
+source_type_mismatch              source_location_type_mismatch
+conflicting_block_id              invalid_unicode
+invalid_normalized_content_hash   invalid_token_count
+tokenizer_failed
 ```
 
 No raw validation-library error, `DomainValidationError`, tokenizer-library error, or external provider error escapes the compiler boundary.

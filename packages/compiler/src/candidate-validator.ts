@@ -9,6 +9,8 @@ import {
   type CandidateBlock,
   type Scope,
   type SourceDocument,
+  type SourceLocation,
+  type SourceType,
   type ValidationIssue,
 } from '@ctxalloc/domain';
 import type { Tokenizer } from '@ctxalloc/ports';
@@ -84,6 +86,7 @@ export type CandidateValidationIssueCode =
   | 'source_not_found'
   | 'source_scope_mismatch'
   | 'source_type_mismatch'
+  | 'source_location_type_mismatch'
   | 'conflicting_block_id'
   | 'invalid_unicode'
   | 'invalid_normalized_content_hash'
@@ -184,6 +187,35 @@ function canonicalize(value: unknown): string {
   }
   return JSON.stringify(value) ?? 'null';
 }
+
+/* -------------------------------------------------------------------------- */
+/* Source location compatibility                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The one `SourceLocation` kind each source type can be located by.
+ *
+ * `SourceLocationSchema` validates each kind's own shape, and the registry check
+ * proves the block and its source document agree on `sourceType`. Neither notices
+ * that a block can still describe itself with provenance its own source type
+ * cannot produce: a Markdown block located by a conversation message, or a
+ * conversation block located by a character range into a document that has none.
+ *
+ * The domain already defines the two kinds this way — a character range inside a
+ * text or Markdown document, and a message inside a conversation source — so the
+ * table encodes an existing definition rather than inventing a policy. A block
+ * whose provenance contradicts its own source type cannot be located in its
+ * source at all, which makes every later provenance decision unsound
+ * (INV-PROV-002).
+ *
+ * The record is exhaustive over `SourceType` by construction: adding a source
+ * type without deciding how it is located stops compiling here.
+ */
+const EXPECTED_SOURCE_LOCATION_KIND: Readonly<Record<SourceType, SourceLocation['kind']>> = {
+  markdown: 'text-range',
+  text: 'text-range',
+  conversation: 'conversation-message',
+};
 
 /* -------------------------------------------------------------------------- */
 /* Top-level input schema                                                      */
@@ -293,21 +325,35 @@ export class CandidateValidator {
   /**
    * Validates one batch, all or nothing.
    *
-   * Every discoverable problem is collected before failing, so one call reports
-   * the whole batch rather than its first defect. On any problem the batch is
-   * rejected: no candidate is silently removed, repaired, re-counted, re-hashed,
-   * or reordered, and no partial result is returned (INV-SCOPE-004,
-   * INV-BLOCK-003, INV-ALLOC-004). A later compiler trace may translate these
-   * issues into rejected-candidate decisions (INV-TRACE-001).
+   * Validation runs in two stages, and the guarantee differs between them.
+   *
+   * The top-level schema runs first. If it fails, its issues are reported and
+   * **cross-record validation is skipped entirely**: those rules read fields the
+   * schema has not established, so running them over unparsed data could only
+   * guess. That short-circuit applies to every schema failure, an unknown
+   * top-level key included.
+   *
+   * Once the schema passes, every cross-record problem in the batch is
+   * collected before failing, so one call reports the whole batch rather than
+   * its first defect.
+   *
+   * On any problem the batch is rejected: no candidate is silently removed,
+   * repaired, re-counted, re-hashed, or reordered, and no partial result is
+   * returned (INV-SCOPE-004, INV-BLOCK-003, INV-ALLOC-004). A later compiler
+   * trace may translate these issues into rejected-candidate decisions
+   * (INV-TRACE-001).
    *
    * @throws {CandidateValidationError} when the batch is not valid.
    */
   validate(input: unknown): ValidatedCandidateSet {
     const parsed = safeParse(CandidateValidationInputSchema, input);
     if (!parsed.ok) {
-      // Cross-record rules read fields the schema has not established yet, so
-      // running them over unparsed data could only guess. The schema issues are
-      // everything that is safely discoverable at this point.
+      // Deliberate short-circuit: a batch whose shape is unsupported gets schema
+      // issues only, never cross-record ones. Re-parsing leniently to salvage a
+      // few more issues from, say, one unknown top-level key would buy little —
+      // the batch is invalid either way — while making the guarantee harder to
+      // state and inviting semantic rules to run over a shape the validator has
+      // just declared unsupported.
       throw new CandidateValidationError(parsed.issues.map(toInputIssue));
     }
 
@@ -372,12 +418,27 @@ export class CandidateValidator {
   ): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
 
-    // Built from the first occurrence of each ID. A repeated ID has already been
-    // reported, and the batch is failing regardless, so reference checks stay
-    // deterministic rather than depending on which duplicate wins.
+    // The lookup carries unambiguous IDs only.
+    //
+    // Taking the first (or last) occurrence of a duplicated ID would make one
+    // conflicting record authoritative, and the *semantic* issue set would then
+    // depend on the array's order: two source documents sharing an ID but
+    // differing in `sourceType` produce a `source_type_mismatch` in one order and
+    // not in the other. The batch is rejected either way, but which rules fired
+    // must not change (INV-DET-002).
+    //
+    // A duplicated ID is already reported by the registry check, so a candidate
+    // referencing it is simply not compared against any record. That is not a
+    // missing source, so it produces no `source_not_found` either: the ID is
+    // present, it is only ambiguous, and reporting it as absent would misdescribe
+    // the defect.
+    const occurrences = new Map<string, number>();
+    for (const document of sourceDocuments) {
+      occurrences.set(document.id, (occurrences.get(document.id) ?? 0) + 1);
+    }
     const registry = new Map<string, SourceDocument>();
     for (const document of sourceDocuments) {
-      if (!registry.has(document.id)) registry.set(document.id, document);
+      if (occurrences.get(document.id) === 1) registry.set(document.id, document);
     }
 
     // Identical content always hashes and counts identically, so each distinct
@@ -407,7 +468,8 @@ export class CandidateValidator {
       }
 
       const source = registry.get(block.sourceDocumentId);
-      if (source === undefined) {
+      const ambiguous = (occurrences.get(block.sourceDocumentId) ?? 0) > 1;
+      if (source === undefined && !ambiguous) {
         issues.push(
           issue(
             'source_not_found',
@@ -415,7 +477,7 @@ export class CandidateValidator {
             `references source document ${quote(block.sourceDocumentId)}, which is not declared in sourceDocuments`,
           ),
         );
-      } else {
+      } else if (source !== undefined) {
         if (!scopesEqual(source.scope, block.scope)) {
           issues.push(
             issue(
@@ -431,6 +493,23 @@ export class CandidateValidator {
               'source_type_mismatch',
               at('sourceType'),
               `must equal the source type of source document ${quote(source.id)} (${quote(source.sourceType)}), received ${quote(block.sourceType)}`,
+            ),
+          );
+        }
+      }
+
+      // Provenance must not contradict itself. This compares two fields of the
+      // block against each other, so unlike the registry checks above it needs no
+      // source document and stays available even when the referenced ID is
+      // missing or ambiguous.
+      if (block.sourceLocation !== undefined) {
+        const expected = EXPECTED_SOURCE_LOCATION_KIND[block.sourceType];
+        if (block.sourceLocation.kind !== expected) {
+          issues.push(
+            issue(
+              'source_location_type_mismatch',
+              at('sourceLocation', 'kind'),
+              `must be ${quote(expected)} for a block of source type ${quote(block.sourceType)}, received ${quote(block.sourceLocation.kind)}`,
             ),
           );
         }
