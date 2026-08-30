@@ -405,6 +405,40 @@ The MVP compiler must:
 
 The compiler must not call an LLM.
 
+Implemented so far: candidate reception and validation with scope filtering
+(section 3.4), duplicate removal (section 3.4), scoring (section 3.5), token
+budget allocation over canonical block content (section 3.6), and **stable
+ordering of the included blocks** (below).
+
+Policy filtering, rendering, final rendered-token validation, the
+render/evict/re-render correction, trace generation, and the compiler
+orchestration that joins these stages remain future work.
+
+**Stable ordering is implemented.** `ContextOrderer` consumes an
+`AllocatedCandidateSet` and one narrow versioned `ContextOrderingPolicy`, and
+returns an `OrderedCandidateSet` whose `orderedIncluded` is the render order of
+the current selection.
+
+It changes no decision. The ordered sequence holds exactly the included decision
+objects the allocator produced, by reference, permuted: every one appears once,
+no excluded decision appears, and no reason changes. Nothing is rendered,
+tokenized, or measured.
+
+Schema version 1 orders by source document, then by position inside that source,
+then by the stable block identifier. Text and Markdown blocks follow their
+character offsets; conversation blocks follow `messageIndex`, with `messageId`
+only as a deterministic code-unit fallback that is never parsed for an embedded
+time or sequence number; a block with no source location is placed after the
+located blocks of its own source and ordered by identifier alone, because
+position is never guessed.
+
+Score, required status, allocation reason, and category do **not** order. A
+high-scoring or required block renders late when its source position is late.
+Allocation chronology, the score ranking, and the optional eviction order are
+three different sequences, and none of them is render order.
+
+See DEC-034.
+
 ---
 
 ### 3.8 Compilation Trace

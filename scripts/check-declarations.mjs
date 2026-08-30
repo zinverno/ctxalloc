@@ -35,6 +35,7 @@ const DECLARATIONS = [
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
+  'packages/compiler/dist/context-orderer.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -763,6 +764,99 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './budget-allocator
   }
 }
 
+// The context orderer keeps its documented stage signature: it takes one
+// versioned policy at construction, consumes an AllocatedCandidateSet, and
+// returns readonly project-owned data (DEC-034).
+requireContains('packages/compiler/dist/context-orderer.d.ts', 'declare class ContextOrderer');
+requireContains('packages/compiler/dist/context-orderer.d.ts', 'constructor(policy: unknown);');
+requireContains(
+  'packages/compiler/dist/context-orderer.d.ts',
+  'order(input: AllocatedCandidateSet): OrderedCandidateSet;',
+);
+requireContains(
+  'packages/compiler/dist/context-orderer.d.ts',
+  'declare class ContextOrderingError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/context-orderer.d.ts',
+  'readonly code = "CONTEXT_ORDERING_FAILED"',
+);
+requireContains(
+  'packages/compiler/dist/context-orderer.d.ts',
+  'CONTEXT_ORDERING_POLICY_SCHEMA_VERSION = 1',
+);
+requireContains('packages/compiler/dist/context-orderer.d.ts', 'interface ContextOrderingPolicy');
+// The one strategy of schema version 1, spelled exactly.
+requireContains(
+  'packages/compiler/dist/context-orderer.d.ts',
+  "readonly strategy: 'source-document-then-location';",
+);
+requireContains('packages/compiler/dist/context-orderer.d.ts', 'interface OrderedCandidateSet');
+// The allocation is nested whole, and the ordered sequence is a readonly array
+// of the very decision records Phase 10 produced.
+requireContains(
+  'packages/compiler/dist/context-orderer.d.ts',
+  'readonly allocation: AllocatedCandidateSet;',
+);
+requireContains(
+  'packages/compiler/dist/context-orderer.d.ts',
+  'readonly orderedIncluded: readonly IncludedCandidateDecision[];',
+);
+requireContains(
+  'packages/compiler/dist/context-orderer.d.ts',
+  'readonly orderingPolicyId: string;',
+);
+requireContains(
+  'packages/compiler/dist/context-orderer.d.ts',
+  'readonly orderingPolicyVersion: string;',
+);
+requireContains('packages/compiler/dist/index.d.ts', "} from './context-orderer.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/context-orderer.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // The ordered set is an ephemeral compiler-stage result, not a persisted
+    // record, so only the policy carries a schema version (INV-STORE-004).
+    if (/interface OrderedCandidateSet\s*\{[^}]*schemaVersion/.test(declarations)) {
+      fail('packages/compiler/dist/context-orderer.d.ts declares a persisted schemaVersion');
+    }
+    if (/\bDate\b/.test(declarations)) {
+      fail('packages/compiler/dist/context-orderer.d.ts exposes a Date');
+    }
+    // Ordering changes no decision and renders nothing: no allocation,
+    // rendering, scoring, or trace vocabulary may reach its surface, and array
+    // position stays the whole ordering contract — no index is written onto a
+    // block or a decision (DEC-034).
+    for (const forbidden of [
+      'renderedContext',
+      'compiledContext',
+      'compiledTokens',
+      'renderingOverhead',
+      'sourceLabel',
+      'separator',
+      'renderingPolicy',
+      'renderPosition',
+      'orderIndex',
+      'positionIndex',
+      'sortKey',
+      'scoreOrder',
+      'requiredFirst',
+      'CompilationPolicy',
+      'CompilationTrace',
+      'CompilationResult',
+      'Tokenizer',
+      'countTokens',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/context-orderer.d.ts exposes the future or forbidden concept "${forbidden}"`,
+        );
+      }
+    }
+  }
+}
+
 // The validation library, the Node standard library, a provider SDK, an
 // application type, and an internal helper all stay implementation details of
 // the compiler kernel (INV-ADAPTER-001, INV-DEP-002).
@@ -788,7 +882,9 @@ const COMPILER_LEAKED_TYPES = [
   'compareCodeUnits',
   'pointerFor',
   'Group',
-  'Ordered',
+  // Word-bounded: `OrderedCandidateSet` is a published Phase 11 type, while the
+  // bare `Ordered` remains a Phase 8 internal one.
+  /\bOrdered\b/,
   'RetrievalEntry',
   'ComponentResult',
   'retrievalContractKey',
@@ -806,6 +902,9 @@ const COMPILER_LEAKED_TYPES = [
   'compareEviction',
   'reconcile',
   'viewOf',
+  'compareBlocks',
+  'compareLocation',
+  'LOCATION_KIND_RANK',
 ];
 
 for (const relativePath of [
@@ -814,23 +913,26 @@ for (const relativePath of [
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
+  'packages/compiler/dist/context-orderer.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
   const declarations = stripComments(content);
   for (const type of COMPILER_LEAKED_TYPES) {
-    if (declarations.includes(type)) {
-      fail(`${relativePath} exposes the implementation type "${type}"`);
+    const leaked = type instanceof RegExp ? type.test(declarations) : declarations.includes(type);
+    if (leaked) {
+      fail(
+        `${relativePath} exposes the implementation type "${type instanceof RegExp ? type.source : type}"`,
+      );
     }
   }
   // No later compiler stage may appear before its phase implements it.
-  // `Deduplicator` left this list in Phase 8, `Scorer` in Phase 9, and
-  // `BudgetAllocator` in Phase 10, when each became a published stage (DEC-031,
-  // DEC-032, DEC-033). Each is therefore checked by name only where it must not
-  // appear.
+  // `Deduplicator` left this list in Phase 8, `Scorer` in Phase 9,
+  // `BudgetAllocator` in Phase 10, and `ContextOrderer` in Phase 11, when each
+  // became a published stage (DEC-031, DEC-032, DEC-033, DEC-034). Each is
+  // therefore checked by name only where it must not appear.
   for (const stage of [
     'CandidateFilter',
-    'ContextOrderer',
     'ContextRenderer',
     'TraceBuilder',
     'ContextCompiler',

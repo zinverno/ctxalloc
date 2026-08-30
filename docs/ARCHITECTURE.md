@@ -267,10 +267,10 @@ Model consumes compiled context.
 
 These responsibilities must not be merged.
 
-Four stages are implemented: candidate validation (section 6.1), deterministic
-deduplication (section 6.2), deterministic scoring (section 6.3), and
-deterministic budget allocation (section 6.4). Everything below them is future
-work.
+Five stages are implemented: candidate validation (section 6.1), deterministic
+deduplication (section 6.2), deterministic scoring (section 6.3), deterministic
+budget allocation (section 6.4), and deterministic context ordering
+(section 6.5). Everything below them is future work.
 
 Allocation is not the end of the budget story. `BudgetAllocator` enforces the
 canonical block-content budget exactly; the final rendered context still has to
@@ -1016,14 +1016,106 @@ model, or storage, and mutates nothing reachable from its input.
 
 ### 6.5 ContextOrderer
 
-Status: future phase.
+Status: implemented (DEC-034).
+
+It consumes an `AllocatedCandidateSet` and one narrow versioned
+`ContextOrderingPolicy`, and returns an `OrderedCandidateSet`, the next
+compiler-stage type:
+
+```ts
+interface ContextOrderingPolicy {
+  readonly schemaVersion: 1;
+  readonly policyId: string;
+  readonly policyVersion: string;
+  readonly strategy: 'source-document-then-location';
+}
+
+interface OrderedCandidateSet {
+  readonly allocation: AllocatedCandidateSet;
+  readonly orderingPolicyId: string;
+  readonly orderingPolicyVersion: string;
+  readonly orderedIncluded: readonly IncludedCandidateDecision[];
+}
+```
+
+The structure is an ephemeral compiler-stage result and is never persisted, so it
+carries no schema version.
 
 Responsibilities:
 
-* place blocks in deterministic order;
-* group blocks according to policy;
-* preserve conversation continuity where required;
-* avoid accidental score-order changes between runs.
+* strict runtime validation of the ordering policy;
+* one deterministic render order for the current selection;
+* source grouping and source-local position;
+* stable tie-breaking down to the block identifier.
+
+It changes no inclusion or exclusion decision, renders nothing, and measures
+nothing.
+
+#### The v1 order
+
+```text
+1. sourceDocumentId ascending, by UTF-16 code unit
+2. position inside that source document
+3. block ID ascending, by UTF-16 code unit
+```
+
+Grouping by source document keeps one document's blocks contiguous. The
+identifier is opaque (DEC-028), so its order is a stable grouping key, not a
+claim about which document matters more; ranking documents would need a policy
+that does not exist.
+
+Source-local position is the source's own chronology:
+
+* **text-range** — `startOffset` ascending, then `endOffset`, then `startLine`
+  and `endLine`, each consulted only when both blocks carry it. Offsets state
+  where the block sat in the original content; nothing is inferred from content,
+  heading path, or timestamps.
+* **conversation-message** — an indexed message precedes an unindexed one; two
+  indexed messages compare by `messageIndex`, then `messageId`, then block ID;
+  two unindexed messages compare by `messageId`, then block ID. `messageIndex` is
+  chronology, `messageId` is a code-unit fallback that is never parsed for an
+  embedded time or sequence number.
+* **absent location** — located blocks of a source precede its unlocated ones,
+  which are ordered by block ID alone. Position is never guessed
+  (INV-PROV-002).
+
+The comparator is total: it ends in the block identifier, and falls back to the
+canonical serialization for a hand-assembled input carrying one identifier on two
+records (INV-DET-005). `localeCompare` and `Intl.Collator` are never used.
+
+#### What does not order
+
+Score, required status, allocation reason, category, timestamps, heading path,
+retrieval and provider data, source metadata, duplicate members, and input array
+position are all absent from the comparator. A high-scoring block renders late
+when its source position is late, and a required block may render after an
+optional one from the same source.
+
+#### Three different orders
+
+```text
+score ranking          how useful is this candidate                  6.3
+allocation chronology  in what order was the budget spent            6.4
+optionalEvictionOrder  what may be given back if rendering overruns  6.4
+render order           where does this content belong when read      6.5
+```
+
+None is a reordering of another. In particular `optionalEvictionOrder` is carried
+through untouched and is not render order.
+
+#### Conservation
+
+`orderedIncluded` holds exactly the objects of `allocation.included`, by
+reference, permuted: a copy of that array, sorted. Every included decision
+appears once, no excluded decision appears, no reason changes, and no
+`ContextBlock` is cloned (INV-TRACE-001, INV-ALLOC-002, INV-ALLOC-004). Array
+position is the whole ordering contract; no index or rank is written onto a block
+or a decision.
+
+The allocation is nested whole rather than copied field by field, so every
+Phase 10 fact stays reachable and stated once (INV-DEP-003). The single failure is
+`CONTEXT_ORDERING_FAILED` with `invalid_policy`: sorting a copy of an array can
+neither lose nor invent an element, so no reconciliation code is needed.
 
 ### 6.6 ContextRenderer
 

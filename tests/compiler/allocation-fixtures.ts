@@ -3,7 +3,15 @@ import {
   type AllocatedCandidateSet,
   type ScoredCandidateSet,
 } from '@ctxalloc/compiler';
-import { candidate, issueCodesOf, issuesOf, permutations, score } from './scoring-fixtures.js';
+import {
+  candidate,
+  contextBlock,
+  issueCodesOf,
+  issuesOf,
+  omit,
+  permutations,
+  score,
+} from './scoring-fixtures.js';
 
 /**
  * Shared fixtures for the deterministic budget allocation tests.
@@ -23,7 +31,7 @@ import { candidate, issueCodesOf, issuesOf, permutations, score } from './scorin
  * and nothing shuffles randomly: permutations are enumerated.
  */
 
-export { candidate, issueCodesOf, issuesOf, permutations };
+export { candidate, contextBlock, issueCodesOf, issuesOf, omit, permutations };
 
 /** The scoring policy every allocation test uses: score is authored priority. */
 export const ALLOCATION_SCORING_POLICY = {
@@ -60,28 +68,56 @@ export interface CandidateSpec {
   readonly tokens?: number;
   /** Exact content, for the rare test that needs two blocks to deduplicate. */
   readonly content?: string;
+  /** Source document the block belongs to; defaults to the single registry entry. */
+  readonly sourceDocumentId?: string;
+  /** Source type of the block, which must match its document and location kind. */
+  readonly sourceType?: string;
+  /** Exact source location, for the ordering tests; omitted leaves it absent. */
+  readonly sourceLocation?: Record<string, unknown> | null;
   /** Authored priority, which the fixture scoring policy turns into the score. */
   readonly priority?: number;
   readonly category?: string;
   readonly required?: boolean;
 }
 
-/** One candidate wrapper whose token count, score, category, and class are exact. */
+/**
+ * One candidate wrapper whose token count, score, category, and class are exact.
+ *
+ * `sourceLocation` follows the block's content by default, as the shared block
+ * fixture does. Passing `null` removes it entirely, so an unlocated block is
+ * genuinely absent rather than explicitly undefined.
+ */
 export function candidateOf(spec: CandidateSpec): Record<string, unknown> {
   const content = spec.content ?? contentOf(spec.id, spec.tokens ?? 1);
-  return candidate({
+  const block = contextBlock({
     id: spec.id,
     content,
+    ...(spec.sourceDocumentId === undefined ? {} : { sourceDocumentId: spec.sourceDocumentId }),
+    ...(spec.sourceType === undefined ? {} : { sourceType: spec.sourceType }),
+    ...(spec.sourceLocation === undefined || spec.sourceLocation === null
+      ? {}
+      : { sourceLocation: spec.sourceLocation }),
     attributes: {
       ...(spec.required === undefined ? {} : { required: spec.required }),
       ...(spec.priority === undefined ? {} : { priority: spec.priority }),
       ...(spec.category === undefined ? {} : { category: spec.category }),
     },
   });
+  return {
+    schemaVersion: 1,
+    block: spec.sourceLocation === null ? omit(block, 'sourceLocation') : block,
+  };
 }
 
-export function scoreSpecs(specs: readonly CandidateSpec[]): ScoredCandidateSet {
-  return score(specs.map(candidateOf), { ...ALLOCATION_SCORING_POLICY });
+export function scoreSpecs(
+  specs: readonly CandidateSpec[],
+  sourceDocuments?: readonly unknown[],
+): ScoredCandidateSet {
+  return score(
+    specs.map(candidateOf),
+    { ...ALLOCATION_SCORING_POLICY },
+    sourceDocuments === undefined ? {} : { sourceDocuments },
+  );
 }
 
 /** Validates, deduplicates, scores, and allocates one batch in one call. */
@@ -91,11 +127,12 @@ export function allocate(
     readonly available?: number;
     readonly budget?: unknown;
     readonly policy?: Record<string, unknown>;
+    readonly sourceDocuments?: readonly unknown[];
   } = {},
 ): AllocatedCandidateSet {
   const allocator = new BudgetAllocator(options.policy ?? allocationPolicy());
   return allocator.allocate(
-    scoreSpecs(specs),
+    scoreSpecs(specs, options.sourceDocuments),
     'budget' in options ? options.budget : budget(options.available ?? 1000),
   );
 }

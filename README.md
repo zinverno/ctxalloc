@@ -9,7 +9,7 @@ or agent framework.
 
 ## Status
 
-Phase 10 — deterministic budget allocation. The repository contains
+Phase 11 — deterministic context ordering. The repository contains
 the TypeScript monorepo scaffolding from Phase 1 (workspace structure, strict
 compiler and linting configuration, test infrastructure, package boundaries,
 boundary checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
@@ -19,7 +19,7 @@ validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
 deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
 tokenizer contract test suite, a real offline tokenizer adapter in
 `@ctxalloc/tokenization`, the first two application use cases in
-`@ctxalloc/application`, and the first four compiler-kernel stages in
+`@ctxalloc/application`, and the first five compiler-kernel stages in
 `@ctxalloc/compiler`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
@@ -268,10 +268,39 @@ labels, separators, wrappers, and other rendering overhead are not measured,
 because the renderer does not exist yet. **There is no final hard budget guarantee
 until the renderer and its orchestration loop exist.**
 
-**No later stage exists yet.** There is no `ContextOrderer`, renderer, trace
-builder, `CandidateFilter`, policy filtering, compiler orchestration, retrieval
-provider, persistence, HTTP, or CLI behavior. CtxAlloc does not yet compile or
-render context, and it supports no Obsidian integration.
+`ContextOrderer` is the fifth stage of the kernel (see
+[DEC-034](./docs/DECISIONS.md)). It takes an `AllocatedCandidateSet` and one
+narrow versioned `ContextOrderingPolicy`, and returns an `OrderedCandidateSet`
+whose `orderedIncluded` is the render order of the current selection. It exists
+so that the future renderer never decides layout implicitly.
+
+**It changes no decision.** The ordered sequence holds exactly the included
+decision objects the allocator produced, by reference, permuted: every one
+appears once, no excluded decision appears, and no reason changes. Nothing is
+rendered, tokenized, measured, or cloned, and array position is the whole
+ordering contract — no index is written onto a block.
+
+**Blocks are grouped by source document, then follow that source's own order.**
+Text and Markdown blocks are ordered by character offset, then by line when both
+blocks record one. Conversation blocks follow `messageIndex`; a message that
+states no index comes after those that do, and `messageId` is only a
+deterministic code-unit fallback — never parsed for an embedded timestamp or
+sequence number, so `m-10` precedes `m-2`. A block with no source location is
+placed after the located blocks **of its own source** and ordered by identifier
+alone, because position is never guessed. Every comparison ends in the stable
+block identifier.
+
+**Score and required status do not define render order.** A high-scoring block
+renders late when its source position is late, and a required block may render
+after an optional one from the same source. The score ranking, the allocation
+chronology, and the optional eviction order are three other sequences, and none
+of them is render order.
+
+**No renderer exists yet.** Nothing produces a compiled string, no rendering
+overhead is measured, and there is still no final hard-budget guarantee. There is
+no rendering policy, trace builder, `CandidateFilter`, policy filtering, compiler
+orchestration, retrieval provider, persistence, HTTP, or CLI behavior. CtxAlloc
+does not yet render context, and it supports no Obsidian integration.
 
 ## Prerequisites
 
