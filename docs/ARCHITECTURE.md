@@ -280,17 +280,29 @@ CompilationRequest validation
   -> BudgetAllocator
   -> ContextOrderer
   -> ContextRenderer
+  -> TraceBuilder              (observational)
   -> render-aware correction   (future)
-  -> TraceBuilder              (future)
+  -> settled CompilationTrace  (future)
   -> CompilationResult         (future)
 ```
 
-Structural request validation (section 5.5) and seven compiler components are
+Structural request validation (section 5.5) and eight compiler components are
 implemented: `CandidateValidator` (section 6.1), `CandidateDeduplicator`
 (section 6.2), `CandidateScorer` (section 6.3), `CandidateFilter`
 (section 6.3.1), `BudgetAllocator` (section 6.4), `ContextOrderer`
-(section 6.5), and `ContextRenderer` (section 6.6). Everything below them is
-future work.
+(section 6.5), `ContextRenderer` (section 6.6), and `TraceBuilder`
+(section 6.7). Everything below them is future work.
+
+`TraceBuilder` sits at the end of the implemented chain but is **not** a stage in
+it. It consumes what the components already produced and produces a record about
+them; removing it changes no compiler decision (INV-TRACE-006). Its position in
+the list says when it can run, not that anything downstream depends on it.
+
+**The trace foundation is implemented; the settled compilation trace is not.**
+Every trace this phase builds carries `settled: false`: the stage evidence is
+recorded and the render attempt is measured, but nothing has accepted or rejected
+a compilation. A settled trace attached to a `CompilationResult` requires the
+correction loop of section 7.2 and remains future work (DEC-037).
 
 **Topology is defined by component names, not by ordinal position.** Older
 wording in this document and in DEC-030 through DEC-035 called the components the
@@ -309,7 +321,9 @@ orchestration, which does not exist yet (section 7).
 
 Nothing composes these components. `ContextCompiler` does not exist, so a caller
 that wants the whole flow joins the components itself, and the cross-stage
-tokenizer-identity requirement of DEC-035 is that caller's to honor.
+tokenizer-identity requirement of DEC-035 is that caller's to honor. That caller
+is also the one that hands `TraceBuilder` its evidence bundle, and the builder
+verifies that the bundle came from one coherent run rather than trusting it.
 
 ### 4.2 Where filtering runs
 
@@ -651,6 +665,8 @@ resolved by the allocator, never a policy switch (INV-SCORE-003).
 
 ### 5.7 CompilationResult
 
+Status: future phase. No implementation exists.
+
 ```ts
 interface CompilationResult {
   compiledContext: string;
@@ -667,6 +683,17 @@ interface CompilationResult {
   };
 }
 ```
+
+The `trace` field is the one part of this record whose type now exists
+(section 6.7). It must be a **settled** trace: a successful `CompilationResult`
+requires `trace.settled === true`, because an unsettled trace records one measured
+attempt rather than the selection that was returned (DEC-037). Nothing in the
+kernel can produce a settled trace yet, so nothing can produce this record yet
+either.
+
+The `usage` fields remain future work for the same reason: `compiledTokens`,
+`unusedTokens`, and the reduction values are all defined against a settled
+selection (METRICS 8.4, 8.10, section 7.2).
 
 ---
 
@@ -1531,16 +1558,202 @@ property this stage can verify (DEC-035).
 
 ### 6.7 TraceBuilder
 
-Status: future phase.
+Status: implemented (DEC-037).
 
 Responsibilities:
 
-* record each compiler stage;
-* record score components;
-* record inclusion and exclusion reasons;
-* record budget transitions;
-* record warnings and errors;
-* produce a serializable result.
+* verify that the supplied stage evidence belongs to one coherent pipeline;
+* project that evidence into a versioned, serializable `CompilationTrace`;
+* record the request identity and its deterministic fingerprint;
+* record the compiler, policy, tokenizer, and renderer identities;
+* record every deduplicated group, its members, its score, and its decisions;
+* record the allocation, ordering, and rendering summaries;
+* calculate the exact reconciliation totals;
+* fail explicitly when the evidence contradicts itself.
+
+#### TraceBuilder is observational
+
+It receives evidence the components **already produced**. It does not validate
+candidates, deduplicate, score, filter, allocate, order, render, tokenize, evict,
+reallocate, correct a budget overrun, or select an outcome. Enabling or disabling
+it changes no compiler output (INV-TRACE-006).
+
+What it may do is copy stage evidence, calculate deterministic digests, count and
+sum already-validated numbers, and refuse to serialize evidence that contradicts
+itself. It never repairs such evidence: a caller who mixed two runs gets a
+structured failure, because a trace that quietly reconciled them would be a false
+audit record.
+
+It is synchronous, pure, and offline: no clock, no random value, no file, no
+environment variable, no `package.json`, no git revision, no database, no network,
+no model, no retrieval provider, and no tokenizer (INV-DET-001, INV-DET-003,
+INV-DET-004, INV-DEP-002).
+
+#### The build input is successful post-validation evidence
+
+```ts
+interface CompilationTraceBuildInput {
+  readonly request: CompilationRequest;
+  readonly validated: ValidatedCandidateSet;
+  readonly deduplicated: DeduplicatedCandidateSet;
+  readonly filtered: FilteredCandidateSet;
+  readonly rendered: RenderedContextAttempt;
+}
+```
+
+Nothing is repeated: the scored set is `filtered.scored`, the allocation is
+`rendered.ordered.allocation`, the ordering is `rendered.ordered`, and the render
+attempt is `rendered`. Supplying any of them again would create two places for
+one fact (INV-DEP-003).
+
+`validated` is a **successful** `ValidatedCandidateSet`. A
+`CandidateValidationError` is not accepted in its place: `CandidateValidator` is
+all-or-nothing, so a failed batch has no post-validation evidence to trace, and a
+validation-failure trace envelope belongs to the future `ContextCompiler`
+(DEC-030, section 6.1).
+
+There is no orchestrator in front of this input. The caller composes the
+components and hands over what they produced.
+
+#### Compiler identity is injected configuration
+
+```ts
+interface TraceBuilderConfig {
+  readonly compilerId: string;
+  readonly compilerVersion: string;
+}
+```
+
+Compiler version is an explicit composition input, not request data (DEC-036), and
+it is supplied rather than discovered: nothing reads a manifest version, a git
+revision, a build constant, or an environment variable, because a value found in
+the surroundings would differ between a source checkout, a published package, and
+a container. Validation is strict — closed object, non-blank well-formed UTF-16
+strings preserved exactly, no defaults.
+
+#### Wrapper accounting and group decisions
+
+The trace satisfies INV-TRACE-001 at its two levels. Every successfully validated
+`CandidateBlock` wrapper appears exactly once as a member of exactly one trace
+group, and every deduplicated group receives exactly one current
+filtering/allocation disposition.
+
+No representative wrapper is invented. Byte-identical wrappers produce identical
+member records, and multiplicity is the evidence; selecting one of them by input
+position would be a determinism bug (INV-DET-002, DEC-031).
+
+`currentDisposition` is deliberately not called `finalDisposition`: it describes
+the traced attempt, and a future correction may settle a different selection.
+`renderPosition` is present exactly for included groups and is the zero-based
+index in `orderedIncluded`; every position is unique and the positions cover
+`0 ... includedCount - 1`.
+
+#### The privacy boundary of schema version 1
+
+Full source content is not configurable in this schema version — it is simply
+**not representable**, which is the safest reading of INV-SEC-003. `ContextBlock.content`,
+`CompilationRequest.query`, `RenderedContextAttempt.renderedContext`,
+`SourceDocument.metadata`, `ContextBlock.metadata`, and `CandidateRetrieval.metadata`
+have no field to travel in, and neither has a `SourceDocument.title`.
+
+What the trace does carry is decision and provenance evidence: identifiers,
+digests, scope, source types, source locations, required status, category and
+authored priority, policy identities, provider identity and version, rank,
+provider score contract and value, compiler score components, decision reasons,
+token counts, and the rendered digest and count.
+
+Where a value must be identified rather than stored, a deterministic digest is
+recorded instead: `request.queryHash` over the exact query and
+`rendering.renderedContextHash` over the exact rendered string, both
+`sha256:<64 lowercase hex characters>` over a domain-separated canonical preimage.
+Hashing here is **audit identity, not authorization**, and no correctness rule of
+the kernel depends on collision resistance.
+
+A future schema version may add explicit content capture with security controls.
+
+#### The request fingerprint
+
+```ts
+const COMPILATION_REQUEST_FINGERPRINT_VERSION = 1;
+
+type CompilationRequestFingerprint = string;
+
+function fingerprintCompilationRequest(
+  request: CompilationRequest,
+): CompilationRequestFingerprint;
+```
+
+The preimage is the canonical serialization of
+`["ctxalloc-compilation-request-fingerprint", 1, request]`, hashed as exact UTF-8
+bytes with SHA-256. Object key order is fixed by UTF-16 code unit, array order is
+preserved, exact strings survive with no Unicode normalization and no trimming, and
+an absent optional property stays absent.
+
+It identifies the **exact validated caller request value**, so `request.id`, the
+query, and every array's order participate. It is **not** the future deterministic
+compilation identifier, not a semantic-equivalence hash, and not a cache key
+promising equivalent outputs. Two requests that compile to the same output may have
+different fingerprints, and that is deliberate: INV-DET-002 governs compiler
+processing, not the identity of a caller's payload.
+
+The composition inputs it excludes — compiler, tokenizer, and renderer identity —
+are recorded beside it in `composition` (INV-TRACE-005).
+
+#### Coherence checks
+
+The builder is not a second semantic validator, but it must not serialize a lie.
+Before projecting anything it verifies that the request's scope, source registry,
+candidates, budget, and configured policy identities describe the evidence; that
+every validated wrapper is a member of exactly one group and each group's
+canonical block is one of its own members; that the scored set covers every group
+once and the filtering decisions cover every scored candidate once; that the
+eligible set is exactly what its eligible decisions describe; that the allocation
+decides exactly the eligible candidates and nothing filtered; that `orderedIncluded`
+holds exactly the included decisions; and that the rendered budget observation
+matches the rendered count.
+
+Comparison is structural, through the project-owned canonical serialization and
+multiset equality, rather than by object identity: identity is not part of the
+persisted meaning of a trace, and requiring it would reject a caller who
+legitimately serialized a stage result between components.
+
+Nothing is re-run — no token counting, no normalized hashing, no scoring,
+filtering, allocation, ordering, or rendering. Inconsistent evidence fails with
+`COMPILATION_TRACE_BUILD_FAILED` and one of `invalid_config`,
+`inconsistent_request_evidence`, `inconsistent_stage_evidence`, or
+`invalid_trace_result`. Issue order is deterministic, and no partial trace is ever
+returned.
+
+#### Token reconciliation
+
+The totals reconcile exactly, at the group level, per the corrected INV-TRACE-003
+and METRICS 8.12:
+
+```text
+candidateTokens
+  = canonicalContentTokens + duplicateCandidateTokens
+
+canonicalContentTokens
+  = includedContentTokens + excludedCanonicalContentTokens
+
+excludedCanonicalContentTokens
+  = filteredContentTokens + allocationExcludedContentTokens
+```
+
+`duplicateCandidateTokens` is the difference between the wrapper sum and the group
+sum, never a chosen duplicate wrapper subtracted by identity. Rendering counts do
+not participate: `renderedTokens` is reported separately, under `rendering`.
+
+Arithmetic is overflow-safe. A total that leaves the exact non-negative safe
+integer range is an `invalid_trace_result` failure, never a published
+approximation (INV-BUDGET-005).
+
+#### What the trace deliberately does not carry
+
+No success or failure outcome, no final failure code, no final included list, no
+`compiledTokens`, no `unusedTokens`, no `renderingTokenDelta`, no warnings list,
+and no deterministic compilation identifier. Trace persistence is not implemented
+either; trace creation is not optional, but storing one is (DEC-020).
 
 ---
 
@@ -1616,7 +1829,11 @@ future work, so until it exists:
 3. INV-BUDGET-003 and INV-BUDGET-004 still require the future correction and
    failure behavior for rendered required content;
 4. INV-BUDGET-006 has no implemented producer, because final `compiledTokens` and
-   `unusedTokens` do not exist yet.
+   `unusedTokens` do not exist yet;
+5. no settled `CompilationTrace` exists. `TraceBuilder` (section 6.7) can record
+   one measured attempt, and always emits `settled: false`; only the correction
+   loop can settle a selection, and only a settled trace may be attached to a
+   successful `CompilationResult` (DEC-037).
 
 The future loop will render the selected blocks, tokenize the complete rendered
 string, consume a prefix of `optionalEvictionOrder` while the result overruns, and

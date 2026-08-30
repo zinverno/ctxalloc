@@ -597,6 +597,102 @@ budgetViolationCount = 0
 
 ---
 
+## 8.12 Trace Reconciliation Totals
+
+A `CompilationTrace` reports the totals that reconcile one traced selection
+(INV-TRACE-003, DEC-037). They are **content-token totals**: every one of them
+sums `ContextBlock.tokenCount` values, and no rendering count takes part.
+
+```text id="t14rec"
+candidateTokens
+  = sum(block.tokenCount) across EVERY validated CandidateBlock wrapper
+
+canonicalContentTokens
+  = sum(canonicalBlock.tokenCount) across EVERY deduplicated group exactly once
+
+duplicateCandidateTokens
+  = candidateTokens - canonicalContentTokens
+
+filteredContentTokens
+  = sum(canonicalBlock.tokenCount) for groups filtered by CandidateFilter
+
+allocationExcludedContentTokens
+  = sum(canonicalBlock.tokenCount) for eligible groups excluded by BudgetAllocator
+
+includedContentTokens
+  = sum(canonicalBlock.tokenCount) for currently included groups
+
+excludedCanonicalContentTokens
+  = filteredContentTokens + allocationExcludedContentTokens
+```
+
+They reconcile exactly:
+
+```text id="t14eqs"
+candidateTokens
+  = canonicalContentTokens + duplicateCandidateTokens
+
+canonicalContentTokens
+  = includedContentTokens + excludedCanonicalContentTokens
+```
+
+`candidateTokens` is 8.1 measured over wrappers, so a batch that repeats one
+piece of content counts it once per wrapper. `canonicalContentTokens` counts each
+group's canonical block once. The difference is therefore the cost the
+deduplicator removed, and it is a **group-level difference**: no "duplicate
+member" wrapper is chosen and subtracted, because repeated wrappers can be
+indistinguishable and picking one would be arbitrary (DEC-031).
+
+Because every group holds at least one validated member and its canonical block is
+one of the group's own blocks, `duplicateCandidateTokens` is never negative.
+
+The corresponding counts reconcile the same way:
+
+```text id="t14cnt"
+candidateCount
+  = sum(group.members.length)
+
+duplicateWrapperCount
+  = candidateCount - deduplicatedGroupCount
+
+eligibleGroupCount
+  = includedGroupCount + allocationExcludedGroupCount
+
+deduplicatedGroupCount
+  = filteredGroupCount + eligibleGroupCount
+```
+
+All values are finite non-negative safe integers, and the arithmetic is
+overflow-safe: a total that leaves the exact integer range is a structured trace
+failure, never a published approximation (INV-BUDGET-005).
+
+### These are not the final metrics whose names they resemble
+
+A trace carries `settled`. While it is `false`, its totals describe the
+**current** selection of one measured render attempt, and a later correction loop
+may settle a different one.
+
+```text id="t14sep"
+trace.totals.includedContentTokens   current allocation content, NOT 8.5 of a
+                                     settled selection
+
+trace.rendering.renderedTokens       the current render attempt (8.4.2), NOT
+                                     compiledTokens (8.4)
+
+trace.settled === false              no compilation has been settled
+```
+
+The final `includedContentTokens` of 8.5, `compiledTokens` of 8.4,
+`renderingTokenDelta` of 8.6, `budgetUtilization` of 8.9, and `unusedTokens` of
+8.10 keep their existing definitions and remain the responsibility of the
+compiler orchestration that settles a selection. Reporting an unsettled trace
+total under one of those names is a reporting error.
+
+A trace with `settled: false` must never be attached to a successful
+`CompilationResult`.
+
+---
+
 # 9. Information Preservation Metrics
 
 ## 9.1 Required-Block Recall
@@ -915,17 +1011,30 @@ expectedFailureAccuracy
 
 ## 13.3 Trace Completeness
 
+Completeness is measured at the two levels INV-TRACE-001 defines, because the
+pipeline decides groups while preserving wrappers (DEC-037).
+
 ```text id="xpkvrp"
-traceCompleteness
-  = candidates with exactly one final trace decision
-    / all validated candidates
+wrapperAccountingCompleteness
+  = validated wrappers appearing exactly once
+    across all trace group members
+    / all validated wrappers
+
+groupDecisionCompleteness
+  = deduplicated groups with exactly one disposition
+    / all deduplicated groups
 ```
 
 Target:
 
 ```text id="s4el8u"
-traceCompleteness = 1.00
+wrapperAccountingCompleteness = 1.00
+groupDecisionCompleteness     = 1.00
 ```
+
+Invalid candidates are not in the denominator of either: a rejected batch produces
+no validated set and no post-validation trace, and its failure is reported as
+expected-failure accuracy (13.2) instead.
 
 ## 13.4 Decision Reason Coverage
 
@@ -945,10 +1054,13 @@ decisionReasonCoverage = 1.00
 
 A trace reconciles when:
 
-* token totals are mathematically consistent;
+* the token totals satisfy every equation of 8.12;
 * included decisions match rendered blocks;
 * excluded decisions do not appear in rendered output;
 * usage fields match final tokenization.
+
+For an unsettled trace the last condition is read against the traced render
+attempt rather than a settled compilation.
 
 ```text id="nmzv6a"
 traceReconciliationRate

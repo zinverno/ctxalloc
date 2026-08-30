@@ -18,6 +18,7 @@
  *   -> BudgetAllocator
  *   -> ContextOrderer
  *   -> ContextRenderer
+ *   -> TraceBuilder
  * ```
  *
  * `CompilationRequestValidator` proves a request is a well-formed record and
@@ -36,7 +37,9 @@
  * available block-content budget (DEC-033). `ContextOrderer` puts that selection
  * into source order for the renderer, changing no decision (DEC-034).
  * `ContextRenderer` serializes that order as boundary-safe JSONL and tokenizes
- * the exact string it produced (DEC-035).
+ * the exact string it produced (DEC-035). `TraceBuilder` observes that evidence
+ * and projects it into one serializable, privacy-minimized `CompilationTrace`,
+ * changing no decision (DEC-037).
  *
  * Filtering establishes eligibility; it does not select. Required resolution,
  * category constraints, the token budget, eviction, and final inclusion all
@@ -51,10 +54,20 @@
  * orchestration loop, so no stage publishes a final `compiledTokens`,
  * `unusedTokens`, or `CompilationResult` yet.
  *
- * Nothing composes the stages: `ContextCompiler` does not exist, and neither
- * does trace construction, the correction loop, or a compilation fingerprint.
- * They are later phases and are deliberately absent, as is the candidate provider
- * port, which belongs outside the kernel entirely.
+ * Tracing observes; it does not settle. `TraceBuilder` receives evidence the
+ * components already produced, verifies it belongs to one coherent pipeline, and
+ * copies it into a versioned snapshot — so every trace this phase builds carries
+ * `settled: false`, and none may be attached to a successful `CompilationResult`
+ * (INV-TRACE-006). `fingerprintCompilationRequest` identifies the exact validated
+ * request value and is deliberately **not** a compilation identifier: the
+ * composition inputs it excludes are recorded beside it in the trace (DEC-036,
+ * DEC-037).
+ *
+ * Nothing composes the stages: `ContextCompiler` does not exist, and neither does
+ * the correction loop, the settled final trace, `CompilationResult`, nor a
+ * deterministic compilation identifier. They are later phases and are
+ * deliberately absent, as is the candidate provider port, which belongs outside
+ * the kernel entirely.
  */
 
 export {
@@ -148,6 +161,37 @@ export {
   type ValidatedCandidateSet,
 } from './candidate-validator.js';
 export {
+  COMPILATION_TRACE_SCHEMA_VERSION,
+  CompilationTraceError,
+  TraceBuilder,
+  type CompilationTrace,
+  type CompilationTraceAllocation,
+  type CompilationTraceAllocationDecision,
+  type CompilationTraceBuildInput,
+  type CompilationTraceCanonicalBlock,
+  type CompilationTraceComposition,
+  type CompilationTraceDisposition,
+  type CompilationTraceExcludedDecision,
+  type CompilationTraceFilteredDecision,
+  type CompilationTraceFilteringDecision,
+  type CompilationTraceGroup,
+  type CompilationTraceIncludedDecision,
+  type CompilationTraceIssueCode,
+  type CompilationTraceMember,
+  type CompilationTraceOrdering,
+  type CompilationTracePolicyEligibleDecision,
+  type CompilationTracePolicyIdentities,
+  type CompilationTraceRendering,
+  type CompilationTraceRequest,
+  type CompilationTraceRequiredEligibleDecision,
+  type CompilationTraceRetrieval,
+  type CompilationTraceRetrievalScore,
+  type CompilationTraceSource,
+  type CompilationTraceTotals,
+  type TraceBuilderConfig,
+  type TraceIdentity,
+} from './compilation-trace.js';
+export {
   COMPILATION_POLICY_SCHEMA_VERSION,
   CompilationPolicyError,
   CompilationPolicyValidator,
@@ -161,3 +205,8 @@ export {
   type CompilationRequest,
   type CompilationRequestIssueCode,
 } from './compilation-request.js';
+export {
+  COMPILATION_REQUEST_FINGERPRINT_VERSION,
+  fingerprintCompilationRequest,
+  type CompilationRequestFingerprint,
+} from './request-fingerprint.js';

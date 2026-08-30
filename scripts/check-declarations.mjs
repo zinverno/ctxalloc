@@ -40,6 +40,8 @@ const DECLARATIONS = [
   'packages/compiler/dist/candidate-filter.d.ts',
   'packages/compiler/dist/compilation-policy.d.ts',
   'packages/compiler/dist/compilation-request.d.ts',
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'packages/compiler/dist/request-fingerprint.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -1231,6 +1233,123 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './compilation-requ
   }
 }
 
+// The compilation trace is a versioned, privacy-minimized, serializable snapshot
+// that no stage decision depends on (DEC-037).
+requireContains('packages/compiler/dist/compilation-trace.d.ts', 'interface CompilationTrace');
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'COMPILATION_TRACE_SCHEMA_VERSION = 1',
+);
+requireContains('packages/compiler/dist/compilation-trace.d.ts', 'declare class TraceBuilder');
+requireContains('packages/compiler/dist/compilation-trace.d.ts', 'constructor(config: unknown);');
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'build(input: CompilationTraceBuildInput): CompilationTrace;',
+);
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'declare class CompilationTraceError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'readonly code = "COMPILATION_TRACE_BUILD_FAILED"',
+);
+requireContains('packages/compiler/dist/compilation-trace.d.ts', 'interface TraceBuilderConfig');
+requireContains('packages/compiler/dist/compilation-trace.d.ts', 'readonly compilerId: string;');
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'readonly compilerVersion: string;',
+);
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'interface CompilationTraceBuildInput',
+);
+for (const member of [
+  'readonly request: CompilationRequest;',
+  'readonly validated: ValidatedCandidateSet;',
+  'readonly deduplicated: DeduplicatedCandidateSet;',
+  'readonly filtered: FilteredCandidateSet;',
+  'readonly rendered: RenderedContextAttempt;',
+]) {
+  requireContains('packages/compiler/dist/compilation-trace.d.ts', member);
+}
+// The schema version is the exact literal 1, and finality is a boolean so a
+// later phase can settle a trace without changing the persisted schema.
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'readonly schemaVersion: typeof COMPILATION_TRACE_SCHEMA_VERSION;',
+);
+requireContains('packages/compiler/dist/compilation-trace.d.ts', 'readonly settled: boolean;');
+requireContains('packages/compiler/dist/index.d.ts', "} from './compilation-trace.js'");
+
+// The request fingerprint accepts a validated CompilationRequest and is not a
+// compilation identifier (DEC-037).
+requireContains(
+  'packages/compiler/dist/request-fingerprint.d.ts',
+  'COMPILATION_REQUEST_FINGERPRINT_VERSION = 1',
+);
+requireContains(
+  'packages/compiler/dist/request-fingerprint.d.ts',
+  'type CompilationRequestFingerprint = string',
+);
+requireContains(
+  'packages/compiler/dist/request-fingerprint.d.ts',
+  'declare function fingerprintCompilationRequest(request: CompilationRequest): CompilationRequestFingerprint;',
+);
+requireContains('packages/compiler/dist/index.d.ts', "} from './request-fingerprint.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/compilation-trace.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // Schema version 1 can represent no raw content, no rendered string, and no
+    // arbitrary metadata (INV-SEC-003).
+    for (const forbidden of [
+      'readonly content:',
+      'readonly query:',
+      'readonly renderedContext:',
+      'readonly metadata',
+      'readonly title',
+      'includeContent',
+      'readonly compiledTokens',
+      'readonly unusedTokens',
+      'readonly renderingTokenDelta',
+      'compilationId',
+      'CompilationResult',
+      'ContextCompiler',
+      // Finality is not a literal, and the disposition is current, not final.
+      'settled: false',
+      'finalDisposition',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/compilation-trace.d.ts exposes the forbidden concept "${forbidden}"`,
+        );
+      }
+    }
+  }
+}
+
+{
+  const content = contents.get('packages/compiler/dist/request-fingerprint.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const forbidden of [
+      'compilationId',
+      'CompilationFingerprint',
+      'Tokenizer',
+      'compilerVersion',
+      'CompilationTrace',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/request-fingerprint.d.ts exposes the forbidden concept "${forbidden}"`,
+        );
+      }
+    }
+  }
+}
+
 // The nested policy parsers exist so one rule has one owner. They are package
 // internals: the entry point never re-exports them (INV-ADAPTER-001).
 {
@@ -1251,19 +1370,33 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './compilation-requ
       'underPolicy',
       'policySlice',
       'policySlot',
+      'domainSeparatedDigest',
+      'TraceBuilderConfigSchema',
+      'checkRequestEvidence',
+      'checkStageEvidence',
+      'calculateTotals',
+      'traceGroup',
+      'traceMember',
+      'traceCanonicalBlock',
+      'traceFilteringDecision',
+      'safeSum',
+      'multisetOf',
+      'GroupEvidence',
     ]) {
       if (declarations.includes(internal)) {
         fail(`packages/compiler/dist/index.d.ts re-exports the internal helper "${internal}"`);
       }
     }
-    // No orchestration, trace, or fingerprint is published in this phase.
+    // The trace foundation is published; the orchestration that settles a
+    // compilation, and the deterministic compilation identifier it will need,
+    // are not (DEC-037).
     for (const future of [
       'ContextCompiler',
-      'TraceBuilder',
-      'CompilationTrace',
       'CompilationResult',
       'requestFingerprint',
       'compilationFingerprint',
+      'compilationId',
+      'CompilationIdentifier',
     ]) {
       if (declarations.includes(future)) {
         fail(`packages/compiler/dist/index.d.ts publishes the future concept "${future}"`);
@@ -1296,7 +1429,9 @@ const COMPILER_LEAKED_TYPES = [
   'canonicalJson',
   'compareCodeUnits',
   'pointerFor',
-  'Group',
+  // Word-bounded: `CompilationTraceGroup` is a published Phase 14 type, while
+  // the bare `Group` remains a Phase 8 internal one.
+  /\bGroup\b/,
   // Word-bounded: `OrderedCandidateSet` is a published Phase 11 type, while the
   // bare `Ordered` remains a Phase 8 internal one.
   /\bOrdered\b/,
@@ -1337,6 +1472,8 @@ for (const relativePath of [
   'packages/compiler/dist/context-renderer.d.ts',
   'packages/compiler/dist/compilation-policy.d.ts',
   'packages/compiler/dist/compilation-request.d.ts',
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'packages/compiler/dist/request-fingerprint.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
@@ -1352,10 +1489,11 @@ for (const relativePath of [
   // No later compiler stage may appear before its phase implements it.
   // `Deduplicator` left this list in Phase 8, `Scorer` in Phase 9,
   // `BudgetAllocator` in Phase 10, `ContextOrderer` in Phase 11,
-  // `ContextRenderer` in Phase 12, and `CandidateFilter` in Phase 13, when each
-  // became a published stage (DEC-031, DEC-032, DEC-033, DEC-034, DEC-035,
-  // DEC-036). Each is therefore checked by name only where it must not appear.
-  for (const stage of ['TraceBuilder', 'ContextCompiler', 'CandidateProvider']) {
+  // `ContextRenderer` in Phase 12, `CandidateFilter` in Phase 13, and
+  // `TraceBuilder` in Phase 14, when each became a published stage (DEC-031,
+  // DEC-032, DEC-033, DEC-034, DEC-035, DEC-036, DEC-037). Each is therefore
+  // checked by name only where it must not appear.
+  for (const stage of ['ContextCompiler', 'CandidateProvider']) {
     if (declarations.includes(stage)) {
       fail(`${relativePath} declares the unimplemented stage "${stage}"`);
     }

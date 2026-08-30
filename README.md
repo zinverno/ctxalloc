@@ -9,7 +9,7 @@ or agent framework.
 
 ## Status
 
-Phase 13 — compilation contracts and deterministic policy filtering. The repository contains
+Phase 14 — deterministic compilation traces and request fingerprinting. The repository contains
 the TypeScript monorepo scaffolding from Phase 1 (workspace structure, strict
 compiler and linting configuration, test infrastructure, package boundaries,
 boundary checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
@@ -20,9 +20,10 @@ deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
 tokenizer contract test suite, a real offline tokenizer adapter in
 `@ctxalloc/tokenization`, the first two application use cases in
 `@ctxalloc/application`, and the compiler kernel in `@ctxalloc/compiler`:
-structural request and policy validation plus seven components —
+structural request and policy validation plus eight components —
 `CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`,
-`CandidateFilter`, `BudgetAllocator`, `ContextOrderer`, and `ContextRenderer`.
+`CandidateFilter`, `BudgetAllocator`, `ContextOrderer`, `ContextRenderer`, and
+the observational `TraceBuilder`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
 `js-tiktoken` (pinned to 1.0.21, see [DEC-027](./docs/DECISIONS.md)). It runs
@@ -433,12 +434,72 @@ three things — `score.total`, `attributes.required`, and its own policy — ta
 no tokenizer, and is not an access-control boundary: scope isolation stays with
 request validation and `CandidateValidator`.
 
+### Compilation traces and request fingerprinting
+
+`TraceBuilder` closes the implemented kernel (see
+[DEC-037](./docs/DECISIONS.md)). It takes the evidence the components already
+produced — the validated request, the validated candidate set, the deduplicated
+set, the filtered set, and the render attempt — plus one explicit compiler
+identity, and returns a `CompilationTrace`: a versioned, serializable snapshot of
+what the compiler decided and why.
+
+**It is observational.** It validates nothing again, deduplicates nothing, scores
+nothing, allocates nothing, orders nothing, renders nothing, and calls no
+tokenizer. Removing it would change no compiler output. What it may do is copy
+stage evidence, calculate deterministic digests, count and sum already-validated
+numbers, and **refuse to serialize evidence that contradicts itself** — a caller
+who mixed two runs gets a structured failure, never a repaired record.
+
+**Wrappers are accounted for; groups are decided.** After exact deduplication the
+compiler decides a _group_, while every original candidate wrapper is kept as
+membership evidence. So every validated wrapper appears exactly once as a member
+of exactly one trace group, and every group carries exactly one current
+disposition — filtered, included, or excluded. No representative wrapper is
+invented: two byte-identical wrappers produce two identical member records,
+because picking one of them by input position would be a determinism bug. A
+filtered group carries no allocation decision at all, since it never reached the
+allocator.
+
+**Nothing raw is representable.** Block content, the query, the rendered string,
+source metadata, block metadata, source titles, and retrieval metadata have no
+field to travel in — and there is no `includeContent` switch to get wrong. The
+trace records identities, decision reasons, score components, token counts,
+source locations, and deterministic `sha256:` digests of the query and the
+rendered context instead. Hashing is audit identity, not authorization: no
+compiler rule depends on collision resistance.
+
+**Totals reconcile exactly, at the group level.** `candidateTokens` sums every
+validated wrapper, `canonicalContentTokens` sums each group's canonical block
+once, and their difference is `duplicateCandidateTokens` — never a chosen
+"duplicate member" wrapper subtracted by identity. Included, filtered, and
+allocation-excluded content sum back to the canonical total. Arithmetic is
+overflow-safe, and a total that leaves the exact safe-integer range fails rather
+than being published. Rendering counts take no part: `renderedTokens` is reported
+separately.
+
+**The request fingerprint identifies the exact validated request value.** It is
+SHA-256 over a domain-separated canonical serialization of the whole request, so
+`request.id`, the query, and **array order** all participate, while object
+property insertion order does not. Two requests that compile to the same output
+may fingerprint differently — deliberately: order-independence is a property of
+compiler _processing_, not of the caller's payload. It is **not a compilation
+identifier**: it excludes compiler, tokenizer, and renderer identity by design,
+and those are recorded beside it in the trace. Compiler version is injected
+configuration, never read from a manifest, a git revision, or the environment.
+
+**The trace is current, not final.** Every trace this phase builds carries
+`settled: false`: the stage evidence is recorded and the render attempt is
+measured — including an over-budget one, which traces successfully — but nothing
+has accepted or rejected a compilation. A trace with `settled: false` must never
+be attached to a successful `CompilationResult`.
+
 **No correction loop and no `CompilationResult` yet.** Nothing consumes a render
 attempt to accept or reject a compilation, so there is still no final
-`compiledTokens`, no `unusedTokens`, and **no final hard-budget guarantee**.
-Nothing composes the components either: there is no `ContextCompiler`, no request
-or compilation fingerprint, no trace builder, no retrieval provider, no
-persistence, and no HTTP or CLI behavior, and CtxAlloc supports no Obsidian
+`compiledTokens`, no `unusedTokens`, no `renderingTokenDelta`, and **no final
+hard-budget guarantee**. Nothing composes the components either: there is no
+`ContextCompiler`, no settled trace, no validation-failure trace envelope, no
+deterministic compilation identifier, no trace persistence, no retrieval
+provider, and no HTTP or CLI behavior, and CtxAlloc supports no Obsidian
 integration.
 
 ## Prerequisites
