@@ -234,6 +234,9 @@ Candidate Validation
 Deterministic Deduplication
         |
         v
+Deterministic Scoring
+        |
+        v
 Policy Filtering
         |
         v
@@ -263,6 +266,27 @@ Model consumes compiled context.
 ```
 
 These responsibilities must not be merged.
+
+Three stages are implemented: candidate validation (section 6.1), deterministic
+deduplication (section 6.2), and deterministic scoring (section 6.3). Everything
+below them is future work.
+
+`CandidateFilter` does not exist, and its position in this flow is **not yet
+decided**. Two constraints are already fixed, and nothing more:
+
+1. Filtering must not run before deduplication. Filtering a group before its
+   duplicates are known would let the surviving copy of one piece of content
+   depend on which wrapper a filter happened to keep (DEC-031).
+2. Filtering may run either before or after scoring without changing any
+   surviving candidate's score. `CandidateScorer` normalizes each candidate
+   against fixed policy ranges and never against the values observed in the
+   current batch, so removing an unrelated candidate cannot move another
+   candidate's numbers (DEC-032). A filter that wants to read a score must of
+   course run after scoring.
+
+The diagram draws filtering after scoring for that reason alone; the placement
+is recorded here as undecided rather than settled, because the policy that would
+define a filtering rule does not exist yet.
 
 ---
 
@@ -613,21 +637,157 @@ to the trace phase, which can derive it from the groups this stage returns.
 
 ### 6.3 CandidateScorer
 
-Status: future phase.
+Status: implemented (DEC-032).
+
+It consumes a `DeduplicatedCandidateSet` and an explicit `referenceTime`, and
+returns a `ScoredCandidateSet`, the next compiler-stage type:
+
+```ts
+interface ScoredCandidateSet {
+  readonly scope: Scope;
+  readonly sourceDocuments: readonly SourceDocument[];
+  readonly policyId: string;
+  readonly policyVersion: string;
+  readonly referenceTime: Timestamp;
+  readonly candidates: readonly ScoredCandidate[];
+}
+
+interface ScoredCandidate {
+  readonly candidate: DeduplicatedCandidate;
+  readonly score: CandidateScore;
+}
+
+interface CandidateScore {
+  readonly total: number;
+  readonly retrieval?: RetrievalScoreComponent;
+  readonly authoredPriority?: AuthoredPriorityScoreComponent;
+  readonly sourcePriority?: SourcePriorityScoreComponent;
+  readonly categoryPriority?: CategoryPriorityScoreComponent;
+  readonly recency?: RecencyScoreComponent;
+}
+```
+
+The structure is an ephemeral compiler-stage result and is never persisted, so it
+carries no schema version.
 
 Responsibilities:
 
-* calculate a comparable deterministic score;
-* combine policy priority, relevance, recency, and source weight;
-* preserve separate score components in the trace;
-* use stable tie-breaking.
+* strict runtime validation of the scoring policy and the reference time;
+* normalization of explicitly configured signals onto a comparable `[0, 1]` scale;
+* transparent score components carrying evidence, weight, and contribution;
+* deterministic aggregation of duplicate-group evidence;
+* a deterministic total and a stable output ranking.
 
-The score is an input to allocation, not an automatic inclusion decision.
+#### CandidateScoringPolicy is a narrow scoring slice
 
-It consumes deduplicated candidate groups and their preserved member evidence.
+`CandidateScorer` takes one versioned `CandidateScoringPolicy`, not the broad
+future `CompilationPolicy` of section 5.6. It carries `schemaVersion`,
+`policyId`, `policyVersion`, and five optional components — `retrieval`,
+`authoredPriority`, `sourcePriority`, `categoryPriority`, and `recency` — and
+nothing about filtering, allocation, ordering, or rendering. A later
+`CompilationPolicy` may contain or reference it without changing what this stage
+means by it.
+
+Policy validation is strict: unknown fields are rejected rather than stripped,
+nothing is coerced, no default is injected, exact strings are preserved, and
+duplicate rule identifiers, duplicate provider contracts, duplicate source
+entries, and duplicate category entries are all rejected rather than resolved by
+array order. Lookups are compiled only after validation, so the declaration order
+of the policy arrays cannot affect a result.
+
+#### Raw provider scores are never compared directly
+
+A retrieval score participates only when the policy owns an exact rule for the
+tuple `[providerId, providerVersion, semantics, higherIsBetter]`, with a fixed
+inclusive `[min, max]` range:
+
+```text
+higherIsBetter true   normalized = (rawValue - min) / (max - min)
+higherIsBetter false  normalized = (max - rawValue) / (max - min)
+```
+
+Ranges are policy input. They are never inferred from the provider, from a rank,
+or from the values in the current batch: batch-relative normalization would make
+one candidate's score depend on which unrelated candidates were retrieved
+alongside it. A value outside its range rejects rather than clamps, and a scored
+record with no exact rule rejects rather than being read as zero or dropped
+(INV-SCORE-002, INV-SCORE-004). A retrieval record with no score is valid and
+contributes no relevance; rank alone and provider identity alone are never
+relevance (INV-PROV-003).
+
+#### Normalized components
+
+Every enabled component publishes `normalizedValue` in `[0, 1]`, the policy
+`weight`, `contribution = normalizedValue * weight`, its aggregation rule, and
+explicit evidence explaining where the normalized value came from. A disabled
+component is absent rather than zero; a configured component with weight `0` is
+present with its evidence and contributes `0`.
+
+* **retrieval** — normalized provider relevance under an exact contract.
+* **authoredPriority** — `(priority - min) / (max - min)` over the policy's
+  inclusive safe-integer range; an out-of-range priority rejects, an absent one
+  contributes no evidence.
+* **sourcePriority** — exact `SourceDocument.id` rules with an explicit default.
+  Nothing is inferred from source type, path, or `SourceDocument.metadata`.
+* **categoryPriority** — exact category string rules with an explicit default. No
+  case folding, trimming, prefix matching, or hierarchy.
+* **recency** — `max(0, 1 - ageSeconds / maxAgeSeconds)` against the supplied
+  reference time, using `updatedAt ?? createdAt`, with the policy's explicit
+  `missingValue` when a block carries neither and age clamped to zero for a
+  future timestamp.
+
+`total` is the arithmetic sum of the present contributions in the fixed order
+retrieval, authored priority, source priority, category priority, recency.
+Weights need not sum to one, so a total is a policy-relative utility rather than
+a probability, comparable only within one run of one `policyId` and
+`policyVersion`. A non-finite contribution or total rejects the batch.
+
+#### Duplicate evidence aggregates by maximum
+
 Deduplication keeps every wrapper and every retrieval record precisely so the
 scorer can read them; it must not reconstruct or approximate retrieval data that
-it believes was lost.
+it believes was lost. All members are inspected, not only the wrapper carrying
+the canonical block.
+
+Every component aggregates its group's evidence by **maximum** — over normalized
+retrieval evidence, and over the distinct blocks of the group for the other four.
+Nothing is summed, averaged, or counted, and no wrapper is preferred for being
+canonical, lowest-ranked, or from a particular provider. Repeating one wrapper
+twenty times therefore leaves the value exactly where one wrapper left it. All
+normalized evidence stays visible, in an order that depends only on the records
+themselves.
+
+#### Required status is not a score
+
+There is no required component, no required boost, and no large constant. Required
+blocks remain a separate allocation class that the allocator resolves first
+(INV-SCORE-003, INV-ALLOC-001). A required candidate may score zero while an
+optional one scores higher.
+
+#### Nothing is filtered and nothing is allocated
+
+Every deduplicated candidate appears exactly once in the result unless scoring
+fails as a whole. No candidate is excluded for a low score, an absent category, a
+low source priority, old content, missing retrieval data, a poor rank, or a
+negative authored priority, and no minimum score threshold exists. No token budget
+is read, no token cost is subtracted, no score-per-token is computed, and no
+inclusion, exclusion, or eviction decision is made (INV-ALLOC-002).
+
+#### Stable output ranking
+
+`candidates` is ordered by `score.total` descending, then by `canonicalBlock.id`
+ascending compared by UTF-16 code unit (INV-DET-005). Required status does not
+change that order, and the allocator must still treat required candidates as a
+separate class wherever they land. `sourceDocuments` is returned in `id` order,
+`scope` unchanged, and `policyId`, `policyVersion`, and `referenceTime` copied
+verbatim from validated values.
+
+The stage reads no clock: `referenceTime` is supplied per call and validated with
+the project `Timestamp` contract, and no `Date` instance reaches the public
+surface (INV-DET-004). It calls no tokenizer, no retrieval provider, and no
+model, and it implements no lexical, BM25, embedding, or LLM relevance scorer of
+its own: query relevance arrives through `CandidateRetrieval` under an explicit
+provider contract. No redundancy or near-duplicate score exists either.
 
 ### 6.4 BudgetAllocator
 

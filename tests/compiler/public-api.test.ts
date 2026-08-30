@@ -1,15 +1,23 @@
 import { readFileSync } from 'node:fs';
 import * as compiler from '@ctxalloc/compiler';
 import {
+  CANDIDATE_SCORING_POLICY_SCHEMA_VERSION,
   CandidateDeduplicator,
+  CandidateScorer,
+  CandidateScoringError,
   CandidateValidationError,
   CandidateValidator,
+  type CandidateScore,
+  type CandidateScoringPolicy,
   type CandidateValidationInput,
   type CanonicalSelectionReason,
   type DeduplicatedCandidate,
   type DeduplicatedCandidateMember,
   type DeduplicatedCandidateSet,
   type DuplicateMatchReason,
+  type RetrievalNormalizationRule,
+  type ScoredCandidate,
+  type ScoredCandidateSet,
   type ValidatedCandidateSet,
 } from '@ctxalloc/compiler';
 import type { Tokenizer } from '@ctxalloc/ports';
@@ -19,6 +27,7 @@ import type {
   ContextBlock,
   Scope,
   SourceDocument,
+  Timestamp,
 } from '../../packages/domain/src/index.js';
 import { candidate, countWords, input, sourceDocument, wordTokenizer } from './fixtures.js';
 
@@ -40,7 +49,9 @@ const SOURCE_FILES = [
   'packages/compiler/src/index.ts',
   'packages/compiler/src/candidate-validator.ts',
   'packages/compiler/src/candidate-deduplicator.ts',
+  'packages/compiler/src/candidate-scorer.ts',
   'packages/compiler/src/canonical-json.ts',
+  'packages/compiler/src/validation-issues.ts',
 ] as const;
 
 function readSource(relativePath: string): string {
@@ -54,9 +65,12 @@ function importSpecifiers(relativePath: string): string[] {
 }
 
 describe('@ctxalloc/compiler public API', () => {
-  it('exports the two implemented compiler stages and the validation error only', () => {
+  it('exports the three implemented compiler stages and their errors only', () => {
     expect(Object.keys(compiler).sort()).toEqual([
+      'CANDIDATE_SCORING_POLICY_SCHEMA_VERSION',
       'CandidateDeduplicator',
+      'CandidateScorer',
+      'CandidateScoringError',
       'CandidateValidationError',
       'CandidateValidator',
     ]);
@@ -67,13 +81,40 @@ describe('@ctxalloc/compiler public API', () => {
       .map((match) => match[1])
       .sort();
     expect(exported).toEqual([
+      'AuthoredPriorityScoreComponent',
+      'AuthoredPriorityScoreEvidence',
+      'AuthoredPriorityScoringPolicy',
+      'CandidateScore',
+      'CandidateScoringIssueCode',
+      'CandidateScoringPolicy',
       'CandidateValidationInput',
       'CandidateValidationIssueCode',
       'CanonicalSelectionReason',
+      'CategoryPriorityRule',
+      'CategoryPriorityScoreComponent',
+      'CategoryPriorityScoreEvidence',
+      'CategoryPriorityScoringPolicy',
       'DeduplicatedCandidate',
       'DeduplicatedCandidateMember',
       'DeduplicatedCandidateSet',
       'DuplicateMatchReason',
+      'PolicyValueSource',
+      'RecencyScoreComponent',
+      'RecencyScoreEvidence',
+      'RecencyScoringPolicy',
+      'RecencyTimestampField',
+      'RecencyValueSource',
+      'RetrievalNormalizationRule',
+      'RetrievalScoreComponent',
+      'RetrievalScoreEvidence',
+      'RetrievalScoringPolicy',
+      'ScoreAggregation',
+      'ScoredCandidate',
+      'ScoredCandidateSet',
+      'SourcePriorityRule',
+      'SourcePriorityScoreComponent',
+      'SourcePriorityScoreEvidence',
+      'SourcePriorityScoringPolicy',
       'ValidatedCandidateSet',
     ]);
   });
@@ -129,6 +170,62 @@ describe('@ctxalloc/compiler public API', () => {
     expect(matchReason).toBe('same-block-id');
   });
 
+  it('accepts a DeduplicatedCandidateSet with an explicit reference time and returns the documented scored result', () => {
+    const validated = new CandidateValidator(wordTokenizer).validate(input());
+    const deduplicated = new CandidateDeduplicator().deduplicate(validated);
+
+    const normalizationRule: RetrievalNormalizationRule = {
+      ruleId: 'cosine',
+      providerId: 'sqlite-fts5',
+      providerVersion: '1.2.3',
+      semantics: 'cosine-similarity',
+      higherIsBetter: true,
+      min: 0,
+      max: 1,
+    };
+    const scoringPolicy: CandidateScoringPolicy = {
+      schemaVersion: CANDIDATE_SCORING_POLICY_SCHEMA_VERSION,
+      policyId: 'baseline',
+      policyVersion: '1.0.0',
+      retrieval: { weight: 1, aggregation: 'max', rules: [normalizationRule] },
+    };
+
+    const scored: ScoredCandidateSet = new CandidateScorer(scoringPolicy).score(
+      deduplicated,
+      '2026-06-01T12:00:00.000Z',
+    );
+
+    const scope: Scope = scored.scope;
+    const documents: readonly SourceDocument[] = scored.sourceDocuments;
+    const referenceTime: Timestamp = scored.referenceTime;
+    const entries: readonly ScoredCandidate[] = scored.candidates;
+    const entry = entries[0];
+    if (entry === undefined) throw new Error('expected one scored candidate');
+    const group: DeduplicatedCandidate = entry.candidate;
+    const candidateScore: CandidateScore = entry.score;
+
+    expect(scope).toEqual(validated.scope);
+    expect(documents).toHaveLength(1);
+    expect(referenceTime).toBe('2026-06-01T12:00:00.000Z');
+    expect(scored.policyId).toBe('baseline');
+    expect(scored.policyVersion).toBe('1.0.0');
+    expect(group.canonicalBlock.id).toBe('block-1');
+    expect(candidateScore.total).toBe(0);
+    expect(candidateScore.retrieval?.aggregation).toBe('max');
+    expect(CandidateScoringError.prototype).toBeInstanceOf(Error);
+  });
+
+  it('accepts unknown policy and reference time at the runtime boundary', () => {
+    const untypedPolicy: unknown = { schemaVersion: 1, policyId: 'p', policyVersion: '1' };
+    const scorer = new CandidateScorer(untypedPolicy);
+    const batch = new CandidateDeduplicator().deduplicate(
+      new CandidateValidator(wordTokenizer).validate(input()),
+    );
+    const untypedTime: unknown = '2026-06-01T12:00:00.000Z';
+
+    expect(() => scorer.score(batch, untypedTime)).not.toThrow();
+  });
+
   it('accepts unknown at the runtime boundary', () => {
     const validator = new CandidateValidator(wordTokenizer);
     const untyped: unknown = input();
@@ -149,7 +246,6 @@ describe('@ctxalloc/compiler public API', () => {
   it('exports no later compiler stage and no retrieval port', () => {
     for (const name of [
       'CandidateFilter',
-      'CandidateScorer',
       'BudgetAllocator',
       'ContextOrderer',
       'ContextRenderer',
@@ -238,6 +334,7 @@ describe('@ctxalloc/compiler public API', () => {
     for (const file of [
       'packages/compiler/src/candidate-validator.ts',
       'packages/compiler/src/candidate-deduplicator.ts',
+      'packages/compiler/src/candidate-scorer.ts',
     ]) {
       const declaredExports = readSource(file)
         .split('\n')
@@ -251,6 +348,9 @@ describe('@ctxalloc/compiler public API', () => {
     // re-exports it (INV-ADAPTER-001).
     expect(entry).not.toContain('canonicalJson');
     expect(entry).not.toContain('canonical-json');
+    // The shared issue-rendering helpers are internal too.
+    expect(entry).not.toContain('pointerFor');
+    expect(entry).not.toContain('validation-issues');
   });
 
   it('INV-ADAPTER-001: exposes no mutable collection in the public contract', () => {

@@ -77,6 +77,7 @@ A newer decision has replaced the previous one.
 | DEC-029 | Chunk Markdown deterministically in the application layer      | Accepted |
 | DEC-030 | Validate request-specific candidate wrappers before compiler policy stages | Accepted |
 | DEC-031 | Deduplicate exact candidate content before policy scoring | Accepted |
+| DEC-032 | Normalize explicit candidate signals before deterministic allocation | Accepted |
 
 ---
 
@@ -1796,6 +1797,229 @@ Deduplication does not solve this and does not attempt to. No `sourceContentHash
 Because deduplication normalizes ordering, the candidate order a retrieval adapter happens to produce stops being observable from this stage onward. That is the intended effect: later stages traverse a stable sequence, and a provider cannot influence compiler decisions through array position.
 
 Policy filtering, scoring, required-block resolution, allocation, ordering, rendering, traces, compiler orchestration, retrieval, persistence, the CLI, and the HTTP API remain later phases.
+
+---
+
+## DEC-032: Normalize Explicit Candidate Signals Before Deterministic Allocation
+
+### Status
+
+Accepted
+
+### Decision
+
+Deterministic candidate scoring is the third stage of the compiler kernel. It lives in `@ctxalloc/compiler` as `CandidateScorer`, one synchronous, pure, offline class that turns a `DeduplicatedCandidateSet` into a `ScoredCandidateSet`.
+
+Its only injected dependency is an explicit versioned `CandidateScoringPolicy`, and time reaches it only as an explicit `referenceTime` argument to `score()`. It reads no file, opens no socket, queries no database, calls no model, calls no retrieval provider, calls no tokenizer, reads no clock, and generates no random value (INV-DET-001, INV-DET-003, INV-DET-004, INV-DEP-002).
+
+It does not filter by policy, read a token budget, decide inclusion or exclusion, evict anything, resolve required blocks against a budget, allocate, order for rendering, render, build a trace, or persist anything.
+
+### CandidateValidator Remains the Trust Boundary
+
+The stage consumes a `DeduplicatedCandidateSet` produced by `CandidateDeduplicator`, which itself consumes a `ValidatedCandidateSet`. `CandidateValidator` has already proved the schema, the scope, the source registry, the UTF-16 well-formedness, the token counts, the content hashes, the timestamp shapes, and that no block ID stands for two different canonical records.
+
+`CandidateScorer` therefore revalidates no candidate, re-counts no token, re-hashes no content, and repairs nothing. That is a stage contract, not a runtime boundary, exactly as in DEC-031.
+
+Two things reaching this stage are *not* covered by that contract, and both are runtime boundaries with their own strict validation: the scoring policy, which is external configuration, and `referenceTime`, which is supplied per call.
+
+### A Narrow Versioned Scoring Policy, Not the Full CompilationPolicy
+
+ARCHITECTURE 5.6 describes a future `CompilationPolicy` covering filtering, scoring, allocation, ordering, and rendering. That broad object is deliberately not built here.
+
+Only the scoring slice exists, because only the scoring stage exists. `CandidateScoringPolicy` carries `schemaVersion`, `policyId`, `policyVersion`, and five optional components:
+
+```ts
+interface CandidateScoringPolicy {
+  readonly schemaVersion: 1;
+  readonly policyId: string;
+  readonly policyVersion: string;
+  readonly retrieval?: {
+    readonly weight: number;
+    readonly aggregation: 'max';
+    readonly rules: readonly RetrievalNormalizationRule[];
+  };
+  readonly authoredPriority?: { readonly weight: number; readonly min: number; readonly max: number };
+  readonly sourcePriority?: {
+    readonly weight: number;
+    readonly defaultValue: number;
+    readonly bySourceDocumentId: readonly { readonly sourceDocumentId: SourceDocumentId; readonly value: number }[];
+  };
+  readonly categoryPriority?: {
+    readonly weight: number;
+    readonly defaultValue: number;
+    readonly byCategory: readonly { readonly category: string; readonly value: number }[];
+  };
+  readonly recency?: {
+    readonly weight: number;
+    readonly maxAgeSeconds: number;
+    readonly missingValue: number;
+  };
+}
+```
+
+A later `CompilationPolicy` may contain or reference this object without changing what `CandidateScorer` means by it. Building the broad object now would place filtering, allocation, ordering, and rendering vocabulary in a repository that implements none of them.
+
+Policy validation is strict: unknown fields are rejected rather than stripped, nothing is coerced, no default is injected, exact strings are preserved, and malformed UTF-16 is rejected with the shared domain helper. Every weight must be finite and non-negative; every value the policy states directly on the normalized scale must be finite and inside `[0, 1]`; a retrieval range must be finite with `min < max`; an authored-priority range must be safe integers with `min < max`; `maxAgeSeconds` must be a positive safe integer; and `aggregation` accepts only `max` in schema version 1.
+
+Lookups are compiled only after validation. Duplicate keys are rejected rather than resolved, because resolving a repeat by first or last write would make the order of a caller-owned array significant, so two policies describing the same rules in a different order could score differently (INV-DET-002). The caller's arrays are never sorted or rewritten.
+
+### Raw Retrieval Scores Are Never Compared Across Provider Contracts
+
+Providers disagree on scale and even on direction: a cosine similarity rises with relevance, a vector distance falls, a BM25 score has its own unbounded positive scale, another provider emits negative values, and a provider version may redefine any of them. DEC-030 therefore stored `providerId`, `providerVersion`, `score.value`, `score.semantics`, and `score.higherIsBetter` on `CandidateBlock` and forbade interpreting them.
+
+Phase 9 interprets a raw value only when the policy owns an exact rule for the contract tuple:
+
+```text
+[providerId, providerVersion, semantics, higherIsBetter]
+```
+
+Two rules may not own the same tuple. For a matching rule with inclusive range `[min, max]`:
+
+```text
+higherIsBetter true   normalized = (rawValue - min) / (max - min)
+higherIsBetter false  normalized = (max - rawValue) / (max - min)
+```
+
+The range is fixed policy input. It is never inferred from the provider, from a rank, or from the values observed in the current batch. Batch-relative normalization was rejected outright: it would make one candidate's normalized score change when an unrelated candidate is added or removed, which would make compilation depend on retrieval result composition rather than on the candidate being scored (INV-DET-001).
+
+A raw value below `min` or above `max` rejects scoring rather than clamping. Clamping would silently reinterpret a measurement the policy says it does not describe, and a provider that has started emitting values outside its documented range is a configuration failure worth reporting.
+
+A scored record with no exact rule also rejects, with `retrieval_score_rule_not_found`. Treating it as zero would state that the provider found the block irrelevant, and dropping it silently would hide a policy that no longer covers the retrieval actually in use (INV-SCORE-002, INV-SCORE-004).
+
+A retrieval record carrying no score is valid and contributes no relevance evidence. Rank alone is never relevance and provider identity alone is never relevance: a rank is the provider's own position, and neither is a measurement (INV-PROV-003, INV-ALLOC-002).
+
+### Duplicate Evidence Aggregates by Maximum, Never by Count
+
+Phase 8 preserves every candidate wrapper precisely because one exact-content group may carry several retrieval records. `CandidateScorer` reads all of them, not only the wrapper carrying the canonical block.
+
+Every configured score in the group is normalized independently, and the group's retrieval relevance is the **maximum** of the normalized evidence.
+
+Summing, averaging, counting providers, counting wrappers, or multiplying by the number of matching retrievals were all rejected: repeating one wrapper twenty times would then turn "retrieved repeatedly" into "twenty times as useful", which it is not. Preferring the canonical wrapper, the lowest rank, or a particular provider was also rejected: the canonical choice is a deduplication decision and must not become a scoring rule, and provider preference is exactly the cross-contract comparison this stage forbids.
+
+Normalized contracts have already mapped every usable signal onto one comparable `[0, 1]` scale, so the strongest configured relevance in the group is enough for the first deterministic baseline.
+
+All normalized evidence stays visible in the public component, not only the winner, so a later trace can show what was considered. Evidence is ordered by member block ID, provider ID, provider version, semantics, direction, raw value, and finally a canonical serialization of the wrapper, so the array never depends on input order (INV-DET-002, INV-DET-005).
+
+The same `max` rule aggregates the other four components across the **distinct** blocks of a group. A query-independent authored value is counted once per block, not once per wrapper, or duplicate retrieval would inflate authored, source, category, and recency evidence alike.
+
+### Authored Priority Gains Meaning Only Under an Explicit Range
+
+`ContextBlock.attributes.priority` is query-independent authored data, and DEC-030 deliberately gave it no semantic range. Phase 9 does not invent one either: it establishes meaning only when `authoredPriority` is configured, and only over the inclusive safe-integer interval that policy states.
+
+```text
+normalized = (priority - min) / (max - min)
+```
+
+A priority outside the range rejects rather than clamps. An absent priority contributes no evidence rather than a fabricated midpoint. `required` is never read here (INV-SCORE-003).
+
+### Source and Category Priority Come Only From Explicit Rules
+
+Source priority is resolved by exact `SourceDocument.id`, with an explicit policy `defaultValue` for every unconfigured source. Nothing is inferred from a source type, a path, or arbitrary `SourceDocument.metadata`: source metadata is untrusted content and must never become compiler policy (INV-SEC-001). Which block Phase 8 made canonical also does not decide a score, or deduplication would become a scoring rule.
+
+Category priority is resolved by exact string equality against `ContextBlock.attributes.category`, with an explicit `defaultValue` for an absent or unconfigured category. Nothing is lowercased, trimmed, tokenized, prefix-matched, pattern-matched, or read as a hierarchy in schema version 1: each of those is a policy decision that would have to be versioned and tested on its own, and an implicit hierarchy would silently give one category the value of another. The evidence still distinguishes a block that declared no category from a block whose declared category the policy does not configure.
+
+### Recency Uses the Explicit Reference Time
+
+Recency is optional. When it is absent, timestamps do not affect scoring at all.
+
+When it is configured, each distinct block's evidence timestamp is `updatedAt ?? createdAt`, because `updatedAt` describes the content the block currently holds. A block with neither takes the policy's explicit `missingValue`; no `SourceDocument` timestamp is read as a hidden fallback, because a document's timestamp describes the document, not the block.
+
+```text
+ageSeconds = max(0, referenceTimeEpochSeconds - timestampEpochSeconds)
+normalized = max(0, 1 - ageSeconds / maxAgeSeconds)
+```
+
+A timestamp equal to the reference time scores one, a future timestamp clamps to age zero and also scores one, and content at or beyond `maxAgeSeconds` scores zero. Clamping the future rather than letting it exceed one keeps an upstream clock skew from outranking genuinely current content.
+
+`referenceTime` is validated with the project `Timestamp` contract before anything reads it. `Date.parse` is deliberately not used to convert it: the ECMAScript Date Time String Format fixes only three fractional digits, so an engine's handling of the further digits `TimestampSchema` accepts is implementation-defined, and a compiler decision must not differ between runtimes. A compiler-internal helper parses the validated components and uses `Date.UTC` as transient arithmetic, exactly as the domain's own timestamp validation does. No `Date` instance is retained or exposed.
+
+### Required Status Is Not a Number
+
+No `requiredScore`, `requiredBoost`, large constant, or `Infinity` exists. Required blocks are a separate allocation class that the future `BudgetAllocator` resolves before optional ones (INV-SCORE-003, INV-ALLOC-001); representing that as a large number would make it a tie-break that a high enough score could win.
+
+Phase 8 already guarantees that a group containing any required distinct block gets a required canonical block. `CandidateScorer` preserves that structure unchanged and never reads `required` as a signal. A required candidate may legitimately score zero while an optional one scores higher, and the ranking reflects that.
+
+### Components Are Transparent and Summed in a Fixed Order
+
+Every enabled component publishes its `normalizedValue`, the policy `weight`, the `contribution` (`normalizedValue * weight`), its aggregation rule, and explicit project-owned evidence explaining where the normalized value came from. A disabled component is absent from the score rather than present with a zero. A configured component with weight `0` is still present, with its evidence, and contributes `0`.
+
+`total` is the arithmetic sum of the present contributions taken in one fixed order — retrieval, authored priority, source priority, category priority, recency — rather than by iterating an object, so the floating-point result never depends on property insertion order (INV-DET-002).
+
+Weights need not sum to one. A total is therefore a policy-relative utility, not a probability, and is not bounded by one: it is comparable only against other totals produced in the same run by the same `policyId` and `policyVersion`. These are internal decision values, not financial arithmetic; JavaScript `Number` is sufficient and no decimal library is added.
+
+Every published number is canonicalized so that `-0` becomes `0`: the two compare equal but serialize, print, and deep-equal differently, and publishing one would make two runs that computed the same value look different. A contribution or total that becomes `NaN` or `Infinity` rejects with `non_finite_score_result` rather than being published.
+
+### One Structured Error, Collected Across the Batch
+
+`CandidateScoringError` carries the stable code `CANDIDATE_SCORING_FAILED` and project-owned `ValidationIssue[]`. No validation-library error, `DomainValidationError`, timestamp parsing error, provider error, or implementation exception crosses the boundary (INV-ADAPTER-001, INV-ADAPTER-003).
+
+The issue codes are machine-readable so a later trace can report a failure without re-deriving meaning from a message (INV-TRACE-002):
+
+```text
+invalid_policy
+duplicate_policy_rule
+duplicate_source_priority
+duplicate_category_priority
+invalid_reference_time
+retrieval_score_rule_not_found
+retrieval_score_out_of_range
+authored_priority_out_of_range
+non_finite_score_result
+```
+
+A policy schema failure short-circuits duplicate detection, and an invalid `referenceTime` fails immediately, because both would otherwise leave later rules guessing. Once the policy and the reference time are valid, every safely discoverable scoring problem in the batch is collected before failing, and no partial `ScoredCandidateSet` is returned.
+
+Candidate-scoring issues address a group and its blocks by their stable identifiers rather than by array position, so a permuted input produces a byte-identical issue set (INV-DET-002, INV-ALLOC-005).
+
+### No Candidate Is Filtered and Nothing Is Allocated
+
+Every deduplicated candidate appears exactly once in `ScoredCandidateSet` unless scoring fails as a whole. No candidate is excluded for a zero or low score, an absent category, a low source priority, old content, absent retrieval data, a poor provider rank, or a negative authored priority. No minimum score threshold exists.
+
+`CandidateFilter` is not introduced. Policy filtering still requires the broader versioned `CompilationPolicy`, and inventing filtering rules inside the scoring stage would place two responsibilities in one component (INV-DEP-003).
+
+Allocation is equally absent: no budget is read, no token cost is subtracted from a score, no score-per-token is computed, no category quota is enforced, and no inclusion, exclusion, or eviction decision is made. Only the allocator owns final inclusion (INV-ALLOC-002).
+
+### No Second Retrieval Engine and No Redundancy Score
+
+No lexical, BM25, embedding, cosine-over-embeddings, or LLM relevance scorer is implemented inside the compiler. Query-specific relevance arrives through `CandidateRetrieval` under an explicit provider normalization contract; Phase 9 normalizes and combines supplied signals and does not become a second retrieval engine (INV-DEP-002, INV-DEP-003).
+
+No redundancy component and no near-duplicate penalty is added either. Exact duplicates were already collapsed in Phase 8, and INV-DEDUP-004 keeps near-duplicate logic absent rather than present and disabled.
+
+### Stable Ranking
+
+`ScoredCandidateSet.candidates` is ordered by `score.total` descending, then by `canonicalBlock.id` ascending compared by UTF-16 code unit (INV-DET-005). `localeCompare` is never used: its result depends on the machine's locale and on the ICU data the runtime was built with.
+
+Required status does not change this order. The future allocator must still process required candidates as a separate class regardless of their position in this ranking.
+
+The sort runs over a canonical traversal order — canonical block ID, then a canonical serialization of the canonical block — so the ranking is a total order even for a caller that bypassed the pipeline and supplied two groups with one canonical ID.
+
+`sourceDocuments` is returned in `id` ascending order, copied before sorting so the caller's registry is never reordered in place. `scope` is returned unchanged. `policyId`, `policyVersion`, and `referenceTime` are copied verbatim from validated values.
+
+### The Result Is an Ephemeral Stage Object
+
+`ScoredCandidateSet`, `ScoredCandidate`, `CandidateScore`, and every component and evidence type are compiler-owned readonly interfaces, produced and consumed inside one compilation and never persisted. They carry no `schemaVersion`, because that field marks persisted domain records so an unsupported stored shape fails clearly (INV-STORE-004). The policy does carry one, because it is external configuration a caller stores.
+
+`ContextBlockSchema`, `CandidateBlockSchema`, and the Phase 8 result types are unchanged, and no scoring state is written back into any of them. No `Map`, `Set`, `Date`, mutable array, canonical-JSON helper, timestamp helper, score comparator, validation-library type, crypto type, or provider SDK type reaches the public surface (INV-ADAPTER-001).
+
+Evidence records carry identity rather than a second copy of a wrapper: `DeduplicatedCandidate.members` still holds every `CandidateBlock` whole, so nothing is duplicated into the score.
+
+### Trace Readiness Without a Trace
+
+The result preserves everything a future `TraceBuilder` needs to report a scoring decision — policy identity, reference time, every component, the raw evidence used, the normalized evidence values, the aggregation rule, the weight, the contribution, and the total — in machine-readable fields with stable identifiers (INV-SCORE-001, INV-TRACE-005). `CompilationTrace` itself is not implemented.
+
+### Source Snapshot Binding Remains Deferred
+
+As in DEC-031, a `SourceDocument.id` is stable across content edits by design (DEC-028), so a persisted `ContextBlock` can reference a document whose content has since changed. Scoring does not solve this and does not attempt to; no `sourceContentHash` is added. The problem belongs to the persistence and retrieval design.
+
+### Consequences
+
+`@ctxalloc/compiler` gains a third published stage and no new dependency: `CandidateScorer` needs only `@ctxalloc/domain` types, the existing validation library, and two compiler-internal helpers. No external runtime dependency is added, the boundary allowlist is unchanged, and `@ctxalloc/application` and `@ctxalloc/tokenization` remain absent from the kernel.
+
+`CandidateValidator` and `CandidateDeduplicator` are unchanged in behavior. The validator's private issue-path rendering and untrusted-string quoting moved into a compiler-internal module that the scorer now shares, because a pointer must read the same way whichever stage produced it and two implementations of one rule would be free to drift (INV-DEP-003); the values it produces and the issues it reports are identical.
+
+Retrieval scores stop being inert data and start participating in compiler decisions — but only under an explicit contract. A deployment that supplies provider scores without configuring their normalization now fails loudly instead of quietly ignoring them, which is the intended effect.
+
+Policy filtering, `CandidateFilter`, allocation, required-budget resolution, ordering, rendering, traces, compiler orchestration, retrieval, persistence, the CLI, and the HTTP API remain later phases.
 
 ---
 
