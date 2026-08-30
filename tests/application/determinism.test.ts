@@ -10,12 +10,10 @@ const rootUrl = new URL('../../', import.meta.url);
  *
  * The package entry point is deliberately absent: since Phase 6 it also
  * re-exports the Markdown chunker, so assertions about what *ingestion* does not
- * do no longer apply to the barrel file.
+ * do no longer apply to the barrel file. The lone-surrogate scanner moved to
+ * `@ctxalloc/domain` in Phase 7 and is covered by the domain suite (DEC-030).
  */
-const SOURCE_FILES = [
-  'packages/application/src/source-ingestion.ts',
-  'packages/application/src/unicode.ts',
-] as const;
+const SOURCE_FILES = ['packages/application/src/source-ingestion.ts'] as const;
 
 /** Every application source file, for the properties the whole layer must hold. */
 const ALL_SOURCE_FILES = [

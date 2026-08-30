@@ -22,6 +22,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@ctxalloc/application': packageEntry('application'),
+      '@ctxalloc/compiler': packageEntry('compiler'),
       '@ctxalloc/domain': packageEntry('domain'),
       '@ctxalloc/ports': packageEntry('ports'),
       '@ctxalloc/testing': packageEntry('testing'),

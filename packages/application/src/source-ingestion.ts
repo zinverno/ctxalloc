@@ -6,6 +6,7 @@ import {
   SourceDocumentSchema,
   SourceTypeSchema,
   TimestampSchema,
+  findLoneSurrogate,
   parseOrThrow,
   safeParse,
   type JsonObject,
@@ -16,7 +17,6 @@ import {
   type ValidationIssue,
 } from '@ctxalloc/domain';
 import { z } from 'zod';
-import { findLoneSurrogate } from './unicode.js';
 
 /**
  * Pure source ingestion (DEC-028).

@@ -351,6 +351,12 @@ The compiler does not read files during compilation.
 
 All required source information must already be present in the block.
 
+`sourceLocation` is optional, and its kind must match the block's source type: a
+`markdown` or `text` block is located by a `text-range`, a `conversation` block
+by a `conversation-message`. That compatibility is enforced by
+`CandidateValidator` (section 6.1), because the location record does not carry
+the source type and cannot check it alone.
+
 A ContextBlock contains only source-derived or explicitly authored block data.
 
 Its content is query-independent: the same block record is valid for every query
@@ -361,16 +367,59 @@ ContextBlock. A provider relevance score, a computed recency score, a redundancy
 measure, and a final utility score all describe one retrieval or one compilation
 for one query, not the block itself.
 
-Future phases introduce separate structures for those values:
+The candidate wrapper below carries retrieval-supplied values for one request. A
+scored-candidate structure carrying calculated score components remains a future
+phase.
 
-* a candidate structure carrying retrieval-supplied scores for one request;
-* a scored-candidate structure carrying calculated score components.
-
-See DEC-026.
+See DEC-026 and DEC-030.
 
 ---
 
-### 5.4 CompilationRequest
+### 5.4 CandidateBlock
+
+```ts
+interface CandidateBlock {
+  schemaVersion: 1;
+  block: ContextBlock;
+  retrieval?: CandidateRetrieval;
+}
+
+interface CandidateRetrieval {
+  providerId: string;
+  providerVersion: string;
+  rank?: number;
+  score?: CandidateRetrievalScore;
+  metadata?: JsonObject;
+}
+
+interface CandidateRetrievalScore {
+  value: number;
+  semantics: string;
+  higherIsBetter: boolean;
+}
+```
+
+A `CandidateBlock` is an ephemeral request-specific wrapper around one canonical
+`ContextBlock`. It exists for the duration of one compilation and is never
+persisted in place of the block.
+
+It has no identity of its own: `block.id` remains the project-owned stable block
+identifier. Two wrappers may carry the same block with different retrieval data;
+deciding what to do with that pair belongs to deduplication.
+
+`retrieval` is optional, so a direct or statically authored candidate needs no
+fabricated provider. Retrieval values are untrusted provider input: they are
+validated, carried, and never written back into the `ContextBlock`, and no score
+is normalized or compared at this stage.
+
+The wrapper carries no calculated relevance, recency, redundancy, or utility
+score, no allocation decision, no trace decision, and no rendered text.
+
+See DEC-030.
+
+---
+
+### 5.5 CompilationRequest
 
 ```ts
 interface CompilationRequest {
@@ -379,7 +428,8 @@ interface CompilationRequest {
   scope: Scope;
 
   query: string;
-  candidates: ContextBlock[];
+  candidates: CandidateBlock[];
+  sourceDocuments: SourceDocument[];
 
   budget: {
     totalTokens: number;
@@ -395,9 +445,18 @@ interface CompilationRequest {
 
 The request must contain all information required for deterministic compilation.
 
+`sourceDocuments` is the explicit registry `CandidateValidator` uses to validate
+block source references. A block's source is proven by membership in that
+registry and by nothing else: not by a path, not by metadata, not by the adapter
+that produced it, and not by array position. The registry is a validation input,
+not a content store: it carries source-level records, never full source content.
+
+`CompilationRequest` itself is not implemented yet. `CandidateValidator` receives
+the scope, the registry, and the candidates directly (DEC-030).
+
 ---
 
-### 5.5 CompilationPolicy
+### 5.6 CompilationPolicy
 
 The policy defines:
 
@@ -418,7 +477,7 @@ The same policy version and request must produce the same result.
 
 ---
 
-### 5.6 CompilationResult
+### 5.7 CompilationResult
 
 ```ts
 interface CompilationResult {
@@ -445,16 +504,42 @@ The compiler may be implemented as several internal components.
 
 ### 6.1 CandidateValidator
 
+Status: implemented (DEC-030).
+
 Responsibilities:
 
-* schema validation;
-* scope validation;
-* duplicate identifier detection;
-* token count validation;
-* source reference validation;
-* priority range validation.
+* runtime schema validation of the request, the source registry, and every
+  candidate;
+* exact scope matching against the request scope;
+* source reference validation against the explicit `sourceDocuments` registry;
+* duplicate source identifier detection, after which the duplicated identifier
+  resolves to no record, so no duplicate becomes authoritative;
+* source location kind compatibility with the block's own source type;
+* conflicting block identifier detection, where one block ID is attached to
+  different canonical block data;
+* exact token count recomputation through the injected `Tokenizer` port;
+* normalized content hash recomputation through the shared domain helper;
+* safe-integer priority validation.
+
+Priority is restricted to finite safe integers only, including negative values.
+No product-specific minimum or maximum exists yet: semantic priority bounds and
+any policy boost belong to the versioned `CompilationPolicy`.
+
+Validation is strict and all-or-nothing: any problem rejects the whole batch.
+Nothing is silently removed, repaired, re-counted, re-hashed, reordered, or
+deduplicated.
+
+A top-level schema failure short-circuits cross-record validation and reports the
+schema issues alone. Once the schema passes, every cross-record problem in the
+batch is collected before failing.
+
+The validator does not decide whether required content fits the budget. That
+depends on the complete required allocation and its rendering overhead, and
+belongs to the allocator (section 6.4, INV-BUDGET-004).
 
 ### 6.2 Deduplicator
+
+Status: future phase.
 
 Responsibilities:
 
@@ -468,6 +553,8 @@ The initial implementation must be deterministic and non-embedding-based.
 
 ### 6.3 CandidateScorer
 
+Status: future phase.
+
 Responsibilities:
 
 * calculate a comparable deterministic score;
@@ -478,6 +565,8 @@ Responsibilities:
 The score is an input to allocation, not an automatic inclusion decision.
 
 ### 6.4 BudgetAllocator
+
+Status: future phase.
 
 Responsibilities:
 
@@ -493,6 +582,8 @@ Only this component owns final token allocation.
 
 ### 6.5 ContextOrderer
 
+Status: future phase.
+
 Responsibilities:
 
 * place blocks in deterministic order;
@@ -501,6 +592,8 @@ Responsibilities:
 * avoid accidental score-order changes between runs.
 
 ### 6.6 ContextRenderer
+
+Status: future phase.
 
 Responsibilities:
 
@@ -511,6 +604,8 @@ Responsibilities:
 * report rendering token overhead.
 
 ### 6.7 TraceBuilder
+
+Status: future phase.
 
 Responsibilities:
 
@@ -653,12 +748,15 @@ Application Markdown chunker, implemented:
   derives stable ContextBlock identity
   returns blocks in source order
 
-Compiler:
-  receives blocks only
+Compiler candidate validation, implemented:
+  receives an explicit scope, a source registry, and candidate wrappers
+  validates them strictly through the injected Tokenizer port
   never reads source content from files during compilation
 ```
 
-The application ingestion and chunking stages exist today. No SourceReader port and no source reader adapter has been implemented; ingestion receives content the caller has already read. Identity derivation and content hashing follow DEC-028, and Markdown chunking follows DEC-029.
+The application ingestion and chunking stages exist today, and the compiler's candidate validation stage receives their output. No SourceReader port and no source reader adapter has been implemented; ingestion receives content the caller has already read. Identity derivation and content hashing follow DEC-028, Markdown chunking follows DEC-029, and candidate validation follows DEC-030.
+
+The canonical `ContextBlock.normalizedContentHash` rule is owned by `@ctxalloc/domain` so that the chunker which writes a hash and the validator which rechecks it cannot drift apart.
 
 The chunker is an application-layer transformation, not a domain or compiler concern: the domain imports no Markdown parsing, and the compiler imports no ingestion or chunking behavior. It depends on the `Tokenizer` port rather than a tokenizer implementation, so the composition root chooses the adapter.
 

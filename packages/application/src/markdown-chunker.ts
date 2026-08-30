@@ -3,6 +3,8 @@ import {
   CONTEXT_BLOCK_SCHEMA_VERSION,
   ContextBlockSchema,
   SourceDocumentSchema,
+  calculateNormalizedContentHash,
+  findLoneSurrogate,
   safeParse,
   type ContextBlock,
   type JsonObject,
@@ -11,7 +13,6 @@ import {
 } from '@ctxalloc/domain';
 import type { Tokenizer } from '@ctxalloc/ports';
 import { z } from 'zod';
-import { findLoneSurrogate } from './unicode.js';
 import type { IngestedSource } from './source-ingestion.js';
 
 /**
@@ -1024,18 +1025,6 @@ function groupBlocks(
 /* Block construction                                                          */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Canonical normalization for `normalizedContentHash`.
- *
- * Only line endings are unified, so an LF and a CRLF copy of the same text
- * compare equal. Indentation, trailing spaces, blank-line runs, and Unicode
- * composition are all preserved, because each of them can carry meaning in
- * Markdown and in code (DEC-029).
- */
-function normalizeForHash(content: string): string {
-  return content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-}
-
 /** Deep copy of validated JSON data, so no caller-owned object is shared or mutated. */
 function cloneJsonValue(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(cloneJsonValue);
@@ -1220,7 +1209,13 @@ export class MarkdownChunker {
     occurrences: Map<string, number>,
   ): ContextBlock {
     const blockContent = content.slice(group.startOffset, group.endOffset);
-    const normalizedContentHash = sha256(normalizeForHash(blockContent));
+    // The canonical rule DEC-029 fixed for Markdown is now owned by the domain
+    // and shared with `CandidateValidator`, so a written hash and a rechecked
+    // hash cannot drift apart (DEC-030). The computed value is unchanged.
+    // `validateSource` has already rejected malformed UTF-16 in the whole
+    // source, and block boundaries never split a code point, so this call
+    // cannot throw here.
+    const normalizedContentHash = calculateNormalizedContentHash(blockContent);
     const headingPath = section.headingPath.length > 0 ? [...section.headingPath] : null;
 
     const basePayload = contextBlockIdPayload(document.id, headingPath, normalizedContentHash);

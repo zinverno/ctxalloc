@@ -75,6 +75,7 @@ A newer decision has replaced the previous one.
 | DEC-027 | Use js-tiktoken o200k_base as the first real tokenizer       | Accepted |
 | DEC-028 | Derive source document identity from explicit logical identity | Accepted |
 | DEC-029 | Chunk Markdown deterministically in the application layer      | Accepted |
+| DEC-030 | Validate request-specific candidate wrappers before compiler policy stages | Accepted |
 
 ---
 
@@ -1387,6 +1388,230 @@ No validation-library error, no tokenizer-library error, and no `DomainValidatio
 `@ctxalloc/application` now declares `@ctxalloc/ports` in addition to `@ctxalloc/domain`. That edge is already permitted by the boundary allowlist. The chunker does not import `@ctxalloc/tokenization`, `js-tiktoken`, or any concrete tokenizer: the composition root or a test chooses the implementation.
 
 Because block identity depends on normalized content and heading path, any future change to section boundaries, atomic-block detection, paragraph splitting, or the normalization rule changes stored block identifiers and requires a new algorithm version and a documented migration.
+
+---
+
+## DEC-030: Validate Request-Specific Candidate Wrappers Before Compiler Policy Stages
+
+### Status
+
+Accepted
+
+### Decision
+
+Candidate validation is the first stage of the compiler kernel. It lives in `@ctxalloc/compiler` as `CandidateValidator`, one synchronous, deterministic, offline class that turns an untrusted candidate batch into a `ValidatedCandidateSet`.
+
+The batch it receives is built from a new domain record, `CandidateBlock`: an ephemeral request-specific wrapper around one canonical `ContextBlock`. DEC-026 promised that wrapper and deliberately did not build it; this decision builds it.
+
+The validator receives the project-owned `Tokenizer` port through constructor injection. It reads no file, opens no socket, queries no database, calls no model, calls no retrieval provider, reads no clock, and generates no random value.
+
+It does not filter by policy, deduplicate, choose a canonical duplicate, score, normalize or compare a provider score, resolve required blocks, allocate, order, render, or build a trace.
+
+### CandidateBlock
+
+```ts
+interface CandidateBlock {
+  readonly schemaVersion: 1;
+  readonly block: ContextBlock;
+  readonly retrieval?: CandidateRetrieval;
+}
+
+interface CandidateRetrieval {
+  readonly providerId: string;
+  readonly providerVersion: string;
+  readonly rank?: number;
+  readonly score?: CandidateRetrievalScore;
+  readonly metadata?: JsonObject;
+}
+
+interface CandidateRetrievalScore {
+  readonly value: number;
+  readonly semantics: string;
+  readonly higherIsBetter: boolean;
+}
+```
+
+`ContextBlock` stays query-independent under DEC-026. Retrieval-supplied values describe one retrieval for one query, so they live on the wrapper and are never written back into the block.
+
+The wrapper has no identity of its own: `block.id` remains the project-owned stable block identifier. It carries no normalized relevance score, no recency score, no redundancy score, no utility score, no final score, no allocation decision, no trace decision, and no rendered text. `retrieval` is optional, so a direct or statically authored candidate needs no fabricated provider.
+
+The schemas are strict. Unknown fields are rejected rather than stripped, nothing is coerced, no default is injected, and an absent optional field stays absent.
+
+### Retrieval Values Are Untrusted Provider Input
+
+`providerId`, `providerVersion`, and `score.semantics` are validated for blankness with `trim` and for UTF-16 well-formedness, and are then preserved exactly. They are never trimmed, lowercased, or otherwise rewritten: a trace records them verbatim, and rewriting one would make two traces disagree about which counts and scores are comparable.
+
+The UTF-16 check is applied to these new fields and not retroactively to the existing identifier and scope schemas. Retrieval strings arrive from an external system, which is where a lone surrogate is likely to appear, and they have never been persisted; tightening the older schemas could reject already-stored records and belongs to its own migration.
+
+`rank` is optional and must be a non-negative safe integer. Zero is valid, because providers differ between zero-based and one-based ranks. Rank is provider input, never canonical ordering (INV-ALLOC-002).
+
+`score.value` must be finite. `NaN` and `Infinity` are rejected (INV-SCORE-004). Negative values are accepted, because the provider scale is not normalized at this stage. `semantics` names the provider-defined metric, such as `cosine-similarity`, `bm25-score`, or `distance`, and `higherIsBetter` states the direction explicitly, because a similarity rises with relevance while a distance falls.
+
+Phase 7 performs no score normalization and no score comparison. Values from different `providerId`, `providerVersion`, or `semantics` combinations are not assumed comparable (INV-SCORE-002). No `CandidateProvider` port and no retrieval adapter is created by this decision.
+
+### Canonical Normalized Content Hash
+
+`ContextBlock.normalizedContentHash` is SHA-256 over the block content after line-ending normalization only, represented as `sha256:<64 lowercase hexadecimal characters>`. CRLF becomes LF, then any remaining lone CR becomes LF; nothing is trimmed, no trailing space is removed, no blank-line run is collapsed, and Unicode composition is preserved.
+
+DEC-029 fixed that rule for Markdown blocks. It is now generalized to every extractive schema-version-1 text `ContextBlock`, and it is owned by one module in `@ctxalloc/domain`, because two components depend on producing the same value from the same content: the Markdown chunker writes the hash, and `CandidateValidator` recomputes it. Two implementations of one correctness rule would be free to drift (INV-DEP-003).
+
+Content that is not well-formed UTF-16 is rejected before hashing. A lone surrogate has no UTF-8 encoding, and encoders substitute U+FFFD, which would hash text the caller never supplied (INV-BLOCK-007). The lone-surrogate scanner moved from `@ctxalloc/application` into the domain for the same reason: one rule, one owner, rather than a second copy.
+
+Hashing uses the Node standard library. No hashing dependency is added and no `node:crypto` type reaches the published declarations. This is the only place the domain uses a Node module: hashing is a pure function of the supplied string, not an infrastructure dependency, and the domain still reaches no database, framework, filesystem, or SDK (INV-DEP-001).
+
+The DEC-029 block ID algorithm is unchanged, and the committed Phase 6 golden hashes and block identifiers remain byte-identical.
+
+`SourceDocument.contentHash` is a different value and is not recomputed. It describes the complete original source content, which is intentionally absent during compilation, so the validator carries it rather than rechecking it.
+
+### Source Documents Are an Explicit Validation Registry
+
+`CandidateValidator` receives `sourceDocuments` as an adjacent validation input:
+
+```ts
+interface CandidateValidationInput {
+  readonly scope: Scope;
+  readonly sourceDocuments: readonly SourceDocument[];
+  readonly candidates: readonly CandidateBlock[];
+}
+```
+
+A block's source is proven by membership in that array and by nothing else: not by a path, not by metadata, not by the adapter that produced it, and not by array position (INV-PROV-001, INV-ADAPTER-002).
+
+The rules are:
+
+* every source document passes `SourceDocumentSchema`;
+* source document IDs are unique inside the registry, and a repetition is rejected even when the two records are byte-identical, because resolving it by first or last write would make the array's order significant and would hide an upstream merge defect (INV-BLOCK-002);
+* a duplicated ID resolves to no record at all, so no duplicate becomes authoritative;
+* every source document scope equals the request scope;
+* every candidate block scope equals the request scope;
+* every `block.sourceDocumentId` exists in the registry;
+* the referenced document's scope equals the block scope;
+* the referenced document's `sourceType` equals `block.sourceType`;
+* an unreferenced source document is allowed;
+* registry order does not change what is accepted.
+
+Scope matching is exact, using `scopesEqual`. An absent `projectId` and an explicit `projectId` are different scopes (INV-SCOPE-003). Cross-scope data produces an explicit error, never a silent exclusion, because silent removal can hide an upstream security failure (INV-SCOPE-004).
+
+#### An Ambiguous Source ID Resolves to Nothing
+
+The candidate lookup is built only from IDs that occur exactly once.
+
+Rejecting the duplicate is not sufficient on its own. If the lookup took the first (or last) occurrence of a duplicated ID, that record would become authoritative for every candidate referencing it, and the *semantic* issue set would depend on the array's order: two documents sharing an ID but differing in `sourceType` yield a `source_type_mismatch` in one order and not in the other. The batch is rejected either way, but which rules fired must not change with input order (INV-DET-002).
+
+A candidate referencing an ambiguous ID is therefore compared against no record. The registry-dependent checks — `source_scope_mismatch` and `source_type_mismatch` — are skipped for it, because performing them would require choosing one conflicting record.
+
+It does not produce `source_not_found` either. The ID is present; it is only ambiguous, and reporting it as absent would misdescribe the defect. The `duplicate_source_document_id` issue already names the real problem and already rejects the batch.
+
+Everything that does not depend on a source record keeps running for that candidate: scope matching against the request, the source-location kind rule, the normalized content hash, the token count, UTF-16 well-formedness, and block ID conflict detection.
+
+Neither a first-wins nor a last-wins rule exists anywhere in this component.
+
+### Source Location Is Validated, Not Reconstructed
+
+`ContextBlockSchema` validates the shape and internal ordering of `SourceLocation`. The validator does not claim more than it can prove: `SourceDocument` intentionally does not carry full content, so `endOffset <= sourceLength` cannot be checked here.
+
+Phase 7 validates the `SourceLocation` schema, the source reference, and the compatibility of the location kind with the block's own source type. It does not read or reconstruct the source. Complete source-length bounds remain the source and chunker contract, verified by source-reconstruction tests (INV-BLOCK-006). Adding source content to compilation solely to repeat chunker work would defeat the separation the architecture depends on.
+
+### Source Location Kind Must Match the Source Type
+
+Each source type can be located exactly one way:
+
+```text
+markdown      -> text-range
+text          -> text-range
+conversation  -> conversation-message
+```
+
+The domain already defines the two kinds this way: a character range inside a text or Markdown document, and a message inside a conversation source. The rule encodes that existing definition rather than inventing a policy, and it adds no source type and changes no schema.
+
+The schema alone cannot enforce it. `SourceLocationSchema` is a discriminated union that validates each kind's own shape, and the registry check proves only that the block and its source document agree on `sourceType`. Between them, a block could still describe itself with provenance its own source type cannot produce: a Markdown block located by a conversation message, or a conversation block located by a character range into a document that has none. Such a block cannot be located in its source at all, which makes every later provenance decision unsound (INV-PROV-002).
+
+The check is therefore a cross-field rule in `CandidateValidator`, reported as `source_location_type_mismatch` at `candidates[i].block.sourceLocation.kind`. It compares two fields of the same block, so unlike the registry rules it needs no source document and stays available even when the referenced ID is missing or ambiguous.
+
+`sourceLocation` remains optional, because `ContextBlockSchema` permits its absence; an absent location is not a contradiction. No location value is ever rewritten.
+
+Expressing the rule inside `SourceLocationSchema` was rejected: the location record does not carry the source type, so the union would have to be re-parsed in the context of a block, which is exactly the cross-field validation the compiler already performs.
+
+### Exact Token-Count Recomputation
+
+For every distinct block content, the validator calls `tokenizer.countTokens(block.content)`, requires a finite non-negative safe integer, and compares the exact returned value with `block.tokenCount`.
+
+A mismatch rejects the batch. The stored field is not recomputed and replaced, no warning-only success is returned, and no character or word estimate participates (INV-BLOCK-003, DEC-027). INV-BLOCK-003 permits either rejecting or recomputing with a warning, and requires the selected behavior to be consistent; this decision selects rejection, because a stale count that the compiler silently repairs hides an out-of-date index rather than reporting it.
+
+The count describes `block.content` only. `headingPath`, metadata, source labels, separators, compiler wrappers, and protocol overhead are not counted here. The final compiled total is measured by tokenizing the rendered context, which remains a later compiler responsibility (INV-BUDGET-002, INV-RENDER-004).
+
+Identical content is counted once, no matter how many wrappers carry it, and every wrapper still receives its own issue, so the reported result does not depend on how often a block repeats.
+
+A tokenizer that throws, or that returns a value which is not a usable count, produces a project-owned issue carrying the candidate context. No tokenizer-library error class escapes (INV-ADAPTER-001, INV-ADAPTER-003).
+
+### Equivalent Duplicates Pass, Conflicting Records Reject
+
+Two wrappers may legitimately carry the same block: a provider can return it twice, and two providers can return it with different retrieval metadata. Those wrappers pass through unchanged, in input order, because collapsing them is deduplication's decision and its canonical selection rules, not validation's (INV-DEDUP-001).
+
+What cannot pass is one `block.id` attached to different canonical `ContextBlock` data. A stable identifier that means two things makes every later provenance and deduplication decision unsound, so it is rejected as `conflicting_block_id` (INV-BLOCK-002).
+
+Comparison uses a canonical serialization of `block` alone, with object keys sorted recursively and array order preserved. Retrieval data therefore never creates a conflict, and JavaScript property insertion order never creates a false one. A plain `JSON.stringify` over unsorted metadata is not sufficient: it emits keys in insertion order, which an adapter, a database driver, or a JSON parser can vary between runs (INV-DET-002). No first-wins or last-wins rule is applied, and the decision does not depend on input order.
+
+Phase 7 implements neither exact-ID nor content-hash deduplication. Both belong to the deduplication phase.
+
+### Priority Is Restricted to Safe Integers Only
+
+`ContextBlockSchema` requires `priority` to be an integer, and the validation library's integer check already enforces the safe-integer range. That is exactly the Phase 7 rule: an absent priority is valid, any finite safe integer is valid including a negative one, and a fraction or an unsafe magnitude is not.
+
+The rule therefore has one enforcement point rather than two that could drift; the validator adds only the focused issue code so a consumer can tell a rejected priority from any other malformed field.
+
+No arbitrary product range such as `0..100` or `-1000..1000` is invented. Semantic minimum and maximum priority, and any policy boost, belong to the versioned `CompilationPolicy` phase. The architecture wording "priority range validation" is corrected to safe-integer validation plus later policy bounds.
+
+### Strict All-or-Nothing Batch Validation
+
+Any request-level, source-registry, or candidate problem rejects the whole batch with one project-owned error:
+
+```text
+CandidateValidationError
+code: CANDIDATE_VALIDATION_FAILED
+```
+
+Validation runs in two stages, and the collection guarantee differs between them.
+
+The top-level schema runs first. **A schema failure short-circuits cross-record validation entirely**: the error carries the schema issues alone. Those rules read fields the schema has not established, so running them over unparsed data could only guess. The short-circuit applies to every schema failure, including one whose only cause is an unknown top-level key.
+
+Once the schema passes, every cross-record problem in the batch is collected before failing, so one call reports the whole batch rather than its first defect.
+
+Re-parsing leniently to salvage a few more issues from a batch that carries an unrecognized top-level key was considered and rejected. The batch is invalid either way, so it buys little; it would make the guarantee harder to state rather than simpler, since every other schema failure would still short-circuit; and it would run semantic rules over a shape the validator has just declared unsupported.
+
+No candidate is silently removed, silently repaired, re-counted, re-hashed, reordered, or collapsed, and no partial `ValidatedCandidateSet` is returned. This satisfies the MVP rule that invalid candidates produce explicit errors. A later compiler trace may translate these issues into rejected-candidate decisions (INV-TRACE-001).
+
+Issues reuse the project-owned `ValidationIssue` shape and are serializable, deterministically ordered, and addressed by both a path array and a dotted pointer. Their codes are:
+
+```text
+invalid_input                     invalid_priority
+duplicate_source_document_id      scope_mismatch
+source_not_found                  source_scope_mismatch
+source_type_mismatch              source_location_type_mismatch
+conflicting_block_id              invalid_unicode
+invalid_normalized_content_hash   invalid_token_count
+tokenizer_failed
+```
+
+No raw validation-library error, `DomainValidationError`, tokenizer-library error, or external provider error escapes the compiler boundary.
+
+### Impossible Required Budgets Belong to the Allocator
+
+MVP_SCOPE 3.3 listed impossible required-block budgets under candidate validation, while ARCHITECTURE 6.4 and INV-BUDGET-004 assign that decision to `BudgetAllocator`. The allocator is correct and the scope document is corrected.
+
+Required-budget feasibility cannot be decided here. It depends on the complete required allocation, the rendering overhead of required source labels and separators, and the fixed compiler text, none of which exists at validation time. Deciding it early would either duplicate the allocator's arithmetic or guess at it, and INV-DEP-003 forbids two components owning one responsibility.
+
+`CandidateValidator` therefore never inspects a token budget, and `required` remains a declared block attribute that it validates and carries without interpreting (INV-SCORE-003).
+
+### Consequences
+
+`@ctxalloc/compiler` now declares `@ctxalloc/domain`, `@ctxalloc/ports`, and the validation library it uses directly. Both internal edges are already permitted by the boundary allowlist. It does not depend on `@ctxalloc/application`, `@ctxalloc/tokenization`, `js-tiktoken`, or any concrete tokenizer: the composition root or a test chooses the implementation.
+
+`@ctxalloc/domain` gains `CandidateBlock`, the canonical block content hash, and the shared lone-surrogate scanner, and uses `node:crypto` in the hash module only. `@ctxalloc/application` no longer maintains a private copy of either rule.
+
+Because `CandidateValidator` rejects rather than repairs, an out-of-date index becomes a visible failure at the compiler boundary instead of a silently corrected count. That is the intended cost: a stale token count is wrong data for a hard budget guarantee, not an approximation.
+
+Filtering, deduplication, scoring, required-block resolution, required-budget feasibility, allocation, ordering, rendering, traces, compiler orchestration, retrieval, persistence, the CLI, and the HTTP API remain later phases.
 
 ---
 

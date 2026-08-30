@@ -27,6 +27,11 @@ const DECLARATIONS = [
   'packages/application/dist/index.d.ts',
   'packages/application/dist/source-ingestion.d.ts',
   'packages/application/dist/markdown-chunker.d.ts',
+  'packages/domain/dist/index.d.ts',
+  'packages/domain/dist/candidate-block.d.ts',
+  'packages/domain/dist/block-content-hash.d.ts',
+  'packages/compiler/dist/index.d.ts',
+  'packages/compiler/dist/candidate-validator.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -241,15 +246,205 @@ for (const relativePath of [
   }
 }
 
+// The candidate wrapper keeps its documented shape: a complete ContextBlock plus
+// optional retrieval data, and no independent candidate identifier (DEC-030).
+requireContains('packages/domain/dist/candidate-block.d.ts', 'CANDIDATE_BLOCK_SCHEMA_VERSION = 1');
+requireContains('packages/domain/dist/candidate-block.d.ts', 'declare const CandidateBlockSchema');
+requireContains('packages/domain/dist/candidate-block.d.ts', 'type CandidateBlock =');
+requireContains(
+  'packages/domain/dist/candidate-block.d.ts',
+  'declare const CandidateRetrievalSchema',
+);
+requireContains('packages/domain/dist/candidate-block.d.ts', 'type CandidateRetrieval =');
+requireContains(
+  'packages/domain/dist/candidate-block.d.ts',
+  'declare const CandidateRetrievalScoreSchema',
+);
+requireContains('packages/domain/dist/candidate-block.d.ts', 'type CandidateRetrievalScore =');
+requireContains('packages/domain/dist/index.d.ts', "} from './candidate-block.js'");
+
+{
+  const content = contents.get('packages/domain/dist/candidate-block.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // The wrapper carries the canonical block; it never redeclares block fields
+    // and never gains query-dependent scoring or decision data (DEC-026).
+    if (!declarations.includes('block')) {
+      fail('packages/domain/dist/candidate-block.d.ts does not declare the wrapped block');
+    }
+    for (const forbidden of [
+      'relevanceScore',
+      'recencyScore',
+      'redundancyScore',
+      'utilityScore',
+      'finalScore',
+      'candidateId',
+      'normalizedScore',
+      'renderedText',
+      'decision',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/domain/dist/candidate-block.d.ts exposes the query-dependent field "${forbidden}"`,
+        );
+      }
+    }
+    // The retrieval score exposes project-owned primitives only: no provider SDK
+    // type may reach it (INV-ADAPTER-001).
+    for (const forbidden of ['Qdrant', 'Qmd', 'QMD', 'Tiktoken', 'SearchResult', 'ScoredPoint']) {
+      if (declarations.includes(forbidden)) {
+        fail(`packages/domain/dist/candidate-block.d.ts exposes the provider type "${forbidden}"`);
+      }
+    }
+  }
+}
+
+// The shared hash helper publishes project-owned values only: no crypto
+// implementation type reaches its surface (INV-ADAPTER-001).
+requireContains(
+  'packages/domain/dist/block-content-hash.d.ts',
+  'declare function normalizeContextBlockContentForHash(content: string): string;',
+);
+requireContains(
+  'packages/domain/dist/block-content-hash.d.ts',
+  'declare function calculateNormalizedContentHash(content: string): ContentHash;',
+);
+requireContains('packages/domain/dist/index.d.ts', "} from './block-content-hash.js'");
+
+{
+  const content = contents.get('packages/domain/dist/block-content-hash.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // Word-bounded, because `ContentHash` and `calculateNormalizedContentHash`
+    // are the project-owned names this module is supposed to publish.
+    for (const forbidden of [
+      /node:crypto/,
+      /createHash/,
+      /\bHash\b/,
+      /\bBuffer\b/,
+      /\bBinaryLike\b/,
+      /\bcrypto\b/,
+    ]) {
+      if (forbidden.test(declarations)) {
+        fail(
+          `packages/domain/dist/block-content-hash.d.ts exposes the crypto implementation type ${forbidden.source}`,
+        );
+      }
+    }
+  }
+}
+
+// The candidate validator keeps its documented runtime-boundary signature, its
+// project-owned error type, and its project-owned result.
+requireContains(
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'declare class CandidateValidator',
+);
+requireContains(
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'constructor(tokenizer: Tokenizer);',
+);
+requireContains(
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'validate(input: unknown): ValidatedCandidateSet;',
+);
+requireContains(
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'declare class CandidateValidationError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'readonly code = "CANDIDATE_VALIDATION_FAILED"',
+);
+requireContains(
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'interface CandidateValidationInput',
+);
+requireContains(
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'interface ValidatedCandidateSet',
+);
+requireContains(
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'readonly candidates: readonly CandidateBlock[];',
+);
+requireContains(
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'readonly sourceDocuments: readonly SourceDocument[];',
+);
+requireContains('packages/compiler/dist/index.d.ts', "} from './candidate-validator.js'");
+
+// The validation library, the Node standard library, a provider SDK, an
+// application type, and an internal helper all stay implementation details of
+// the compiler kernel (INV-ADAPTER-001, INV-DEP-002).
+const COMPILER_LEAKED_TYPES = [
+  'zod',
+  'ZodType',
+  'ZodError',
+  'node:crypto',
+  'Buffer',
+  'js-tiktoken',
+  'Tiktoken',
+  'DomainValidationError',
+  'MarkdownChunker',
+  'IngestedSource',
+  'ingestSource',
+  '@ctxalloc/application',
+  'Map<',
+  'Set<',
+  'CountOutcome',
+  'IssuePath',
+  'canonicalize',
+  'pointerFor',
+];
+
+for (const relativePath of [
+  'packages/compiler/dist/index.d.ts',
+  'packages/compiler/dist/candidate-validator.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const type of COMPILER_LEAKED_TYPES) {
+    if (declarations.includes(type)) {
+      fail(`${relativePath} exposes the implementation type "${type}"`);
+    }
+  }
+  // No later compiler stage may appear before its phase implements it.
+  for (const stage of [
+    'Deduplicator',
+    'CandidateScorer',
+    'BudgetAllocator',
+    'ContextOrderer',
+    'ContextRenderer',
+    'TraceBuilder',
+    'ContextCompiler',
+    'CandidateProvider',
+  ]) {
+    if (declarations.includes(stage)) {
+      fail(`${relativePath} declares the unimplemented stage "${stage}"`);
+    }
+  }
+}
+
 // No external library type reaches a public declaration.
+//
+// `@ctxalloc/domain` is the one documented exception: its runtime-validated
+// schemas *are* its published contract, so a schema declaration necessarily names
+// the validation library's types (MVP_SCOPE 3.1). The allowance is narrow — `zod`
+// and nothing else — and it does not extend to any consumer: every other package
+// must keep the library behind its own boundary (INV-ADAPTER-001).
+const DOMAIN_DECLARATION_PREFIX = 'packages/domain/dist/';
+
 for (const [relativePath, content] of contents) {
+  const isDomain = relativePath.startsWith(DOMAIN_DECLARATION_PREFIX);
   const specifiers = [...content.matchAll(/from ["'](?<from>[^"']+)["']/g)]
     .map((match) => match.groups?.from ?? '')
     .filter((specifier) => !specifier.startsWith('./') && !specifier.startsWith('../'));
   for (const specifier of specifiers) {
-    if (!specifier.startsWith(INTERNAL_SCOPE)) {
-      fail(`${relativePath} exposes an external type from "${specifier}"`);
-    }
+    if (specifier.startsWith(INTERNAL_SCOPE)) continue;
+    if (isDomain && specifier === 'zod') continue;
+    fail(`${relativePath} exposes an external type from "${specifier}"`);
   }
 }
 

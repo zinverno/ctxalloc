@@ -9,7 +9,7 @@ or agent framework.
 
 ## Status
 
-Phase 6 — deterministic Markdown chunking. The repository contains the TypeScript
+Phase 7 — candidate wrapper and strict candidate validation. The repository contains the TypeScript
 monorepo scaffolding from Phase 1 (workspace structure, strict compiler and
 linting configuration, test infrastructure, package boundaries, boundary
 checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
@@ -18,8 +18,9 @@ locations, `SourceDocument`, `ContextBlock`, `TokenBudget`, and a structured
 validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
 deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
 tokenizer contract test suite, a real offline tokenizer adapter in
-`@ctxalloc/tokenization`, and the first two application use cases in
-`@ctxalloc/application`.
+`@ctxalloc/tokenization`, the first two application use cases in
+`@ctxalloc/application`, and the first compiler-kernel stage in
+`@ctxalloc/compiler`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
 `js-tiktoken` (pinned to 1.0.21, see [DEC-027](./docs/DECISIONS.md)). It runs
@@ -77,11 +78,58 @@ API or metadata cache type.
 directory, fetch no URL, and infer no path or scope; the caller supplies the
 content.
 
-**No compiler and no allocator exist yet.** Nothing decides which blocks fit a
-budget. There is no allocation, scoring, deduplication, ordering, rendering,
-trace generation, retrieval, persistence, HTTP, or CLI behavior yet. CtxAlloc
-does not yet compile or optimize context, and it supports no Obsidian
-integration.
+`@ctxalloc/compiler` adds `CandidateValidator`, the first stage of the compiler
+kernel (see [DEC-030](./docs/DECISIONS.md)). It is synchronous, deterministic,
+and offline, and takes the `Tokenizer` port through constructor injection.
+
+Candidates arrive as `CandidateBlock`, an ephemeral request-specific wrapper
+around one canonical `ContextBlock`. The wrapper carries optional
+retrieval-supplied data — provider identity, rank, and a provider-defined score
+with explicit `semantics` and `higherIsBetter` — so a `ContextBlock` stays
+query-independent. **Retrieval scores are carried but never normalized,
+compared, sorted by, or used to include anything;** scores from different
+providers or metrics are not assumed comparable. Retrieval data is never written
+back into the block.
+
+**Validation is strict and all-or-nothing.** Any problem rejects the whole batch
+with one structured `CandidateValidationError`. Nothing is silently removed,
+repaired, reordered, or re-counted. A top-level schema failure reports the schema
+issues alone; once the schema passes, every cross-record problem in the batch is
+collected before failing.
+
+Both `tokenCount` and `normalizedContentHash` are recomputed — the count through
+the injected tokenizer over the exact block content, the hash through the shared
+domain helper — and a mismatch is a rejection, not a repair. Source references
+are validated against an explicit `SourceDocument` registry supplied with the
+batch, and scope matching is exact, so an absent `projectId` and an explicit one
+are different scopes. A duplicated source ID resolves to no record at all, so no
+duplicate becomes authoritative and the reported issues cannot depend on registry
+order. `SourceDocument.contentHash` is not recomputed: the complete original
+source content is intentionally absent during compilation.
+
+Provenance must also be internally consistent: a block's `sourceLocation` kind
+must match its own source type — `markdown` and `text` blocks are located by a
+character range, `conversation` blocks by a message — so a block cannot claim
+provenance its source type cannot produce. An absent source location stays valid,
+and no location value is rewritten. This is provenance validation, not source
+reconstruction: `endOffset <= sourceLength` is still not checked, because
+`SourceDocument` carries no full content.
+
+**Duplicate wrappers are not deduplicated yet.** Two wrappers carrying the same
+block, with or without different retrieval metadata, pass through in input order
+for the future deduplication phase. What is rejected is one block ID attached to
+two _different_ canonical records.
+
+Priority is restricted to finite safe integers, including negative values. No
+product-specific range exists yet; semantic bounds belong to the future
+`CompilationPolicy`.
+
+**No allocator exists yet.** Nothing decides which blocks fit a budget, and
+whether required content fits is the allocator's decision, not the validator's.
+There is no policy filtering, deduplication, scoring, allocation, ordering,
+rendering, trace generation, compiler orchestration, retrieval provider,
+persistence, HTTP, or CLI behavior yet. CtxAlloc does not yet compile or optimize
+context, and it supports no Obsidian integration.
 
 ## Prerequisites
 

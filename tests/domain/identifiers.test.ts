@@ -69,8 +69,18 @@ describe('INV-PROV-005: content hashes are validated content-derived values', ()
     expect(safeParse(ContentHashSchema, input).ok).toBe(false);
   });
 
-  it('exposes no hashing function, because computation belongs to ingestion', () => {
-    const hashers = Object.keys(domain).filter((name) => /^(hash|computeHash|sha)/i.test(name));
-    expect(hashers).toEqual([]);
+  it('exposes exactly one hashing helper: the canonical block content hash', () => {
+    // Phase 7 moved that one rule into the domain so the chunker which writes a
+    // hash and the validator which rechecks it cannot drift (DEC-030). No other
+    // hashing helper belongs here: the exact `SourceDocument.contentHash` over
+    // complete source content stays an ingestion concern.
+    const hashers = Object.keys(domain)
+      .filter((name) => /hash/i.test(name))
+      .sort();
+    expect(hashers).toEqual([
+      'ContentHashSchema',
+      'calculateNormalizedContentHash',
+      'normalizeContextBlockContentForHash',
+    ]);
   });
 });

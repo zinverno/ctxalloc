@@ -5,8 +5,27 @@
  * (DEC-006). It contains data definitions and validation only: no retrieval, no
  * tokenization, no allocation, no rendering, and no infrastructure dependency
  * (INV-DEP-001).
+ *
+ * The one exception is the canonical block content hash, which uses the Node
+ * standard library. Hashing is a pure function of the supplied string, not an
+ * infrastructure dependency: it reaches no database, framework, filesystem, or
+ * SDK, and it is owned here so that the chunker which writes a hash and the
+ * validator which rechecks it cannot drift apart (DEC-030, INV-DEP-003).
  */
 
+export {
+  calculateNormalizedContentHash,
+  normalizeContextBlockContentForHash,
+} from './block-content-hash.js';
+export {
+  CANDIDATE_BLOCK_SCHEMA_VERSION,
+  CandidateBlockSchema,
+  CandidateRetrievalSchema,
+  CandidateRetrievalScoreSchema,
+  type CandidateBlock,
+  type CandidateRetrieval,
+  type CandidateRetrievalScore,
+} from './candidate-block.js';
 export { ContentHashSchema, type ContentHash } from './content-hash.js';
 export {
   CONTEXT_BLOCK_SCHEMA_VERSION,
@@ -46,6 +65,7 @@ export {
   configuredReservedTokens,
   type TokenBudget,
 } from './token-budget.js';
+export { findLoneSurrogate } from './unicode.js';
 export {
   DomainValidationError,
   parseOrThrow,

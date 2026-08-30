@@ -79,6 +79,7 @@ The MVP includes stable schemas for:
 * SourceDocument;
 * SourceLocation;
 * ContextBlock;
+* CandidateBlock;
 * CompilationRequest;
 * CompilationPolicy;
 * CompilationResult;
@@ -132,10 +133,36 @@ The MVP validates:
 * source location;
 * required metadata;
 * duplicated identifiers;
-* invalid priorities;
-* impossible required-block budgets.
+* invalid priorities.
 
-Invalid candidates must produce explicit errors or trace entries.
+Candidates arrive as `CandidateBlock` wrappers, and source references are
+validated against an explicit `SourceDocument` registry supplied with the batch.
+A block's source is proven by membership in that registry and by nothing else:
+not by a path, not by metadata, not by the adapter that produced it, and not by
+array position. Source document identifiers must be unique inside the registry,
+and every referenced document must agree with the block on both scope and source
+type. A duplicated identifier resolves to no record at all, so no duplicate
+becomes authoritative and the reported issues cannot depend on registry order.
+
+A block's `sourceLocation` kind must also be compatible with its own source type:
+`markdown` and `text` blocks are located by a character range, `conversation`
+blocks by a message. An absent source location remains valid.
+
+Token counts and normalized content hashes are recomputed and compared exactly; a
+mismatch is a rejection, not a repair.
+
+Impossible required-block budgets are **not** validated here. That decision
+depends on the complete required allocation and its rendering overhead, so it
+belongs to token budget allocation (section 3.5) and to INV-BUDGET-004.
+
+Invalid candidates must produce explicit errors or trace entries. In the
+implemented phase, an invalid batch fails explicitly and in full: any problem
+rejects the whole batch, and no candidate is silently removed or repaired. A
+schema failure reports the schema issues alone; once the schema passes, every
+cross-record problem is collected before failing. Translating such issues into
+rejected-candidate trace decisions belongs to the trace phase.
+
+See DEC-030.
 
 ---
 

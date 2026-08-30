@@ -132,7 +132,8 @@ interface EvaluationCase {
   scope: Scope;
   query: string;
 
-  candidates: ContextBlock[];
+  candidates: CandidateBlock[];
+  sourceDocuments: SourceDocument[];
 
   budget: {
     totalTokens: number;
@@ -157,6 +158,14 @@ interface EvaluationCase {
   tags: string[];
 }
 ```
+
+`candidates` are `CandidateBlock` wrappers, and `sourceDocuments` is the explicit
+registry their source references are validated against, because that is what the
+compiler's candidate validation stage actually receives (DEC-030). A case that
+omitted the registry could not be compiled.
+
+`EvaluationCase` is a specification, not an implemented schema. The evaluation
+harness is a later phase.
 
 Required facts should have stable identifiers.
 
