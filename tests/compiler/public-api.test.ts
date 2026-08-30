@@ -10,6 +10,9 @@ import {
   CandidateScoringError,
   CandidateValidationError,
   CandidateValidator,
+  CONTEXT_ORDERING_POLICY_SCHEMA_VERSION,
+  ContextOrderer,
+  ContextOrderingError,
   type AllocatedCandidateSet,
   type AllocationDecisionReason,
   type BudgetAllocationPolicy,
@@ -18,12 +21,14 @@ import {
   type CandidateValidationInput,
   type CanonicalSelectionReason,
   type CategoryAllocationConstraint,
+  type ContextOrderingPolicy,
   type DeduplicatedCandidate,
   type DeduplicatedCandidateMember,
   type DeduplicatedCandidateSet,
   type DuplicateMatchReason,
   type ExcludedCandidateDecision,
   type IncludedCandidateDecision,
+  type OrderedCandidateSet,
   type RetrievalNormalizationRule,
   type ScoredCandidate,
   type ScoredCandidateSet,
@@ -59,6 +64,7 @@ const manifest = JSON.parse(
 const SOURCE_FILES = [
   'packages/compiler/src/index.ts',
   'packages/compiler/src/budget-allocator.ts',
+  'packages/compiler/src/context-orderer.ts',
   'packages/compiler/src/candidate-validator.ts',
   'packages/compiler/src/candidate-deduplicator.ts',
   'packages/compiler/src/candidate-scorer.ts',
@@ -77,17 +83,20 @@ function importSpecifiers(relativePath: string): string[] {
 }
 
 describe('@ctxalloc/compiler public API', () => {
-  it('exports the four implemented compiler stages and their errors only', () => {
+  it('exports the five implemented compiler stages and their errors only', () => {
     expect(Object.keys(compiler).sort()).toEqual([
       'BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION',
       'BudgetAllocationError',
       'BudgetAllocator',
       'CANDIDATE_SCORING_POLICY_SCHEMA_VERSION',
+      'CONTEXT_ORDERING_POLICY_SCHEMA_VERSION',
       'CandidateDeduplicator',
       'CandidateScorer',
       'CandidateScoringError',
       'CandidateValidationError',
       'CandidateValidator',
+      'ContextOrderer',
+      'ContextOrderingError',
     ]);
   });
 
@@ -114,12 +123,15 @@ describe('@ctxalloc/compiler public API', () => {
       'CategoryPriorityScoreComponent',
       'CategoryPriorityScoreEvidence',
       'CategoryPriorityScoringPolicy',
+      'ContextOrderingIssueCode',
+      'ContextOrderingPolicy',
       'DeduplicatedCandidate',
       'DeduplicatedCandidateMember',
       'DeduplicatedCandidateSet',
       'DuplicateMatchReason',
       'ExcludedCandidateDecision',
       'IncludedCandidateDecision',
+      'OrderedCandidateSet',
       'PolicyValueSource',
       'RecencyScoreComponent',
       'RecencyScoreEvidence',
@@ -308,6 +320,66 @@ describe('@ctxalloc/compiler public API', () => {
     throw new Error('expected the empty policy to be rejected');
   });
 
+  it('accepts an AllocatedCandidateSet and returns the documented ordered result', () => {
+    const scored = new CandidateScorer({
+      schemaVersion: CANDIDATE_SCORING_POLICY_SCHEMA_VERSION,
+      policyId: 'baseline',
+      policyVersion: '1.0.0',
+    }).score(
+      new CandidateDeduplicator().deduplicate(
+        new CandidateValidator(wordTokenizer).validate(input()),
+      ),
+      '2026-06-01T12:00:00.000Z',
+    );
+    const allocated: AllocatedCandidateSet = new BudgetAllocator({
+      schemaVersion: BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION,
+      policyId: 'allocation',
+      policyVersion: '1.0.0',
+      optionalSelection: 'score-desc-greedy',
+    }).allocate(scored, { totalTokens: 100, reservedOutputTokens: 10 });
+
+    const orderingPolicy: ContextOrderingPolicy = {
+      schemaVersion: CONTEXT_ORDERING_POLICY_SCHEMA_VERSION,
+      policyId: 'ordering',
+      policyVersion: '1.0.0',
+      strategy: 'source-document-then-location',
+    };
+    const ordered: OrderedCandidateSet = new ContextOrderer(orderingPolicy).order(allocated);
+
+    const allocation: AllocatedCandidateSet = ordered.allocation;
+    const sequence: readonly IncludedCandidateDecision[] = ordered.orderedIncluded;
+
+    expect(allocation).toBe(allocated);
+    expect(ordered.orderingPolicyId).toBe('ordering');
+    expect(ordered.orderingPolicyVersion).toBe('1.0.0');
+    expect(sequence).toHaveLength(1);
+    expect(sequence[0]).toBe(allocated.included[0]);
+    expect(sequence[0]?.candidate.candidate.canonicalBlock.id).toBe('block-1');
+    // The ordering stage adds no schema version: it is an ephemeral result.
+    expect(Object.keys(ordered)).not.toContain('schemaVersion');
+    expect(ContextOrderingError.prototype).toBeInstanceOf(Error);
+  });
+
+  it('accepts an unknown ordering policy at the runtime boundary', () => {
+    const untyped: unknown = {
+      schemaVersion: 1,
+      policyId: 'p',
+      policyVersion: '1',
+      strategy: 'source-document-then-location',
+    };
+    expect(() => new ContextOrderer(untyped)).not.toThrow();
+  });
+
+  it('publishes a stable top-level ordering error code', () => {
+    try {
+      new ContextOrderer({});
+    } catch (error) {
+      expect((error as ContextOrderingError).code).toBe('CONTEXT_ORDERING_FAILED');
+      return;
+    }
+    throw new Error('expected the empty policy to be rejected');
+  });
+
   it('accepts unknown policy and reference time at the runtime boundary', () => {
     const untypedPolicy: unknown = { schemaVersion: 1, policyId: 'p', policyVersion: '1' };
     const scorer = new CandidateScorer(untypedPolicy);
@@ -339,7 +411,6 @@ describe('@ctxalloc/compiler public API', () => {
   it('exports no later compiler stage and no retrieval port', () => {
     for (const name of [
       'CandidateFilter',
-      'ContextOrderer',
       'ContextRenderer',
       'TraceBuilder',
       'ContextCompiler',
@@ -428,6 +499,7 @@ describe('@ctxalloc/compiler public API', () => {
       'packages/compiler/src/candidate-deduplicator.ts',
       'packages/compiler/src/candidate-scorer.ts',
       'packages/compiler/src/budget-allocator.ts',
+      'packages/compiler/src/context-orderer.ts',
     ]) {
       const declaredExports = readSource(file)
         .split('\n')

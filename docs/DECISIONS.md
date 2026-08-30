@@ -79,6 +79,7 @@ A newer decision has replaced the previous one.
 | DEC-031 | Deduplicate exact candidate content before policy scoring | Accepted |
 | DEC-032 | Normalize explicit candidate signals before deterministic allocation | Accepted |
 | DEC-033 | Allocate required and scored content under a deterministic block budget | Accepted |
+| DEC-034 | Order selected context by stable source position before rendering | Accepted |
 
 ---
 
@@ -2274,6 +2275,141 @@ Phases 7, 8, and 9 are unchanged in behavior. `CandidateScorer` still performs n
 A deployment that configures category constraints now gets hard guarantees with structured failures instead of best-effort behavior, and one that supplies impossible required content fails loudly at the block-content stage rather than at render time.
 
 `CandidateFilter` remains future work and its orchestration placement remains undecided, as recorded by DEC-032. `ContextOrderer`, `ContextRenderer`, final rendered token validation, the render/evict/re-render orchestration, final `unusedTokens`, `CompilationTrace`, `ContextCompiler`, the full `CompilationPolicy`, retrieval, persistence, the CLI, and the HTTP API remain later phases.
+
+---
+
+## DEC-034: Order Selected Context by Stable Source Position Before Rendering
+
+### Status
+
+Accepted
+
+### Decision
+
+Deterministic context ordering is the fifth stage of the compiler kernel. It lives in `@ctxalloc/compiler` as `ContextOrderer`, one synchronous, pure, offline class that turns an `AllocatedCandidateSet` and one narrow versioned `ContextOrderingPolicy` into an `OrderedCandidateSet`.
+
+Its only injected dependency is the policy. It reads no file, opens no socket, queries no database, calls no model, calls no retrieval provider, calls no tokenizer, calls no renderer, reads no clock, and generates no random value (INV-DET-001, INV-DET-003, INV-DET-004, INV-DEP-002).
+
+It does not include, exclude, or evict a candidate, re-run allocation, score, deduplicate, filter, render, tokenize, estimate rendering overhead, or build a trace.
+
+### Allocation Chronology Is Not Render Order
+
+Phase 10 returns its inclusions in the order the budget was spent: required blocks, then category minimums, then score-selected optional blocks (DEC-033). That sequence records how the allocation was reached, and says nothing about how the content should read.
+
+Four sequences now exist across the kernel, and they answer deliberately different questions:
+
+```text
+score ranking          how useful is this candidate                  Phase 9
+allocation chronology  in what order was the budget spent            Phase 10
+optionalEvictionOrder  what may be given back if rendering overruns  Phase 10
+render order           where does this content belong when read      Phase 11
+```
+
+They are distinct **semantic** sequences, not disjoint ones. Render order and allocation chronology hold exactly the same decisions, so each is literally a permutation of the other; `optionalEvictionOrder` holds a subset of those block identifiers; and the score ranking also covers candidates allocation excluded, so it is wider than all three. What separates them is that their ordering rules answer different questions, so none may be inferred or derived from another — not that their element sets differ.
+
+Leaving the renderer to sort for itself was rejected. Presentation would then be an implicit side effect of whichever array order happened to reach it, and INV-RENDER-001 requires the same ordered blocks and rendering policy to produce the same string — which presumes that "the ordered blocks" is something a stage decided, explicitly and reproducibly. So one stage owns render order, and it owns nothing else.
+
+### A Narrow Versioned Ordering Policy
+
+As in DEC-032 and DEC-033, the broad future `CompilationPolicy` of ARCHITECTURE 5.6 is not built here. Only the ordering slice exists:
+
+```ts
+interface ContextOrderingPolicy {
+  readonly schemaVersion: 1;
+  readonly policyId: string;
+  readonly policyVersion: string;
+  readonly strategy: 'source-document-then-location';
+}
+```
+
+`strategy` names the rule explicitly rather than leaving it implicit, so a future strategy — interleaving several sources, grouping by category, placing required content first, or a conversation-aware layout — arrives as a policy value under a new schema version rather than as a silent change of what this one means.
+
+Policy validation is strict and is a runtime boundary: the object is closed, unknown fields are rejected rather than stripped, nothing is coerced, no default is injected, exact strings are preserved, `policyId` and `policyVersion` must be non-blank, and malformed UTF-16 is rejected with the shared domain helper (INV-BLOCK-007).
+
+### The v1 Order
+
+The complete key, applied to canonical blocks only:
+
+```text
+1. sourceDocumentId ascending, by UTF-16 code unit
+2. position inside that source document
+3. block ID ascending, by UTF-16 code unit
+```
+
+Grouping by source document first keeps one document's blocks contiguous, so the reader meets a source once rather than in fragments scattered through the context. The identifier is opaque (DEC-028), so its ascending order is a **stable grouping key, not a claim about which document matters more**. Ranking documents would need a policy that does not exist; inventing one here would smuggle a relevance decision into a layout stage.
+
+Position inside a source is the source's own chronology:
+
+**Text and Markdown** (`text-range`): `startOffset` ascending, then `endOffset` ascending, then the block identifier. Nothing else.
+
+Offsets are the chronology of a text source: they state exactly where the block sat in the original content. Nothing is inferred from content, heading path, or timestamps, and `headingPath` in particular is provenance rather than sequence — two sections can share one heading path.
+
+`startLine` and `endLine` deliberately take no part in ordering. They stay in `SourceLocation` as provenance, and `CandidateValidator` still validates them; they simply are not an ordering signal in schema version 1.
+
+The first version of this decision compared them "only when both blocks carry one", and that rule was wrong. It is not transitive, so it is not an ordering at all. With identical offsets in one source:
+
+```text
+a   offsets 10-20   lines 2-2
+b   offsets 10-20   no lines
+c   offsets 10-20   lines 1-1
+```
+
+`a < b` and `b < c` both fell to the identifier, because `b` records no line; `c < a` came from the lines. The three results cannot hold together. A comparator with a cycle makes `Array.prototype.sort` an implementation detail rather than a contract — the specification leaves the result implementation-defined — so the stage would have promised a determinism it did not have (INV-DET-001, INV-DET-002, INV-DET-005).
+
+Ranking presence instead — every block with lines before every block without — is transitive, but it lets optional metadata completeness decide the layout: re-indexing a source with a producer that records lines would move blocks that did not change. Offsets already establish position exactly, so the line fields are redundant for this purpose, and ignoring them is the only v1 rule that is both a genuine total order and independent of which producer filled in optional provenance.
+
+**Conversation** (`conversation-message`): a message stating `messageIndex` precedes one that does not; two indexed messages compare by `messageIndex`, then `messageId`, then block ID; two unindexed messages compare by `messageId`, then block ID.
+
+`messageIndex` is the conversation's chronology. `messageId` is a deterministic fallback and nothing more: it is compared by code unit and never parsed for an embedded timestamp, sequence number, or ordering convention, because a provider's identifier format is not a contract this compiler owns. That means `m-10` precedes `m-2`, which is deliberate — a fallback must be reproducible, not clever.
+
+**Absent location**: located blocks of a source come before its unlocated ones, and unlocated blocks are ordered by block ID alone. A block that does not state where it came from does not get a position guessed for it (INV-PROV-002). Unlocated blocks stay inside their own source group rather than being pushed to the end of the whole context.
+
+### What Does Not Order
+
+Score, required status, allocation reason, category, timestamps, heading path, retrieval and provider data, source titles and metadata, duplicate members, and input array position are all absent from the comparator.
+
+A high-scoring block renders late when its source position is late. A required block renders after an optional one from the same source. `INCLUDED_REQUIRED`, `INCLUDED_CATEGORY_MINIMUM`, and `INCLUDED_SCORE_ORDER` produce identical layouts. Duplicate members are provenance carried on the group, and Phase 8 already chose the one canonical block that will be rendered, so a duplicate's location never moves the canonical block.
+
+Placing required content first was considered and rejected for v1: it is a presentation policy with its own trade-offs, it would break source coherence, and it belongs in a later strategy value rather than in the one rule this schema version defines.
+
+### The Result Nests the Allocation
+
+```ts
+interface OrderedCandidateSet {
+  readonly allocation: AllocatedCandidateSet;
+  readonly orderingPolicyId: string;
+  readonly orderingPolicyVersion: string;
+  readonly orderedIncluded: readonly IncludedCandidateDecision[];
+}
+```
+
+Nesting is deliberate. Every Phase 10 fact — scope, source registry, both earlier policy identities, reference time, the budget, the block-content metrics, the excluded decisions with their reasons, and `optionalEvictionOrder` — stays reachable, unchanged, and stated once. Copying those fields into a second stage type would create two places for one truth to drift (INV-DEP-003). The single new semantic fact is `orderedIncluded`.
+
+`orderedIncluded` holds exactly the objects of `allocation.included`, by reference, permuted. It is a copy of that array, sorted, so by construction every included decision appears once, no excluded decision can appear, no reason can change, and no `ContextBlock` is cloned or synthesized (INV-TRACE-001, INV-ALLOC-002, INV-ALLOC-004). Sorting a copy can neither lose nor invent an element, which is why this stage needs no reconciliation check and publishes one issue code, `invalid_policy`, under `CONTEXT_ORDERING_FAILED`.
+
+**Array position is the whole of the ordering contract.** No index, rank, or position field is written onto a block or a decision: a block's position is a property of one compilation rather than of the block (DEC-026), and a stored index could disagree with the array holding it.
+
+`optionalEvictionOrder` is carried through untouched and is not render order. Viewed by block identity it *is* a subset of this sequence — the currently included optional blocks that are safely evictable — but it answers a different question, what may be given back if rendering overruns, and its relative order comes from eviction policy rather than from source position. Neither sequence may be derived from the other.
+
+### Determinism
+
+Ordering depends only on the supplied allocation and the validated policy. `localeCompare` and `Intl.Collator` are never used: their results depend on the machine's locale and on the ICU data the runtime was built with.
+
+Every comparator ends in the stable block identifier. For a hand-assembled internal input that carries one identifier on two different canonical records, the existing canonical serialization is the final tie-break, so the result is a total order rather than a sort-stability artifact (INV-DET-005). A batch that came through `CandidateValidator` cannot reach that branch, because the validator rejects one block ID standing for two records (DEC-030).
+
+The comparator is likewise total for a defensive input mixing location kinds inside one source document — `text-range` before `conversation-message`. `CandidateValidator` already enforces kind and source-type compatibility, and this stage does not revalidate it: it is not a second validator, but its comparator must still be a function.
+
+### Trace Readiness Without a Trace
+
+The result exposes the ordering policy identity and the final ordered sequence, which is what a future `TraceBuilder` needs to state how the rendered context was laid out (INV-TRACE-004, INV-TRACE-005). `CompilationTrace` itself is not implemented.
+
+### Consequences
+
+`@ctxalloc/compiler` gains a fifth published stage and no new dependency: `ContextOrderer` needs only `@ctxalloc/domain` types, the existing validation library, the Phase 10 stage types, and one compiler-internal helper. The boundary allowlist is unchanged.
+
+Phases 7 through 10 are unchanged in behavior. No metric is added: an ordering stage produces no measurement, and METRICS gains nothing merely because a stage exists.
+
+`ContextRenderer`, the rendering policy, final rendered token measurement, the render/evict/re-render orchestration, `CandidateFilter`, the broad `CompilationPolicy`, `CompilationTrace`, `ContextCompiler`, retrieval, persistence, the CLI, and the HTTP API remain later phases. The final rendered budget stays future work: nothing here brings INV-BUDGET-002 any closer to being satisfied.
 
 ---
 
