@@ -36,6 +36,7 @@ const DECLARATIONS = [
   'packages/compiler/dist/candidate-scorer.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
   'packages/compiler/dist/context-orderer.d.ts',
+  'packages/compiler/dist/context-renderer.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -857,6 +858,121 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './context-orderer.
   }
 }
 
+// The context renderer keeps its documented stage signature: it takes one
+// versioned policy and one project-owned Tokenizer at construction, consumes an
+// OrderedCandidateSet, and returns one exact measurement of one selection
+// (DEC-035).
+requireContains('packages/compiler/dist/context-renderer.d.ts', 'declare class ContextRenderer');
+requireContains(
+  'packages/compiler/dist/context-renderer.d.ts',
+  'constructor(policy: unknown, tokenizer: Tokenizer);',
+);
+requireContains(
+  'packages/compiler/dist/context-renderer.d.ts',
+  'render(input: OrderedCandidateSet): RenderedContextAttempt;',
+);
+requireContains(
+  'packages/compiler/dist/context-renderer.d.ts',
+  'declare class ContextRenderingError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/context-renderer.d.ts',
+  'readonly code = "CONTEXT_RENDERING_FAILED"',
+);
+requireContains(
+  'packages/compiler/dist/context-renderer.d.ts',
+  'CONTEXT_RENDERING_POLICY_SCHEMA_VERSION = 1',
+);
+// The renderer publishes a stable project-owned identity for a future trace.
+requireContains(
+  'packages/compiler/dist/context-renderer.d.ts',
+  'CONTEXT_RENDERER_ID = "ctxalloc-jsonl"',
+);
+requireContains('packages/compiler/dist/context-renderer.d.ts', 'CONTEXT_RENDERER_VERSION = "1"');
+requireContains('packages/compiler/dist/context-renderer.d.ts', 'interface ContextRenderingPolicy');
+// The one format of schema version 1, spelled exactly.
+requireContains('packages/compiler/dist/context-renderer.d.ts', "readonly format: 'jsonl-blocks';");
+requireContains('packages/compiler/dist/context-renderer.d.ts', 'interface RenderedContextAttempt');
+// The ordered set is nested whole and read-only, and the measurement publishes
+// the exact string, its count, the signed delta, and the observation.
+for (const member of [
+  'readonly ordered: OrderedCandidateSet;',
+  'readonly renderingPolicyId: string;',
+  'readonly renderingPolicyVersion: string;',
+  'readonly rendererId: string;',
+  'readonly rendererVersion: string;',
+  'readonly tokenizerId: string;',
+  'readonly tokenizerVersion: string;',
+  'readonly renderedContext: string;',
+  'readonly renderedTokens: number;',
+  'readonly fitsAvailableInputBudget: boolean;',
+]) {
+  requireContains('packages/compiler/dist/context-renderer.d.ts', member);
+}
+requireContains('packages/compiler/dist/index.d.ts', "} from './context-renderer.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/context-renderer.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // The render attempt is an ephemeral compiler-stage result, not a persisted
+    // record, so only the policy carries a schema version (INV-STORE-004).
+    if (/interface RenderedContextAttempt\s*\{[^}]*schemaVersion/.test(declarations)) {
+      fail('packages/compiler/dist/context-renderer.d.ts declares a persisted schemaVersion');
+    }
+    if (/\bDate\b/.test(declarations)) {
+      fail('packages/compiler/dist/context-renderer.d.ts exposes a Date');
+    }
+    // A render attempt is not a compilation. Final metrics belong to the future
+    // orchestration loop, and the invalid non-negative "overhead" metric is gone
+    // for good (DEC-035, METRICS 8.6).
+    //
+    // `renderedTokenDelta` is forbidden for a different reason: subtracting
+    // `selectedBlockContentTokens` from a rendered count is only meaningful when
+    // one tokenizer identity produced both, and no stage contract reaching this
+    // stage carries a tokenizer identity to prove it. The field may return only
+    // once cross-stage identity is available (DEC-035).
+    for (const forbidden of [
+      'renderedTokenDelta',
+      'compiledTokens',
+      'unusedTokens',
+      'renderingOverheadTokens',
+      'renderingTokenDelta',
+      'includedContentTokens',
+      'tokenReduction',
+      'budgetUtilization',
+      'REQUIRED_CONTENT_EXCEEDS_BUDGET',
+      'CompilationPolicy',
+      'CompilationRequest',
+      'CompilationTrace',
+      'CompilationResult',
+      'CandidateFilter',
+      'TraceBuilder',
+      'ContextCompiler',
+      // The renderer depends on the port, never on a tokenizer implementation.
+      'O200kBaseTokenizer',
+      'FakeTokenizer',
+      'Tiktoken',
+      'js-tiktoken',
+      // Serialization internals stay internal.
+      'RenderedBlockRecord',
+      'canonicalJson',
+      'recordOf',
+      'RECORD_SEPARATOR',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/context-renderer.d.ts exposes the future or forbidden concept "${forbidden}"`,
+        );
+      }
+    }
+    // The one tokenizer type it may name is the project-owned port.
+    if (!/import type \{ Tokenizer \} from ['"]@ctxalloc\/ports['"]/.test(declarations)) {
+      fail('packages/compiler/dist/context-renderer.d.ts does not import the Tokenizer port');
+    }
+  }
+}
+
 // The validation library, the Node standard library, a provider SDK, an
 // application type, and an internal helper all stay implementation details of
 // the compiler kernel (INV-ADAPTER-001, INV-DEP-002).
@@ -914,6 +1030,7 @@ for (const relativePath of [
   'packages/compiler/dist/candidate-scorer.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
   'packages/compiler/dist/context-orderer.d.ts',
+  'packages/compiler/dist/context-renderer.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
@@ -928,19 +1045,31 @@ for (const relativePath of [
   }
   // No later compiler stage may appear before its phase implements it.
   // `Deduplicator` left this list in Phase 8, `Scorer` in Phase 9,
-  // `BudgetAllocator` in Phase 10, and `ContextOrderer` in Phase 11, when each
-  // became a published stage (DEC-031, DEC-032, DEC-033, DEC-034). Each is
-  // therefore checked by name only where it must not appear.
-  for (const stage of [
-    'CandidateFilter',
-    'ContextRenderer',
-    'TraceBuilder',
-    'ContextCompiler',
-    'CandidateProvider',
-  ]) {
+  // `BudgetAllocator` in Phase 10, `ContextOrderer` in Phase 11, and
+  // `ContextRenderer` in Phase 12, when each became a published stage (DEC-031,
+  // DEC-032, DEC-033, DEC-034, DEC-035). Each is therefore checked by name only
+  // where it must not appear.
+  for (const stage of ['CandidateFilter', 'TraceBuilder', 'ContextCompiler', 'CandidateProvider']) {
     if (declarations.includes(stage)) {
       fail(`${relativePath} declares the unimplemented stage "${stage}"`);
     }
+  }
+}
+
+// The renderer is published, but only from Phase 12 onward: no earlier stage may
+// name it, because a stage that referenced the renderer would be deciding
+// presentation (DEC-034, DEC-035).
+for (const relativePath of [
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'packages/compiler/dist/context-orderer.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  if (stripComments(content).includes('ContextRenderer')) {
+    fail(`${relativePath} declares the later stage "ContextRenderer"`);
   }
 }
 

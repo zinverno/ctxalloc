@@ -407,12 +407,13 @@ The compiler must not call an LLM.
 
 Implemented so far: candidate reception and validation with scope filtering
 (section 3.4), duplicate removal (section 3.4), scoring (section 3.5), token
-budget allocation over canonical block content (section 3.6), and **stable
-ordering of the included blocks** (below).
+budget allocation over canonical block content (section 3.6), **stable ordering
+of the included blocks**, and **deterministic rendering with exact measurement of
+the rendered string** (both below).
 
-Policy filtering, rendering, final rendered-token validation, the
-render/evict/re-render correction, trace generation, and the compiler
-orchestration that joins these stages remain future work.
+Policy filtering, the render/evict/re-render correction, final rendered-token
+validation of a compilation, trace generation, and the compiler orchestration
+that joins these stages remain future work. **The compiler is not complete.**
 
 **Stable ordering is implemented.** `ContextOrderer` consumes an
 `AllocatedCandidateSet` and one narrow versioned `ContextOrderingPolicy`, and
@@ -438,6 +439,39 @@ Allocation chronology, the score ranking, and the optional eviction order are
 three different sequences, and none of them is render order.
 
 See DEC-034.
+
+**Deterministic rendering is implemented.** `ContextRenderer` consumes an
+`OrderedCandidateSet`, one narrow versioned `ContextRenderingPolicy`, and one
+project-owned `Tokenizer`, and returns a `RenderedContextAttempt`: the current
+selection serialized as one deterministic string, plus the token count of exactly
+that string.
+
+Rendering policy v1 has one format, `jsonl-blocks`: one canonical JSON object per
+included block, joined by exactly one LF, with no prefix, suffix, enclosing
+array, or trailing newline. An empty selection renders as the exact empty string.
+Each record carries `blockId`, `content`, `headingPath` when the block carries
+one, `sourceDocumentId`, and `sourceType` — and nothing else. `sourceDocumentId`
+is the v1 source label; source titles and arbitrary metadata are deliberately not
+rendered.
+
+JSON string serialization is the boundary mechanism, so arbitrary source content
+cannot manufacture a second record or break out of its field, and content
+round-trips exactly: no trimming, normalization, truncation, or rewriting.
+Records follow `orderedIncluded` exactly; the renderer never sorts.
+
+**It measures, it does not correct.** The complete rendered string is tokenized
+once, and the result may exceed the budget: that is reported as
+`fitsAvailableInputBudget: false`, not as an error. The renderer evicts nothing,
+changes no allocation, and returns no `CompilationResult`, `compiledTokens`, or
+`unusedTokens`.
+
+It also publishes **no token delta**. Subtracting the allocated block-content sum
+from the rendered count needs one tokenizer identity behind both numbers, and no
+stage contract reaching the renderer carries one, so the stage declines a
+subtraction it cannot justify. The final signed `renderingTokenDelta` belongs to
+the future orchestration that owns same-tokenizer composition.
+
+See DEC-035.
 
 ---
 

@@ -397,7 +397,7 @@ The final rendered string is the source of truth.
 
 ## 8.4.1 Provisional Block-Content Metrics
 
-`BudgetAllocator` (ARCHITECTURE 6.4) runs before any renderer exists, so it
+`BudgetAllocator` (ARCHITECTURE 6.4) runs before anything is rendered, so it
 cannot report 8.4 or 8.10. It reports three intermediate values instead:
 
 ```text id="p10bcm"
@@ -418,16 +418,58 @@ These are **not**:
 
 * `compiledTokens` (8.4), which is the tokenized final rendered context;
 * `unusedTokens` (8.10), which is measured against `compiledTokens`;
-* `renderingOverheadTokens` (8.6), which the allocator neither measures nor
+* `renderingTokenDelta` (8.6), which the allocator neither measures nor
   estimates.
 
 `selectedBlockContentTokens` is a provisional value of the same shape as
 `includedContentTokens` (8.5) for the currently selected set; it becomes that
-metric only once a renderer has produced the final selection. Reporting a
-provisional value under a final metric name is a reporting error.
+metric only once the final selection is settled. Reporting a provisional value
+under a final metric name is a reporting error.
 
-The definitions in 8.4, 8.5, 8.6, 8.9, 8.10, and 8.11 are unchanged and remain
-the responsibility of the renderer and the compiler orchestration.
+The definitions in 8.4, 8.5, 8.6, 8.9, 8.10, and 8.11 remain the responsibility
+of the compiler orchestration that settles the final selection.
+
+## 8.4.2 Render-Attempt Metrics
+
+`ContextRenderer` (ARCHITECTURE 6.6) renders and tokenizes **one** selection. The
+selection may still change, so its measurement is reported under attempt names.
+There are exactly two:
+
+```text id="v4t7ns"
+renderedTokens
+  = tokenizer(renderedContext)
+
+fitsAvailableInputBudget
+  = renderedTokens <= availableInputTokens
+```
+
+`renderedTokens` is the exact count of the one complete rendered string, never a
+sum of block counts, record counts, or separator counts (INV-BUDGET-002).
+
+`fitsAvailableInputBudget` is observational. A `false` value is a valid
+measurement of an over-budget attempt, not a budget violation: 8.11 counts only
+*successful compilations* whose `compiledTokens` exceed the budget, and a render
+attempt is not a compilation.
+
+**No attempt-level token delta is reported.** `selectedBlockContentTokens`
+(8.4.1) stays reachable through the nested allocation, and the render stage
+deliberately does not subtract it from `renderedTokens`.
+
+The reason is the same-tokenizer precondition of 8.6. `renderedTokens` comes from
+the tokenizer injected into the renderer; `selectedBlockContentTokens` sums block
+`tokenCount` values validated under whichever tokenizer ran at candidate
+validation. No stage contract from `ValidatedCandidateSet` through
+`OrderedCandidateSet` carries a tokenizer identity, so the render stage cannot
+establish that its two operands share a unit. Subtracting them anyway would
+publish the difference between two vocabularies as though it described rendering.
+
+That is why `renderingTokenDelta` stays an orchestration metric: the component
+that guarantees one tokenizer across the stages is the component that may report
+it.
+
+These are **not** 8.4, 8.6, 8.7, 8.9, or 8.10. A render attempt becomes those
+final metrics only once the correction loop has settled the final selection, at
+which point `renderedTokens` of the last attempt *is* `compiledTokens`.
 
 ## 8.5 Included Content Tokens
 
@@ -438,14 +480,63 @@ includedContentTokens
 
 This excludes rendering overhead.
 
-## 8.6 Rendering Overhead Tokens
+## 8.6 Rendering Token Delta
 
 ```text id="2lp2ux"
-renderingOverheadTokens
+renderingTokenDelta
   = compiledTokens - includedContentTokens
 ```
 
-This value must be non-negative.
+This is a **signed** integer. It may be negative, zero, or positive.
+
+Until DEC-035 this metric was named `renderingOverheadTokens` and was required to
+be non-negative. That definition was wrong, and the requirement is withdrawn.
+
+The `Tokenizer` port (ARCHITECTURE 3.3) promises one thing: the exact count of
+one supplied string. It does **not** promise that tokenization is additive:
+
+```text id="8kqf2r"
+tokenizer(a + b)
+  is not necessarily
+tokenizer(a) + tokenizer(b)
+```
+
+A subword vocabulary can merge or split differently once content sits inside a
+larger string, so embedding a block in a rendered record can move token
+boundaries in either direction. The difference between the compiled total and the
+sum of the individual block counts is therefore a **signed tokenization delta**,
+not an isolated count of static rendering text.
+
+Read it as a diagnostic only:
+
+* it is **not** an additive attribution of wrapper, separator, source-label, or
+  heading tokens;
+* no exact token count may be attributed separately to labels, separators,
+  content, or wrappers, because no such attribution exists;
+* all rendering text is nevertheless part of `compiledTokens`, which is what
+  INV-RENDER-004 requires;
+* the only source of truth for the budget is `tokenizer(finalRenderedContext)`
+  (8.4, INV-BUDGET-002).
+
+### Validity precondition: one tokenizer identity
+
+`renderingTokenDelta` is **defined only when `compiledTokens` and
+`includedContentTokens` were measured under the same tokenizer identity and
+version.**
+
+Counts from different tokenizers are not comparable, so their difference is not a
+quantity at all — it is the gap between two vocabularies wearing the units of
+one. The final `ContextCompiler` must guarantee that precondition, by composing
+one configured tokenizer for candidate-block validation and for final rendered
+measurement alike, **before** reporting this metric.
+
+If the tokenizer identity behind either operand cannot be proven, the metric
+**must not be reported**. Omitting it is correct; reporting an unverified value
+is a reporting error.
+
+`ContextRenderer` (8.4.2) therefore publishes no attempt-level equivalent: it
+receives no tokenizer identity from the earlier stages and so cannot discharge
+the precondition.
 
 ## 8.7 Token Reduction
 
