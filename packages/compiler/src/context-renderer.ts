@@ -3,6 +3,7 @@ import {
   safeParse,
   type ContextBlock,
   type ValidationIssue,
+  type ValidationResult,
 } from '@ctxalloc/domain';
 import type { Tokenizer } from '@ctxalloc/ports';
 import { z } from 'zod';
@@ -13,11 +14,12 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
 /**
  * Deterministic context rendering and exact render measurement (DEC-035).
  *
- * `ContextRenderer` is the sixth stage of the compiler kernel. It turns an
- * `OrderedCandidateSet`, one narrow versioned `ContextRenderingPolicy`, and one
- * project-owned `Tokenizer` into a `RenderedContextAttempt`: the current
- * selection serialized as one deterministic, boundary-safe string, plus the
- * token count of exactly that string.
+ * `ContextRenderer` closes the implemented kernel, running after
+ * `ContextOrderer`. It turns an `OrderedCandidateSet`, one narrow versioned
+ * `ContextRenderingPolicy`, and one project-owned `Tokenizer` into a
+ * `RenderedContextAttempt`: the current selection serialized as one
+ * deterministic, boundary-safe string, plus the token count of exactly that
+ * string.
  *
  * It exists because a sum of block token counts is not a compiled size.
  * INV-BUDGET-002 makes the rendered string the source of truth, and until some
@@ -236,6 +238,33 @@ const ContextRenderingPolicySchema = z.strictObject({
   format: z.literal('jsonl-blocks'),
 });
 
+/**
+ * Validates one rendering policy and returns it, or the structured issues that
+ * rejected it.
+ *
+ * The helper exists so that the broad `CompilationPolicy` validates its rendering
+ * slice through exactly the rules this stage enforces, rather than through a
+ * second copy of them that could drift (INV-DEP-003). The stage constructor uses
+ * the same helper, so the two paths cannot diverge. It is internal to the
+ * compiler kernel: the package entry point never re-exports it, and no public
+ * declaration names it (INV-ADAPTER-001).
+ */
+export function parseContextRenderingPolicy(
+  policy: unknown,
+): ValidationResult<ContextRenderingPolicy> {
+  const parsed = safeParse(ContextRenderingPolicySchema, policy);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      issues: parsed.issues.map((issue) => ({
+        ...issue,
+        code: 'invalid_policy' satisfies ContextRenderingIssueCode,
+      })),
+    };
+  }
+  return { ok: true, value: parsed.value };
+}
+
 /* -------------------------------------------------------------------------- */
 /* Tokenizer validation                                                        */
 /* -------------------------------------------------------------------------- */
@@ -324,13 +353,8 @@ export class ContextRenderer {
    * @throws {ContextRenderingError} when the policy or the tokenizer is not valid.
    */
   constructor(policy: unknown, tokenizer: Tokenizer) {
-    const parsed = safeParse(ContextRenderingPolicySchema, policy);
-    const issues: ValidationIssue[] = parsed.ok
-      ? []
-      : parsed.issues.map((parsedIssue) => ({
-          ...parsedIssue,
-          code: 'invalid_policy' satisfies ContextRenderingIssueCode,
-        }));
+    const parsed = parseContextRenderingPolicy(policy);
+    const issues: ValidationIssue[] = parsed.ok ? [] : [...parsed.issues];
     issues.push(...validateTokenizer(tokenizer));
     if (!parsed.ok || issues.length > 0) throw new ContextRenderingError(issues);
 

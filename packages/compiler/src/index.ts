@@ -6,30 +6,55 @@
  * candidates and returns compiled context: it never searches an index, reads a
  * file, calls a model, or touches a database (INV-DEP-002).
  *
- * Six stages exist. `CandidateValidator` validates one candidate batch
- * strictly, all or nothing, and is the runtime trust boundary of the kernel
- * (DEC-030). `CandidateDeduplicator` then collapses exact duplicate content into
- * groups, choosing an existing canonical block and preserving every candidate
- * wrapper as evidence (DEC-031). `CandidateScorer` then normalizes the explicitly
- * configured signals of each group into transparent score components and returns
- * a stable ranking (DEC-032). `BudgetAllocator` then resolves required blocks
- * first, enforces exact category block-count constraints, and selects optional
- * blocks under the available block-content budget (DEC-033). `ContextOrderer`
- * then puts that selection into source order for the renderer, changing no
- * decision (DEC-034). `ContextRenderer` then serializes that order as
- * boundary-safe JSONL and tokenizes the exact string it produced (DEC-035).
+ * The implemented execution topology is defined by component names, not by
+ * ordinal positions (DEC-036):
+ *
+ * ```text
+ * CompilationRequest validation
+ *   -> CandidateValidator
+ *   -> CandidateDeduplicator
+ *   -> CandidateScorer
+ *   -> CandidateFilter
+ *   -> BudgetAllocator
+ *   -> ContextOrderer
+ *   -> ContextRenderer
+ * ```
+ *
+ * `CompilationRequestValidator` proves a request is a well-formed record and
+ * that its `CompilationPolicy` composes five valid stage slices; it is
+ * structural, and it does not replace the trust boundary below it (DEC-036).
+ * `CandidateValidator` validates one candidate batch strictly, all or nothing,
+ * and is the runtime trust boundary of the kernel (DEC-030).
+ * `CandidateDeduplicator` collapses exact duplicate content into groups,
+ * choosing an existing canonical block and preserving every candidate wrapper as
+ * evidence (DEC-031). `CandidateScorer` normalizes the explicitly configured
+ * signals of each group into transparent score components and returns a stable
+ * ranking (DEC-032). `CandidateFilter` decides which scored optional candidates
+ * are eligible for allocation under policy, bypassing required blocks entirely
+ * (DEC-036). `BudgetAllocator` resolves required blocks first, enforces exact
+ * category block-count constraints, and selects optional blocks under the
+ * available block-content budget (DEC-033). `ContextOrderer` puts that selection
+ * into source order for the renderer, changing no decision (DEC-034).
+ * `ContextRenderer` serializes that order as boundary-safe JSONL and tokenizes
+ * the exact string it produced (DEC-035).
+ *
+ * Filtering establishes eligibility; it does not select. Required resolution,
+ * category constraints, the token budget, eviction, and final inclusion all
+ * remain the allocator's, over the eligible candidates it is given
+ * (INV-ALLOC-002).
  *
  * Rendering measures; it does not correct. INV-BUDGET-002 makes the rendered
- * string the source of truth, and `ContextRenderer` is the first stage to
- * tokenize one — but a `RenderedContextAttempt` may exceed the budget and simply
+ * string the source of truth, and `ContextRenderer` is the only stage that
+ * tokenizes one — but a `RenderedContextAttempt` may exceed the budget and simply
  * report `fitsAvailableInputBudget: false`. Consuming the eviction order,
  * re-ordering, re-rendering, and proving final infeasibility belong to the future
  * orchestration loop, so no stage publishes a final `compiledTokens`,
  * `unusedTokens`, or `CompilationResult` yet.
  *
- * Policy filtering, trace construction, and compiler orchestration are later
- * phases and are deliberately absent, as is the candidate provider port, which
- * belongs outside the kernel entirely.
+ * Nothing composes the stages: `ContextCompiler` does not exist, and neither
+ * does trace construction, the correction loop, or a compilation fingerprint.
+ * They are later phases and are deliberately absent, as is the candidate provider
+ * port, which belongs outside the kernel entirely.
  */
 
 export {
@@ -44,6 +69,19 @@ export {
   type ExcludedCandidateDecision,
   type IncludedCandidateDecision,
 } from './budget-allocator.js';
+export {
+  CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION,
+  CandidateFilter,
+  CandidateFilteringError,
+  type CandidateFilteringDecision,
+  type CandidateFilteringDecisionReason,
+  type CandidateFilteringIssueCode,
+  type CandidateFilteringPolicy,
+  type FilteredCandidateDecision,
+  type FilteredCandidateSet,
+  type PolicyEligibleCandidateDecision,
+  type RequiredEligibleCandidateDecision,
+} from './candidate-filter.js';
 export {
   CandidateDeduplicator,
   type CanonicalSelectionReason,
@@ -109,3 +147,17 @@ export {
   type CandidateValidationIssueCode,
   type ValidatedCandidateSet,
 } from './candidate-validator.js';
+export {
+  COMPILATION_POLICY_SCHEMA_VERSION,
+  CompilationPolicyError,
+  CompilationPolicyValidator,
+  type CompilationPolicy,
+  type CompilationPolicyIssueCode,
+} from './compilation-policy.js';
+export {
+  COMPILATION_REQUEST_SCHEMA_VERSION,
+  CompilationRequestError,
+  CompilationRequestValidator,
+  type CompilationRequest,
+  type CompilationRequestIssueCode,
+} from './compilation-request.js';

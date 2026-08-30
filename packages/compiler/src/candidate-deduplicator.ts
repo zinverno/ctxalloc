@@ -11,11 +11,12 @@ import type { ValidatedCandidateSet } from './candidate-validator.js';
 /**
  * Deterministic exact candidate deduplication (DEC-031).
  *
- * `CandidateDeduplicator` is the second stage of the compiler kernel. It turns a
- * `ValidatedCandidateSet` into a `DeduplicatedCandidateSet`: independently
- * selectable logical content is collapsed into one group per distinct piece of
- * text, and every candidate wrapper survives inside exactly one group as
- * evidence (INV-DEDUP-003, INV-TRACE-001).
+ * `CandidateDeduplicator` runs after `CandidateValidator` and before
+ * `CandidateScorer`. It turns a `ValidatedCandidateSet` into a
+ * `DeduplicatedCandidateSet`: independently selectable logical content is
+ * collapsed into one group per distinct piece of text, and every candidate
+ * wrapper survives inside exactly one group as evidence (INV-DEDUP-003,
+ * INV-TRACE-001).
  *
  * It is synchronous, pure, and offline. It reads no clock, no random value, no
  * file, no environment variable, no database, and no network resource, calls no

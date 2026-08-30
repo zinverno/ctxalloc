@@ -3,6 +3,7 @@ import {
   safeParse,
   type ContextBlock,
   type ValidationIssue,
+  type ValidationResult,
 } from '@ctxalloc/domain';
 import { z } from 'zod';
 import type { AllocatedCandidateSet, IncludedCandidateDecision } from './budget-allocator.js';
@@ -11,10 +12,10 @@ import { canonicalJson, compareCodeUnits } from './canonical-json.js';
 /**
  * Deterministic context ordering (DEC-034).
  *
- * `ContextOrderer` is the fifth stage of the compiler kernel. It turns an
- * `AllocatedCandidateSet` and one narrow versioned `ContextOrderingPolicy` into
- * an `OrderedCandidateSet`: the same included decisions, in the order the future
- * renderer must lay them out.
+ * `ContextOrderer` runs after `BudgetAllocator` and before `ContextRenderer`. It
+ * turns an `AllocatedCandidateSet` and one narrow versioned
+ * `ContextOrderingPolicy` into an `OrderedCandidateSet`: the same included
+ * decisions, in the order the renderer must lay them out.
  *
  * It exists because allocation chronology is not render order. Phase 10 returns
  * its inclusions as required blocks, then category minimums, then score-selected
@@ -184,6 +185,33 @@ const ContextOrderingPolicySchema = z.strictObject({
   strategy: z.literal('source-document-then-location'),
 });
 
+/**
+ * Validates one ordering policy and returns it, or the structured issues that
+ * rejected it.
+ *
+ * The helper exists so that the broad `CompilationPolicy` validates its ordering
+ * slice through exactly the rules this stage enforces, rather than through a
+ * second copy of them that could drift (INV-DEP-003). The stage constructor uses
+ * the same helper, so the two paths cannot diverge. It is internal to the
+ * compiler kernel: the package entry point never re-exports it, and no public
+ * declaration names it (INV-ADAPTER-001).
+ */
+export function parseContextOrderingPolicy(
+  policy: unknown,
+): ValidationResult<ContextOrderingPolicy> {
+  const parsed = safeParse(ContextOrderingPolicySchema, policy);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      issues: parsed.issues.map((issue) => ({
+        ...issue,
+        code: 'invalid_policy' satisfies ContextOrderingIssueCode,
+      })),
+    };
+  }
+  return { ok: true, value: parsed.value };
+}
+
 /* -------------------------------------------------------------------------- */
 /* Location ordering                                                           */
 /* -------------------------------------------------------------------------- */
@@ -311,15 +339,8 @@ export class ContextOrderer {
    * @throws {ContextOrderingError} when the policy is not valid.
    */
   constructor(policy: unknown) {
-    const parsed = safeParse(ContextOrderingPolicySchema, policy);
-    if (!parsed.ok) {
-      throw new ContextOrderingError(
-        parsed.issues.map((issue) => ({
-          ...issue,
-          code: 'invalid_policy' satisfies ContextOrderingIssueCode,
-        })),
-      );
-    }
+    const parsed = parseContextOrderingPolicy(policy);
+    if (!parsed.ok) throw new ContextOrderingError(parsed.issues);
     this.#policy = parsed.value;
   }
 

@@ -21,10 +21,12 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
 /**
  * Strict candidate validation (DEC-030).
  *
- * `CandidateValidator` is the first stage of the compiler kernel and the last
- * point at which a malformed, stale, cross-scope, or forged candidate can be
- * stopped before policy filtering, deduplication, scoring, allocation, ordering,
- * rendering, and trace construction rely on it (ARCHITECTURE section 4).
+ * `CandidateValidator` opens the compiler kernel and is the last point at which
+ * a malformed, stale, cross-scope, or forged candidate can be stopped before
+ * deduplication, scoring, policy filtering, allocation, ordering, rendering, and
+ * trace construction rely on it (ARCHITECTURE section 4). Only structural request
+ * validation runs before it, and that is not a substitute: it proves the record's
+ * shape, never the batch's trustworthiness (DEC-036).
  *
  * It is synchronous and deterministic. It reads no clock, no random value, no
  * file, no environment variable, no database, and no network resource, and it

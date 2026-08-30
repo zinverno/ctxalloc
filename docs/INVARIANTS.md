@@ -564,6 +564,8 @@ They may:
 
 Final optional block selection belongs to the budget allocator.
 
+A compiler kernel policy stage may establish which candidates are *eligible* for allocation before the allocator runs, and `CandidateFilter` is that stage (DEC-036). Eligibility is not selection: the filter must not choose among eligible candidates, read the token budget, evict, resolve or override required status, or decide that anything is included. It removes a candidate from consideration under a stated policy rule and records why, and everything reaching the allocator is then selected — or not — by the allocator alone.
+
 ---
 
 ## INV-ALLOC-003: Category Limits Are Enforced

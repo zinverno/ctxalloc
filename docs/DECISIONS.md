@@ -80,6 +80,8 @@ A newer decision has replaced the previous one.
 | DEC-032 | Normalize explicit candidate signals before deterministic allocation | Accepted |
 | DEC-033 | Allocate required and scored content under a deterministic block budget | Accepted |
 | DEC-034 | Order selected context by stable source position before rendering | Accepted |
+| DEC-035 | Render ordered context as boundary-safe JSONL and measure the exact string | Accepted |
+| DEC-036 | Compose explicit compilation contracts and filter scored candidates before allocation | Accepted |
 
 ---
 
@@ -2639,6 +2641,288 @@ Phases 7 through 11 are unchanged in behavior.
 METRICS changes: 8.6 is renamed and redefined as a signed `renderingTokenDelta` carrying an explicit same-tokenizer validity precondition, 8.4.1 loses its stale cross-reference, and a new 8.4.2 defines the two render-attempt metrics and states why no attempt-level delta joins them.
 
 `CandidateFilter`, the broad `CompilationPolicy`, `CompilationRequest`, render-aware correction and reallocation, `TraceBuilder`, `CompilationTrace`, `CompilationResult`, `ContextCompiler`, retrieval, persistence, the CLI, the HTTP API, and the evaluation harness remain later phases.
+
+---
+
+## DEC-036: Compose Explicit Compilation Contracts and Filter Scored Candidates Before Allocation
+
+### Status
+
+Accepted
+
+### Decision
+
+Three contracts are added to `@ctxalloc/compiler`.
+
+`CandidateFilter` is a deterministic policy eligibility gate that runs **after `CandidateScorer` and before `BudgetAllocator`**. It is one synchronous, pure, offline class that turns a `ScoredCandidateSet` and one narrow versioned `CandidateFilteringPolicy` into a `FilteredCandidateSet`.
+
+`CompilationPolicy` is the broad versioned policy of ARCHITECTURE 5.6, composing the five narrow slices the components already own.
+
+`CompilationRequest` is the complete caller-supplied request data for one compilation, carrying a **required** `referenceTime`.
+
+None of the three retrieves, reads a file, opens a socket, queries a database, calls a model, reads a clock, or generates a random value (INV-DET-001, INV-DET-003, INV-DET-004, INV-DEP-002). No new dependency is added.
+
+### Execution Topology Is Named, Not Numbered
+
+DEC-030 through DEC-035 called the components the first through sixth stages of the kernel. That wording described the order they were *implemented* in, and it was accurate when written.
+
+Inserting `CandidateFilter` between scoring and allocation makes an ordinal unstable: the allocator was "fourth" and is now preceded by five components. Renumbering every decision, document, and TSDoc comment on each insertion would be pure churn, and worse, it would keep encoding position in a label that has to change whenever the pipeline does.
+
+The current topology is therefore defined by component names:
+
+```text id="m1topo"
+CompilationRequest validation
+  -> CandidateValidator
+  -> CandidateDeduplicator
+  -> CandidateScorer
+  -> CandidateFilter
+  -> BudgetAllocator
+  -> ContextOrderer
+  -> ContextRenderer
+  -> render-aware correction   (future)
+  -> TraceBuilder              (future)
+  -> CompilationResult         (future)
+```
+
+Retrieval stays before this flow; model execution stays after it.
+
+The substance of DEC-030 through DEC-035 is unchanged, and their historical ordinal wording is left as written: it is the record of what was decided when. Current source TSDoc and current architecture text name a component's predecessor and successor instead. ARCHITECTURE documents the filter as section 6.3.1 rather than renumbering 6.4 through 6.7, for the same reason: a section number is a document address, and four sections' worth of broken cross-references would be a high price for encoding an order that section 4.1 already states.
+
+### The Filter Runs After Scoring and Before Allocation
+
+DEC-031 and DEC-032 fixed one end of the range. Filtering must not run before deduplication, because filtering a group before its duplicates are known would let the surviving copy of one piece of content depend on which wrapper the filter happened to keep. Filtering may run before or after scoring without changing any surviving candidate's score, because `CandidateScorer` normalizes against fixed policy ranges rather than against the batch.
+
+Schema version 1 reads `score.total`, which fixes the other end: the filter must run after scoring.
+
+It must also run before allocation. Eligibility is a precondition of selection, not a competitor to it. A filter running after allocation would discard a block the allocator had already spent budget on, and that budget would then be unusable without re-running allocation — which is the correction loop's problem, not a filter's.
+
+### Filter Owns Eligibility; Allocator Owns Selection
+
+This is the decision's central boundary, and it is the reading of INV-ALLOC-002 this phase relies on.
+
+```text id="m2role"
+CandidateFilter   may this scored OPTIONAL candidate participate in allocation
+                  under policy?
+
+BudgetAllocator   among the eligible candidates, which ones are included under
+                  required, category, and budget rules?
+```
+
+The filter therefore owns no required resolution, no category constraint, no token budget, no eviction, no rendering, and no final hard-budget success. It removes a candidate from consideration under a stated rule and records why; everything that reaches the allocator is selected, or not, by the allocator alone. INV-ALLOC-002 gains a clarifying paragraph saying exactly this. Its normative content is unchanged: the invariant already named retrieval providers, renderers, source adapters, and model providers as the actors that must not decide inclusion, and a kernel policy component is none of them.
+
+`CandidateFilter` is also **not an access-control boundary**. Scope isolation stays with request validation and `CandidateValidator`, which reject a cross-scope candidate outright rather than scoring one and then declining to allocate it (INV-SCOPE-003, INV-SCOPE-004, INV-SEC-004). A filter that doubled as a scope check would put one security rule in two places, and the weaker of the two would eventually be the one that ran.
+
+### The v1 Filtering Language Is One Threshold
+
+```ts
+const CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION = 1;
+
+interface CandidateFilteringPolicy {
+  readonly schemaVersion: 1;
+  readonly policyId: string;
+  readonly policyVersion: string;
+  readonly minimumTotalScore?: number;
+}
+```
+
+That is the entire language. Excluded block identifiers, source allowlists and denylists, category allowlists and denylists, `sourceType` rules, timestamp or maximum-age rules, retrieval provider, rank, or raw-score rules, content or token-size rules, regular expressions, metadata or tag predicates, and arbitrary callback predicates are all deliberately absent.
+
+**Hard exclusion is deferred because post-deduplication group semantics are undecided.** Filtering runs after exact deduplication (DEC-031), so its unit is a duplicate group, and a group's members may carry the same content from different source documents, under different categories, from different providers. "Exclude source X" over such a group has at least three defensible meanings — drop the group if any member is from X, only if every member is, or drop the member and keep the group — and they disagree on exactly the cases that matter. Choosing one silently would make the surviving copy of one piece of content depend on which wrapper the filter happened to inspect, which is the failure DEC-031 exists to prevent. The language will be decided when those semantics are, not approximated now.
+
+**Recency, source, category, authored priority, and retrieval relevance already have an owner.** They are configured signals of `CandidateScoringPolicy`, and they reach this component already normalized into one group-level `score.total`. Reading any of them again here would put one signal under two owners and let the two disagree (INV-DEP-003). Version 1 consumes the scorer's result and nothing else.
+
+Policy validation is strict and is a runtime boundary: the object is closed, unknown fields are rejected rather than stripped, nothing is coerced, no default is injected, exact strings are preserved, `policyId` and `policyVersion` must be non-blank, and malformed UTF-16 is rejected with the shared domain helper (INV-BLOCK-007). `minimumTotalScore` must be a finite number no less than zero: a total is a sum of non-negative weighted contributions, so a negative threshold could only be a no-op written by someone who believed it did something. The failure surface is `CANDIDATE_FILTERING_FAILED` with `invalid_policy`.
+
+### Threshold Semantics Are Policy-Relative, and Equality Survives
+
+```text id="m3thrs"
+minimumTotalScore absent   every scored candidate stays eligible
+
+minimumTotalScore present  optional candidate survives when
+                             score.total >= minimumTotalScore
+                           optional candidate is filtered when
+                             score.total <  minimumTotalScore
+```
+
+Equality survives: a candidate that reaches the minimum has met it. Nothing is rounded, clamped, normalized, interpreted as a probability, or divided by a token count. Score-per-token selection is allocation economics, and it belongs to the allocator if it belongs anywhere.
+
+`CandidateScore.total` is policy-relative utility, not a probability. Its weights need not sum to one (DEC-032, INV-SCORE-001), so `0.4` means nothing on its own — it means something only against the scoring policy that produced the totals. Both identities therefore travel in the result, and a threshold copied between scoring policies is a configuration error the compiler cannot detect for the caller.
+
+### Required Blocks Bypass the Threshold
+
+A candidate whose canonical block declares `required: true` stays eligible whatever it scored. A required block scoring exactly zero survives a threshold of one thousand.
+
+It is not filtered, not failed, and not boosted. Boosting in particular is rejected: modelling required status as a large score is exactly what INV-SCORE-003 forbids, and it would make the score field lie about what the scoring policy computed. Required content is a separate allocation class, and a policy threshold is not permitted to remove it (INV-BUDGET-003). Whether the required content actually fits remains the allocator's question, answered with `REQUIRED_CONTENT_EXCEEDS_BUDGET` (INV-BUDGET-004).
+
+### One Decision Per Scored Candidate
+
+```text id="m4decs"
+eligible   ELIGIBLE_REQUIRED             required block; threshold not consulted
+eligible   ELIGIBLE_POLICY               optional block the policy admits
+filtered   FILTERED_SCORE_BELOW_MINIMUM  optional block below the minimum
+```
+
+An `ELIGIBLE_POLICY` decision carries the exact `scoreTotal`, and `minimumTotalScore` exactly when the policy configured one — so a consumer can tell a candidate that passed a threshold from one that faced none, without re-reading the policy. A `FILTERED_SCORE_BELOW_MINIMUM` decision carries both operands.
+
+An `ELIGIBLE_REQUIRED` decision carries neither. Neither took part in the decision, and publishing them would suggest a comparison this component deliberately never made. The score stays reachable through the decision's own candidate.
+
+The three shapes are separate types in a discriminated union, so an impossible pairing — a filtered candidate claiming an eligible reason, a required bypass carrying a threshold it never faced, a filtered decision with no minimum to be below — cannot be constructed.
+
+### The Filtered Set Preserves Everything
+
+```ts
+interface FilteredCandidateSet {
+  readonly scored: ScoredCandidateSet;
+  readonly filteringPolicyId: string;
+  readonly filteringPolicyVersion: string;
+  readonly eligible: ScoredCandidateSet;
+  readonly decisions: readonly CandidateFilteringDecision[];
+}
+```
+
+`scored` is the input by reference, so every candidate stays reachable whether or not it survived, and every one of them appears in exactly one decision (INV-TRACE-001).
+
+`eligible` is a `ScoredCandidateSet` rather than a new stage type, and that is deliberate: **`BudgetAllocator` consumes it directly, with no change to its API.** Its scope, source registry, scoring policy identity and version, and reference time are the input's own values; only `candidates` differs, and every surviving `ScoredCandidate` is reused by reference (INV-ALLOC-004). The structure is ephemeral and carries no schema version (INV-STORE-004).
+
+Filtering is a **stable filter, not a re-ranking**. `CandidateScorer` owns the ranking, so survivors keep their relative input order and the decisions follow input order. Nothing is sorted here and the scorer's comparator is not duplicated (INV-DET-002, INV-DEP-003).
+
+The component reads exactly three things: `score.total`, `canonicalBlock.attributes.required`, and its own validated policy. It takes no tokenizer, and it reaches no raw retrieval field, rank, provider identity, source metadata, title, `sourceType`, category, authored priority, timestamp, `tokenCount`, token budget, rendered cost, query, clock, filesystem, environment, database, or model.
+
+### CompilationPolicy Composes Five Required Slices
+
+```ts
+const COMPILATION_POLICY_SCHEMA_VERSION = 1;
+
+interface CompilationPolicy {
+  readonly schemaVersion: 1;
+  readonly policyId: string;
+  readonly policyVersion: string;
+  readonly scoring: CandidateScoringPolicy;
+  readonly filtering: CandidateFilteringPolicy;
+  readonly allocation: BudgetAllocationPolicy;
+  readonly ordering: ContextOrderingPolicy;
+  readonly rendering: ContextRenderingPolicy;
+}
+```
+
+All five are **required**, and none is defaulted. Every slice changes what gets compiled, and a policy that silently inherited a rule nobody wrote would make two callers who supplied identical configuration disagree about what they had asked for. A compilation that filters nothing is an explicit filtering slice with `minimumTotalScore` absent: a stated no-op, not a missing key.
+
+`policyId` and `policyVersion` identify the **composition**, independently of the nested identities, and need not equal any of them. A team that revises only its rendering slice publishes a new parent version while the scoring slice keeps its own. No identifier, version, hash, or fingerprint is generated anywhere in this phase (INV-DET-003).
+
+**Nested validation reuses stage-owned semantics rather than restating them.** The broad wrapper is validated strictly — closed object, exact schema version, non-blank well-formed identity, five present object slices — and each slice is then validated by the component that owns its rules. Reproducing `CandidateScoringPolicySchema` or the allocator's duplicate-category rule here would create a second place for one truth to drift (INV-DEP-003).
+
+Delivering that required one small internal change: each component's existing policy parsing now lives in a package-internal helper that the component's own constructor calls, so the composed validator and the constructor are literally the same code path and cannot diverge. The helpers are not re-exported from the package entry point, name no validation-library type, and changed no behavior — the Phase 9 through Phase 12 policy-validation suites pass unchanged, and the composed validator is tested to report byte-identical messages and pointers to the constructors.
+
+A malformed wrapper short-circuits nested validation, exactly as every component reports schema issues before running rules that read fields the schema has not established. Otherwise every problem in all five slices is collected in the fixed order scoring, filtering, allocation, ordering, rendering, and each issue is re-addressed under its slice pointer:
+
+```text id="m5ptrs"
+scoring.authoredPriority.min
+filtering.minimumTotalScore
+allocation.categoryConstraints[0]
+ordering.strategy
+rendering.format
+```
+
+The failure is `COMPILATION_POLICY_INVALID`, with `invalid_policy` for the composition itself and `invalid_scoring_policy`, `invalid_filtering_policy`, `invalid_allocation_policy`, `invalid_ordering_policy`, or `invalid_rendering_policy` for a named slice. No nested error object escapes.
+
+**`CompilationPolicy` is data, not orchestration.** It stores no component instance, owns no tokenizer, runs no component, and decides nothing. Composing the components stays the future `ContextCompiler`'s work; this record only states what that composition would be configured with.
+
+### CompilationRequest Carries an Explicit Reference Time
+
+```ts
+const COMPILATION_REQUEST_SCHEMA_VERSION = 1;
+
+interface CompilationRequest {
+  readonly id: string;
+  readonly schemaVersion: 1;
+  readonly scope: Scope;
+  readonly query: string;
+  readonly referenceTime: Timestamp;
+  readonly candidates: readonly CandidateBlock[];
+  readonly sourceDocuments: readonly SourceDocument[];
+  readonly budget: TokenBudget;
+  readonly policy: CompilationPolicy;
+}
+```
+
+ARCHITECTURE 5.5 previously described a request with no `referenceTime`, which contradicted both `CandidateScorer`, whose `score` requires an explicit instant, and INV-DET-004, which forbids reading the clock. The field is now required, and the future flow is `CandidateScorer.score(batch, request.referenceTime)`. No default is injected: a missing reference time is a rejected request, never `Date.now()`.
+
+`id` is caller-supplied, non-blank, well-formed UTF-16, and preserved exactly. The kernel generates no UUID and no time-derived identifier, because a kernel that invented request identities would produce a different record for the same input on every run.
+
+`query` is preserved verbatim and read by nothing. **An empty query is valid**, and so is a whitespace-only or multi-line one; none of them is trimmed, collapsed, normalized, lowercased, or truncated. A caller may compile standing context with no question at all, and deciding that a blank query is meaningless is the caller's judgement. Only malformed UTF-16 is rejected. No kernel component consults the query: retrieval already answered it, and the compiler must not become a second retrieval system.
+
+`budget` is the existing `TokenBudgetSchema`, with no guessed context window, no defaulted reserve, and no hidden rendering reserve.
+
+### CompilationRequest Is Request Data, Not the Composition Root
+
+An earlier draft of this decision called the request "the complete, self-contained input of one compilation" and said everything a deterministic compilation needs is in the record. That is too strong, and it contradicts two accepted contracts.
+
+INV-DET-001 already defines determinism over more than the request. It lists the compilation request, the candidates, the policy version, **the tokenizer implementation and version**, **the compiler version**, and the supplied reference time. DEC-035 goes further and records deliberately that no stage contract from `ValidatedCandidateSet` through `OrderedCandidateSet` carries a tokenizer identity, and that using one tokenizer consistently is a requirement on the future composition root rather than a property any current component can verify.
+
+The counterexample is concrete:
+
+```text id="m6tokz"
+CompilationRequest R, byte-identical in both runs
+
+Run A   configured tokenizer  tok-A / 1
+        block counts validated and rendered string measured with tok-A
+
+Run B   configured tokenizer  tok-B / 1
+        block counts validated and rendered string measured with tok-B
+
+R is identical; allocation feasibility, renderedTokens, and the selected
+result may still differ.
+```
+
+Neither run violates INV-DET-001, because the tokenizer input differed. What the example proves is narrower and exact: **the request alone is not the complete deterministic input.** The same holds for the compiler implementation — a new compiler version may change behavior without changing a byte of the request.
+
+The contract is therefore stated as:
+
+```text id="m7dinp"
+deterministic input
+  = CompilationRequest
+  + configured tokenizer identity and version
+  + compiler implementation and version
+  + any other explicit compiler configuration the invariants allow
+```
+
+`CompilationRequest` owns the first line and only the first line: every **caller-supplied, per-compilation** datum — request id, scope, query, reference time, candidates, source registry, budget, and policy.
+
+It owns none of the rest. No tokenizer instance, tokenizer identity or version, compiler implementation or version, renderer instance, or component instance appears on the request, and none is added in this phase.
+
+The division follows from what the value *is*, not from convenience. `referenceTime` belongs in the request because it is per-compilation data: two compilations of the same content legitimately measure recency against two different instants, and only the caller knows which. The tokenizer does not belong in the request because it is configured compiler composition: it is the same for every compilation a given deployment runs, a caller has no way to honestly supply it, and a caller-supplied identity would be unverifiable — the miscomposing caller is precisely the one who would state the wrong value (DEC-035).
+
+What is not permitted either way is a hidden dependency. The gap between the request and the full deterministic input is filled by **explicit** configuration, never by a clock, a random value, an environment variable, or an ambient default (INV-DET-003, INV-DET-004).
+
+The future `ContextCompiler` binds those composition inputs — including the same-tokenizer requirement DEC-035 records — and the future `CompilationTrace` records them alongside the request, so a recorded compilation states every input it actually depended on (INV-TRACE-005). Neither exists yet, and neither is implemented here.
+
+### Request Validation Is Structural; CandidateValidator Stays the Trust Boundary
+
+This boundary matters more than the schema.
+
+`CompilationRequestValidator` proves the record is a well-formed request of well-formed domain values: unknown top-level fields rejected, nothing coerced, no default injected, `candidates` and `sourceDocuments` checked with the existing domain schemas.
+
+It deliberately does **not** claim that a `tokenCount` matches its content, that a `normalizedContentHash` is correct, that the source registry has no repeated identifier, that a candidate's scope equals the request scope, that a block's source exists or that its type and location are compatible, or that one block identifier stands for exactly one record. Those are cross-record rules `CandidateValidator` owns (DEC-030), and duplicating them would create a second place for one truth to drift (INV-DEP-003).
+
+So a structurally valid request can still be rejected by the validator that follows it, and that is the intended division rather than a gap. The failure is `COMPILATION_REQUEST_INVALID`, with policy problems appearing under `policy.` pointers and their focused slice codes intact.
+
+### What This Phase Preserves for the Trace
+
+No trace exists yet, but the evidence a future `TraceBuilder` needs is now reachable without re-deriving it: the request identity, query, reference time, and scope; the parent policy identity and version; every nested slice identity and version; the original `ScoredCandidateSet`; one filtering decision per scored candidate; the eligible set; and the exact threshold and score on every optional decision.
+
+No request fingerprint, compilation identifier, warning list, or trace schema is produced. Those belong to the phase that defines the trace.
+
+### Consequences
+
+`@ctxalloc/compiler` gains `CandidateFilter`, `CompilationPolicyValidator`, and `CompilationRequestValidator` and **no new dependency**: the boundary allowlist is unchanged, `@ctxalloc/tokenization` is still not a compiler dependency, and no validation-library type reaches a public declaration.
+
+`BudgetAllocator`, `CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`, `ContextOrderer`, `ContextRenderer`, `Tokenizer`, and `MarkdownChunker` are unchanged in behavior. The only edits to existing components are the internal policy-parsing extraction described above and TSDoc that names neighbours instead of ordinals.
+
+ARCHITECTURE changes: section 4 is split into the named topology (4.1) and the settled filter placement (4.2); section 5.5 and 5.6 become implemented and gain the reference time, the five slices, and the structural-validation boundary; section 6 gains 6.3.1; and section 6.6 loses the stale claim that `ContextRenderer` publishes "one signed diagnostic delta", which approved Phase 12 removed (DEC-035). The renderer runtime is untouched.
+
+INVARIANTS changes: INV-ALLOC-002 gains one clarifying paragraph distinguishing eligibility from selection. No invariant is weakened.
+
+`ContextCompiler`, `TraceBuilder`, `CompilationTrace`, `CompilationResult`, the request and compilation fingerprints, render-aware correction and reallocation, final `compiledTokens` / `unusedTokens` / `renderingTokenDelta`, warnings, retrieval, `SourceReader`, persistence, the CLI, the HTTP API, and the evaluation harness remain later phases. **"Hard budget guarantee complete" is still not a true statement.**
 
 ---
 

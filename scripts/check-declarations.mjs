@@ -37,6 +37,9 @@ const DECLARATIONS = [
   'packages/compiler/dist/budget-allocator.d.ts',
   'packages/compiler/dist/context-orderer.d.ts',
   'packages/compiler/dist/context-renderer.d.ts',
+  'packages/compiler/dist/candidate-filter.d.ts',
+  'packages/compiler/dist/compilation-policy.d.ts',
+  'packages/compiler/dist/compilation-request.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -973,6 +976,302 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './context-renderer
   }
 }
 
+// The candidate filter keeps its documented stage signature: it takes one narrow
+// versioned policy at construction, consumes a ScoredCandidateSet, and returns
+// one eligibility decision per scored candidate (DEC-036).
+requireContains('packages/compiler/dist/candidate-filter.d.ts', 'declare class CandidateFilter');
+requireContains('packages/compiler/dist/candidate-filter.d.ts', 'constructor(policy: unknown);');
+requireContains(
+  'packages/compiler/dist/candidate-filter.d.ts',
+  'filter(input: ScoredCandidateSet): FilteredCandidateSet;',
+);
+requireContains(
+  'packages/compiler/dist/candidate-filter.d.ts',
+  'declare class CandidateFilteringError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/candidate-filter.d.ts',
+  'readonly code = "CANDIDATE_FILTERING_FAILED"',
+);
+requireContains(
+  'packages/compiler/dist/candidate-filter.d.ts',
+  'CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION = 1',
+);
+requireContains(
+  'packages/compiler/dist/candidate-filter.d.ts',
+  'interface CandidateFilteringPolicy',
+);
+// The complete v1 filtering language: an identity and one optional threshold.
+requireContains(
+  'packages/compiler/dist/candidate-filter.d.ts',
+  'readonly minimumTotalScore?: number | undefined;',
+);
+requireContains('packages/compiler/dist/candidate-filter.d.ts', 'interface FilteredCandidateSet');
+for (const member of [
+  'readonly scored: ScoredCandidateSet;',
+  'readonly filteringPolicyId: string;',
+  'readonly filteringPolicyVersion: string;',
+  'readonly eligible: ScoredCandidateSet;',
+  'readonly decisions: readonly CandidateFilteringDecision[];',
+]) {
+  requireContains('packages/compiler/dist/candidate-filter.d.ts', member);
+}
+requireContains('packages/compiler/dist/index.d.ts', "} from './candidate-filter.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/candidate-filter.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // The filtered set is an ephemeral compiler-stage result, not a persisted
+    // record, so only the policy carries a schema version (INV-STORE-004).
+    if (/interface FilteredCandidateSet\s*\{[^}]*schemaVersion/.test(declarations)) {
+      fail('packages/compiler/dist/candidate-filter.d.ts declares a persisted schemaVersion');
+    }
+    // Each decision is discriminated on its own decision and reason pair, so an
+    // impossible combination cannot be constructed (INV-TRACE-002).
+    for (const decision of [
+      "readonly decision: 'eligible';",
+      "readonly decision: 'filtered';",
+      "readonly reason: 'ELIGIBLE_REQUIRED';",
+      "readonly reason: 'ELIGIBLE_POLICY';",
+      "readonly reason: 'FILTERED_SCORE_BELOW_MINIMUM';",
+      'type CandidateFilteringDecision = RequiredEligibleCandidateDecision | PolicyEligibleCandidateDecision | FilteredCandidateDecision',
+    ]) {
+      requireContains('packages/compiler/dist/candidate-filter.d.ts', decision);
+    }
+    // A single reason union would let any reason pair with any decision.
+    if (
+      /interface \w*CandidateDecision\s*\{[^}]*reason: CandidateFilteringDecisionReason/.test(
+        declarations,
+      )
+    ) {
+      fail(
+        'packages/compiler/dist/candidate-filter.d.ts widens a decision reason to the whole union',
+      );
+    }
+    // The v1 filtering language is a threshold and nothing else: every deferred
+    // hard-exclusion concept stays absent, and so does every signal the filter
+    // must not read (DEC-036).
+    for (const forbidden of [
+      'excludedBlockIds',
+      'allowedSourceDocumentIds',
+      'deniedSourceDocumentIds',
+      'allowedCategories',
+      'deniedCategories',
+      'sourceType',
+      'maxAgeSeconds',
+      'minimumRank',
+      'providerId',
+      'maxTokens',
+      'tokenCount',
+      'pattern',
+      'predicate',
+      'TokenBudget',
+      'availableInputTokens',
+      'referenceTime',
+      'Timestamp',
+      'query',
+      'Tokenizer',
+      'Date',
+      'CompilationPolicy',
+      'CompilationRequest',
+      'CompilationTrace',
+      'CompilationResult',
+      'TraceBuilder',
+      'ContextCompiler',
+      'ContextRenderer',
+      'BudgetAllocator',
+      'AllocatedCandidateSet',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/candidate-filter.d.ts exposes the forbidden or future concept "${forbidden}"`,
+        );
+      }
+    }
+  }
+}
+
+// The broad compilation policy composes exactly the five narrow slices and holds
+// no component instance (DEC-036).
+requireContains('packages/compiler/dist/compilation-policy.d.ts', 'interface CompilationPolicy');
+requireContains(
+  'packages/compiler/dist/compilation-policy.d.ts',
+  'COMPILATION_POLICY_SCHEMA_VERSION = 1',
+);
+requireContains(
+  'packages/compiler/dist/compilation-policy.d.ts',
+  'declare class CompilationPolicyValidator',
+);
+requireContains(
+  'packages/compiler/dist/compilation-policy.d.ts',
+  'validate(input: unknown): CompilationPolicy;',
+);
+requireContains(
+  'packages/compiler/dist/compilation-policy.d.ts',
+  'declare class CompilationPolicyError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/compilation-policy.d.ts',
+  'readonly code = "COMPILATION_POLICY_INVALID"',
+);
+for (const slice of [
+  'readonly scoring: CandidateScoringPolicy;',
+  'readonly filtering: CandidateFilteringPolicy;',
+  'readonly allocation: BudgetAllocationPolicy;',
+  'readonly ordering: ContextOrderingPolicy;',
+  'readonly rendering: ContextRenderingPolicy;',
+]) {
+  requireContains('packages/compiler/dist/compilation-policy.d.ts', slice);
+}
+requireContains('packages/compiler/dist/index.d.ts', "} from './compilation-policy.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/compilation-policy.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // Every slice is required in schema version 1: none may be optional.
+    for (const slice of ['scoring', 'filtering', 'allocation', 'ordering', 'rendering']) {
+      if (declarations.includes(`readonly ${slice}?:`)) {
+        fail(`packages/compiler/dist/compilation-policy.d.ts makes the ${slice} slice optional`);
+      }
+    }
+    // The policy is data, not orchestration: it stores no component instance and
+    // owns no tokenizer.
+    for (const forbidden of [
+      'CandidateScorer',
+      'CandidateFilter;',
+      'BudgetAllocator',
+      'ContextOrderer',
+      'ContextRenderer',
+      'Tokenizer',
+      'ContextCompiler',
+      'TraceBuilder',
+      'CompilationTrace',
+      'CompilationResult',
+      'fingerprint',
+      'Fingerprint',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/compilation-policy.d.ts exposes the forbidden or future concept "${forbidden}"`,
+        );
+      }
+    }
+  }
+}
+
+// The compilation request carries every value a deterministic compilation needs,
+// with an explicit reference time and no generated identity (DEC-036).
+requireContains('packages/compiler/dist/compilation-request.d.ts', 'interface CompilationRequest');
+requireContains(
+  'packages/compiler/dist/compilation-request.d.ts',
+  'COMPILATION_REQUEST_SCHEMA_VERSION = 1',
+);
+requireContains(
+  'packages/compiler/dist/compilation-request.d.ts',
+  'declare class CompilationRequestValidator',
+);
+requireContains(
+  'packages/compiler/dist/compilation-request.d.ts',
+  'validate(input: unknown): CompilationRequest;',
+);
+requireContains(
+  'packages/compiler/dist/compilation-request.d.ts',
+  'declare class CompilationRequestError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/compilation-request.d.ts',
+  'readonly code = "COMPILATION_REQUEST_INVALID"',
+);
+for (const member of [
+  'readonly id: string;',
+  'readonly scope: Scope;',
+  'readonly query: string;',
+  'readonly referenceTime: Timestamp;',
+  'readonly candidates: readonly CandidateBlock[];',
+  'readonly sourceDocuments: readonly SourceDocument[];',
+  'readonly budget: TokenBudget;',
+  'readonly policy: CompilationPolicy;',
+]) {
+  requireContains('packages/compiler/dist/compilation-request.d.ts', member);
+}
+requireContains('packages/compiler/dist/index.d.ts', "} from './compilation-request.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/compilation-request.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // The reference time is required: INV-DET-004 forbids a hidden clock, and an
+    // optional field would invite one to be defaulted downstream.
+    if (declarations.includes('readonly referenceTime?:')) {
+      fail('packages/compiler/dist/compilation-request.d.ts makes referenceTime optional');
+    }
+    if (/\bDate\b/.test(declarations)) {
+      fail('packages/compiler/dist/compilation-request.d.ts exposes a Date');
+    }
+    // Nothing a later phase owns appears on the request.
+    for (const forbidden of [
+      'fingerprint',
+      'Fingerprint',
+      'compilationId',
+      'CompilationTrace',
+      'CompilationResult',
+      'TraceBuilder',
+      'ContextCompiler',
+      'warnings',
+      'Tokenizer',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/compilation-request.d.ts exposes the forbidden or future concept "${forbidden}"`,
+        );
+      }
+    }
+  }
+}
+
+// The nested policy parsers exist so one rule has one owner. They are package
+// internals: the entry point never re-exports them (INV-ADAPTER-001).
+{
+  const content = contents.get('packages/compiler/dist/index.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const internal of [
+      'parseCandidateScoringPolicy',
+      'parseCandidateFilteringPolicy',
+      'parseBudgetAllocationPolicy',
+      'parseContextOrderingPolicy',
+      'parseContextRenderingPolicy',
+      'parseCompilationPolicy',
+      'CompilationPolicyWrapperSchema',
+      'CompilationRequestShapeSchema',
+      'SliceContract',
+      'underSlice',
+      'underPolicy',
+      'policySlice',
+      'policySlot',
+    ]) {
+      if (declarations.includes(internal)) {
+        fail(`packages/compiler/dist/index.d.ts re-exports the internal helper "${internal}"`);
+      }
+    }
+    // No orchestration, trace, or fingerprint is published in this phase.
+    for (const future of [
+      'ContextCompiler',
+      'TraceBuilder',
+      'CompilationTrace',
+      'CompilationResult',
+      'requestFingerprint',
+      'compilationFingerprint',
+    ]) {
+      if (declarations.includes(future)) {
+        fail(`packages/compiler/dist/index.d.ts publishes the future concept "${future}"`);
+      }
+    }
+  }
+}
+
 // The validation library, the Node standard library, a provider SDK, an
 // application type, and an internal helper all stay implementation details of
 // the compiler kernel (INV-ADAPTER-001, INV-DEP-002).
@@ -1021,6 +1320,10 @@ const COMPILER_LEAKED_TYPES = [
   'compareBlocks',
   'compareLocation',
   'LOCATION_KIND_RANK',
+  'SliceContract',
+  'validateSlice',
+  'underSlice',
+  'underPolicy',
 ];
 
 for (const relativePath of [
@@ -1028,9 +1331,12 @@ for (const relativePath of [
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/candidate-filter.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
   'packages/compiler/dist/context-orderer.d.ts',
   'packages/compiler/dist/context-renderer.d.ts',
+  'packages/compiler/dist/compilation-policy.d.ts',
+  'packages/compiler/dist/compilation-request.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
@@ -1045,11 +1351,11 @@ for (const relativePath of [
   }
   // No later compiler stage may appear before its phase implements it.
   // `Deduplicator` left this list in Phase 8, `Scorer` in Phase 9,
-  // `BudgetAllocator` in Phase 10, `ContextOrderer` in Phase 11, and
-  // `ContextRenderer` in Phase 12, when each became a published stage (DEC-031,
-  // DEC-032, DEC-033, DEC-034, DEC-035). Each is therefore checked by name only
-  // where it must not appear.
-  for (const stage of ['CandidateFilter', 'TraceBuilder', 'ContextCompiler', 'CandidateProvider']) {
+  // `BudgetAllocator` in Phase 10, `ContextOrderer` in Phase 11,
+  // `ContextRenderer` in Phase 12, and `CandidateFilter` in Phase 13, when each
+  // became a published stage (DEC-031, DEC-032, DEC-033, DEC-034, DEC-035,
+  // DEC-036). Each is therefore checked by name only where it must not appear.
+  for (const stage of ['TraceBuilder', 'ContextCompiler', 'CandidateProvider']) {
     if (declarations.includes(stage)) {
       fail(`${relativePath} declares the unimplemented stage "${stage}"`);
     }

@@ -10,6 +10,7 @@ import {
   type SourceDocumentId,
   type Timestamp,
   type ValidationIssue,
+  type ValidationResult,
 } from '@ctxalloc/domain';
 import { z } from 'zod';
 import type { DeduplicatedCandidate, DeduplicatedCandidateSet } from './candidate-deduplicator.js';
@@ -19,11 +20,11 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
 /**
  * Deterministic candidate scoring (DEC-032).
  *
- * `CandidateScorer` is the third stage of the compiler kernel. It turns a
- * `DeduplicatedCandidateSet` into a `ScoredCandidateSet`: every duplicate group
- * receives one transparent `CandidateScore` built from explicitly configured
- * signals, and the groups are returned in a stable ranking order for the future
- * `BudgetAllocator`.
+ * `CandidateScorer` runs after `CandidateDeduplicator` and before
+ * `CandidateFilter`. It turns a `DeduplicatedCandidateSet` into a
+ * `ScoredCandidateSet`: every duplicate group receives one transparent
+ * `CandidateScore` built from explicitly configured signals, and the groups are
+ * returned in a stable ranking order for the components that follow.
  *
  * It is synchronous, pure, and offline. It reads no clock, no random value, no
  * file, no environment variable, no database, and no network resource, and it
@@ -539,6 +540,39 @@ const CandidateScoringPolicySchema = z.strictObject({
   recency: RecencyScoringPolicySchema.optional(),
 });
 
+/**
+ * Validates one scoring policy and returns it, or the structured issues that
+ * rejected it.
+ *
+ * The helper exists so that the broad `CompilationPolicy` validates its scoring
+ * slice through exactly the rules this stage enforces, rather than through a
+ * second copy of them that could drift (INV-DEP-003). The stage constructor uses
+ * the same helper, so the two paths cannot diverge. It is internal to the
+ * compiler kernel: the package entry point never re-exports it, and no public
+ * declaration names it (INV-ADAPTER-001).
+ */
+export function parseCandidateScoringPolicy(
+  policy: unknown,
+): ValidationResult<CandidateScoringPolicy> {
+  const parsed = safeParse(CandidateScoringPolicySchema, policy);
+  if (!parsed.ok) {
+    // A policy whose shape is unsupported gets schema issues only: the
+    // duplicate-key rules read fields the schema has not established, so running
+    // them over unparsed configuration could only guess.
+    return {
+      ok: false,
+      issues: parsed.issues.map((parsedIssue) => ({
+        ...parsedIssue,
+        code: 'invalid_policy' satisfies CandidateScoringIssueCode,
+      })),
+    };
+  }
+
+  const duplicates = detectPolicyDuplicates(parsed.value);
+  if (duplicates.length > 0) return { ok: false, issues: duplicates };
+  return { ok: true, value: parsed.value };
+}
+
 /* -------------------------------------------------------------------------- */
 /* Policy compilation                                                          */
 /* -------------------------------------------------------------------------- */
@@ -906,20 +940,10 @@ export class CandidateScorer {
    * @throws {CandidateScoringError} when the policy is not valid.
    */
   constructor(policy: unknown) {
-    const parsed = safeParse(CandidateScoringPolicySchema, policy);
-    if (!parsed.ok) {
-      // A policy whose shape is unsupported gets schema issues only: the
-      // duplicate-key rules below read fields the schema has not established, so
-      // running them over unparsed configuration could only guess.
-      throw new CandidateScoringError(
-        parsed.issues.map((parsedIssue) => ({ ...parsedIssue, code: 'invalid_policy' })),
-      );
-    }
+    const parsed = parseCandidateScoringPolicy(policy);
+    if (!parsed.ok) throw new CandidateScoringError(parsed.issues);
 
     const validated: CandidateScoringPolicy = parsed.value;
-    const duplicates = detectPolicyDuplicates(validated);
-    if (duplicates.length > 0) throw new CandidateScoringError(duplicates);
-
     this.#policy = validated;
     this.#retrievalRules = new Map(
       (validated.retrieval?.rules ?? []).map((rule) => [

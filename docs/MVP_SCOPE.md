@@ -80,8 +80,8 @@ The MVP includes stable schemas for:
 * SourceLocation;
 * ContextBlock;
 * CandidateBlock;
-* CompilationRequest;
-* CompilationPolicy;
+* CompilationRequest — implemented (section 3.5.2);
+* CompilationPolicy — implemented (section 3.5.2);
 * CompilationResult;
 * IncludedBlockDecision;
 * ExcludedBlockDecision;
@@ -199,18 +199,22 @@ Near-duplicate rules are absent rather than disabled: no similarity threshold,
 edit distance, stemming, containment, or heading heuristic exists, and no
 configuration flag is offered for a capability that is not implemented.
 
-Policy filtering is separate and remains future work: it requires a versioned
-`CompilationPolicy`, so no candidate is excluded here for its category, source,
-timestamp, authored priority, retrieval score or rank, provider, relevance,
-freshness, or size.
+Policy filtering is separate and belongs to `CandidateFilter`, which runs after
+scoring (section 3.5.1), so no candidate is excluded here for its category,
+source, timestamp, authored priority, retrieval score or rank, provider,
+relevance, freshness, or size.
 
 Further canonical selection rules remain possible once policy exists:
 
 1. required block over optional block — implemented;
-2. higher source priority — requires `CompilationPolicy`;
+2. higher source priority — a canonical-selection rule, still unimplemented;
 3. newer source — requires an explicit recency policy and reference time;
-4. more complete provenance — requires policy;
+4. more complete provenance — still unimplemented;
 5. stable lexical identifier tie-break — implemented.
+
+The policies these would read now exist (section 3.5.2), but deduplication reads
+none of them: canonical selection stays exact and unconfigurable until a decision
+changes it.
 
 See DEC-031.
 
@@ -293,10 +297,106 @@ implements no lexical, BM25, embedding, or LLM relevance scorer of its own: quer
 relevance arrives through `CandidateRetrieval` under an explicit provider
 contract. No redundancy or near-duplicate score exists.
 
-Policy filtering remains future work and requires the broader versioned
-`CompilationPolicy`.
+Policy filtering is the separate responsibility of `CandidateFilter` below.
 
 See DEC-032.
+
+---
+
+### 3.5.1 Deterministic Policy Filtering
+
+Deterministic policy filtering is implemented. `CandidateFilter` consumes a
+`ScoredCandidateSet` and one narrow versioned `CandidateFilteringPolicy`, and
+returns a `FilteredCandidateSet` in which every scored candidate carries exactly
+one machine-readable eligibility decision.
+
+It runs after scoring and before allocation. It answers **may this scored
+optional candidate participate in allocation under policy?** The allocator
+answers which eligible candidates are actually included; the filter owns no
+required resolution, no category constraint, no token budget, no eviction, and no
+final inclusion (INV-ALLOC-002). It is not an access-control boundary: scope
+isolation stays with request validation and `CandidateValidator`.
+
+**Schema version 1 has one rule: an optional `minimumTotalScore`.** There is no
+block, source, category, `sourceType`, timestamp, provider, rank, raw-score,
+size, regular-expression, metadata, tag, or callback rule. Filtering runs after
+exact deduplication, so its unit is a duplicate group whose members may come from
+different sources and carry different attributes, and hard exclusion over such a
+group has no single meaning yet. Recency, source, category, authored priority,
+and retrieval relevance already feed `CandidateScorer` and arrive here normalized
+into `score.total`.
+
+An absent minimum keeps every candidate eligible. A configured minimum admits a
+candidate at or above it and filters one strictly below it: **equality
+survives**, and nothing is rounded, clamped, normalized, read as a probability,
+or divided by a token count. `CandidateScore.total` is policy-relative utility,
+so a threshold is meaningful only against the scoring policy it is paired with.
+
+**Required blocks bypass the threshold entirely.** A required block scoring zero
+survives a threshold of one thousand, with the reason `ELIGIBLE_REQUIRED`. It is
+never filtered, failed, or boosted, because required content is a separate
+allocation class rather than a large score (INV-SCORE-003, INV-BUDGET-003).
+
+Every scored candidate finishes as `eligible`/`ELIGIBLE_REQUIRED`,
+`eligible`/`ELIGIBLE_POLICY`, or `filtered`/`FILTERED_SCORE_BELOW_MINIMUM`. An
+optional decision carries the exact score and the configured minimum where one
+applied; a required decision carries neither, because neither decided it. The
+complete input stays reachable, survivors are reused by reference and keep the
+scorer's order, and the eligible set is a `ScoredCandidateSet` the existing
+`BudgetAllocator` consumes with no change to its API.
+
+The filter reads exactly three things: `score.total`,
+`canonicalBlock.attributes.required`, and its own validated policy. It takes no
+tokenizer and reads no clock, budget, query, raw retrieval field, or source
+metadata.
+
+See DEC-036.
+
+---
+
+### 3.5.2 Compilation Contracts
+
+`CompilationRequest` and `CompilationPolicy` are implemented, both
+runtime-validated.
+
+**`CompilationPolicy` composes five required slices** — scoring, filtering,
+allocation, ordering, rendering — under its own schema version and identity. None
+is defaulted: a compilation that filters nothing states an explicit filtering
+slice with `minimumTotalScore` absent. The parent identity and the nested
+identities are independent and need not match. Each slice is validated by the
+stage that owns its rules, so the composed validator can neither accept nor
+reject what a stage would not, and nothing generates an identifier, version,
+hash, or fingerprint. The policy is data: it holds no component instance and owns
+no tokenizer.
+
+**`CompilationRequest` is the caller-supplied request data for one
+compilation**, and not by itself the whole deterministic input. INV-DET-001
+defines determinism over the request plus the configured tokenizer identity and
+version, the compiler version, and any other explicit compiler configuration, and
+DEC-035 keeps tokenizer identity out of every stage contract. The request
+therefore carries no tokenizer, compiler version, or component instance: those
+are configured composition a future `ContextCompiler` binds and a future trace
+records, and nothing hidden fills the gap.
+
+**It carries an explicit required `referenceTime`,** because that *is*
+per-compilation data. The compiler never reads the clock, so the instant arrives
+with the request and flows to the scorer (INV-DET-004). `id` is caller-supplied and preserved exactly — the
+kernel generates none — and `query` is preserved verbatim, with an empty or
+whitespace-only query valid and untrimmed. `budget` is the existing `TokenBudget`
+with no guessed context window and no defaulted reserve.
+
+**Request validation is structural.** It proves the record is a well-formed
+request of well-formed domain values; it does not prove the batch is
+trustworthy. Stale token counts, wrong hashes, duplicate source identifiers,
+cross-scope candidates, missing sources, incompatible source locations, and
+conflicting block identifiers remain `CandidateValidator`'s to reject
+(section 3.3), so a request may pass this validator and be rejected by the next
+one.
+
+Neither contract compiles anything. There is no `ContextCompiler`, no request or
+compilation fingerprint, no trace, no correction loop, and no `CompilationResult`.
+
+See DEC-036.
 
 ---
 
@@ -405,15 +505,17 @@ The MVP compiler must:
 
 The compiler must not call an LLM.
 
-Implemented so far: candidate reception and validation with scope filtering
-(section 3.4), duplicate removal (section 3.4), scoring (section 3.5), token
-budget allocation over canonical block content (section 3.6), **stable ordering
-of the included blocks**, and **deterministic rendering with exact measurement of
-the rendered string** (both below).
+Implemented so far: structural request validation with an explicit reference time
+and a composed five-slice policy (section 3.5.2), candidate reception and
+validation with scope filtering (section 3.4), duplicate removal (section 3.4),
+scoring (section 3.5), **policy filtering** (section 3.5.1), token budget
+allocation over canonical block content (section 3.6), **stable ordering of the
+included blocks**, and **deterministic rendering with exact measurement of the
+rendered string** (both below).
 
-Policy filtering, the render/evict/re-render correction, final rendered-token
-validation of a compilation, trace generation, and the compiler orchestration
-that joins these stages remain future work. **The compiler is not complete.**
+The render/evict/re-render correction, final rendered-token validation of a
+compilation, trace generation, and the compiler orchestration that joins these
+components remain future work. **The compiler is not complete.**
 
 **Stable ordering is implemented.** `ContextOrderer` consumes an
 `AllocatedCandidateSet` and one narrow versioned `ContextOrderingPolicy`, and
