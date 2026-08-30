@@ -27,6 +27,14 @@ const ALLOCATOR_SOURCE = readFileSync(
   'utf8',
 );
 
+const DECISIONS = readFileSync(new URL('docs/DECISIONS.md', rootUrl), 'utf8');
+
+/** DEC-033 alone, so a claim from an earlier decision cannot satisfy a check. */
+const DEC_033 = DECISIONS.slice(
+  DECISIONS.indexOf('## DEC-033'),
+  DECISIONS.indexOf('# 4. Rejected Decisions'),
+);
+
 /** Source with documentation comments removed: declared code only. */
 const ALLOCATOR_CODE = ALLOCATOR_SOURCE.replace(/\/\*[\s\S]*?\*\//g, '').replace(
   /^\s*\/\/.*$/gm,
@@ -137,6 +145,72 @@ describe('INV-BUDGET-002: block content is not the rendered context', () => {
     expect(result.included[0]?.contentTokens).toBe(
       scored.candidates[0]?.candidate.canonicalBlock.tokenCount,
     );
+  });
+});
+
+describe('INV-ALLOC-006: the eviction order is documented as safe, not as a proof', () => {
+  it('DEC-033 exists and is the section under test', () => {
+    expect(DEC_033.length).toBeGreaterThan(0);
+    expect(DEC_033).toContain('optionalEvictionOrder');
+  });
+
+  it('documents every prefix as safe to remove from the current selection', () => {
+    for (const source of [ALLOCATOR_SOURCE, DEC_033]) {
+      expect(source).toMatch(/safe removal order|safe to remove|Every prefix/i);
+      expect(source).toContain('minBlocks');
+    }
+    expect(ALLOCATOR_SOURCE).toContain('safe removal order');
+    expect(DEC_033).toContain('Safe Removal Order');
+  });
+
+  it('states that exhausting the order proves nothing about rendered feasibility', () => {
+    for (const source of [ALLOCATOR_SOURCE, DEC_033]) {
+      // The precise claim: exhaustion bounds what can still be removed from the
+      // *current* selection, and nothing more.
+      expect(source).toMatch(/currently selected/i);
+      expect(source).toMatch(/does not (show|prove) that no (other|different) allocation/i);
+    }
+  });
+
+  it('leaves future render-aware reallocation explicitly possible', () => {
+    for (const source of [ALLOCATOR_SOURCE, DEC_033]) {
+      expect(source).toMatch(/reconsider/i);
+      expect(source).toMatch(/rendered cost/i);
+    }
+    expect(DEC_033).toContain('render-aware');
+  });
+
+  it('does not claim that exhausting the order alone justifies failing', () => {
+    // The Phase 10 wording that made this false inference, in every spelling it
+    // was written in. A future edit that reintroduces it fails here.
+    for (const source of [ALLOCATOR_SOURCE, DEC_033]) {
+      for (const forbidden of [
+        'must fail rather than break either guarantee',
+        'If rendering still does not fit after the entire order',
+        'If rendering still does not fit after that',
+      ]) {
+        expect(source, `claims ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it('keeps the block-content failure a real block-content infeasibility', () => {
+    // Narrowing the eviction claim must not weaken this one: the union that did
+    // not fit was the cheapest canonical content satisfying the minimums.
+    expect(DEC_033).toContain('category_minimums_exceed_content_budget');
+    expect(DEC_033).toMatch(
+      /real \*\*block-content\*\* infeasibility|real block-content infeasibility/,
+    );
+  });
+
+  it('adds no renderer dependency while documenting the rendered-cost gap', () => {
+    // The counterexample is documentation, not an implementation: it appears in
+    // comments only, and no rendering cost, estimate, or renderer call enters
+    // the declared code (INV-DEP-002).
+    expect(ALLOCATOR_SOURCE).toContain('rendering overhead');
+    for (const forbidden of ['overhead', 'renderedCost', 'renderCost', 'estimate']) {
+      expect(ALLOCATOR_CODE, `declares ${forbidden}`).not.toContain(forbidden);
+    }
   });
 });
 

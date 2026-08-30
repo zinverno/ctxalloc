@@ -2200,7 +2200,37 @@ Starting from the complete successful selection, included **optional** candidate
 
 Required blocks never appear, at any position. A maximum restricts inclusion, not removal, so it never protects a block here: eviction only has to preserve required blocks and minimums.
 
-Two consequences follow. Ordinary optional surplus is given back before higher-utility content, and a block first included to satisfy a minimum can still become evictable once later selections created surplus in its category. Applying the whole sequence therefore leaves every configured minimum satisfied and every required block present; a renderer may consume any prefix of it. If rendering still does not fit after the entire order has been applied, the future orchestration must fail rather than break either guarantee.
+Two consequences follow. Ordinary optional surplus is given back before higher-utility content, and a block first included to satisfy a minimum can still become evictable once later selections created surplus in its category.
+
+### The Eviction Order Is a Safe Removal Order, Not a Feasibility Proof
+
+Every prefix of `optionalEvictionOrder` may be removed from the current selection without removing a required block and without dropping any configured category below `minBlocks`. Applying the whole order, like applying any prefix, preserves both guarantees. That makes it the cheap correction path whenever giving back currently selected optional surplus is enough to make the rendered context fit.
+
+It proves nothing beyond that, and in particular it is **not** a proof of rendered infeasibility. Exhausting the order shows only that no more *currently selected* optional surplus can be removed while the current hard constraints hold. It does not show that no different allocation satisfies the final rendered budget.
+
+The gap is the one this decision has been careful about throughout: hard minimums are satisfied at minimum **canonical block content** cost, while INV-BUDGET-002 measures the rendered string, whose per-block overhead — source labels, headings, separators and wrappers, emitted metadata — may differ between blocks. A block that is cheapest by `tokenCount` can therefore be more expensive once rendered than another candidate of the same category.
+
+Concretely, with `availableInputTokens` of 2 and `facts` requiring one block:
+
+```text
+candidate A   content 1 token   rendering overhead 2   rendered cost 3
+candidate B   content 2 tokens  rendering overhead 0   rendered cost 2
+```
+
+Phase 10 correctly reserves A as the minimum-content-cost candidate for the minimum. B is then not selected by the optional pass, because no block-content budget remains. A is protected by `minBlocks`, so it cannot enter the eviction order. An orchestration that consumed the whole order and then failed would report infeasibility — while B alone satisfies the same minimum inside the rendered budget. "Eviction order exhausted, therefore infeasible" is a false inference.
+
+Consequently, when protected category-minimum blocks remain and rendering still overruns, future orchestration must be free to reconsider those hard-minimum choices against actual rendered cost, or otherwise prove that no allocation fits, before returning a structured failure. It may declare rendered infeasibility immediately only when the remaining protected set is unavoidable under the active policy — required content once every evictable optional block is gone, for instance — or after a future render-aware feasibility procedure has proved that no alternative allocation fits.
+
+Phase 10 implements no render-aware replacement or reallocation, adds no rendering cost, and takes no renderer dependency. It supplies the safe order and states its limits.
+
+This does not weaken `category_minimums_exceed_content_budget`. That failure is a real **block-content** infeasibility: the selection it could not fit is the cheapest canonical content satisfying the minimums, so no other selection satisfying them fits the content ceiling either, and rendering overhead can only add to the cost.
+
+The distinction to keep is:
+
+```text
+block-content feasibility  is not  rendered feasibility
+safe eviction prefix       is not  complete render-aware allocation search
+```
 
 ### Stable Ordering and Preserved Metadata
 

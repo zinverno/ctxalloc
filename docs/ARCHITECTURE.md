@@ -987,10 +987,23 @@ only when removing it would leave its category at or above `minBlocks`. Required
 blocks never appear. A maximum restricts inclusion, not removal, so it never
 protects a block here.
 
-Consequently ordinary surplus is given back before higher-utility content, a
+Consequently ordinary surplus is given back before higher-utility content, and a
 block first included for a minimum may become evictable once later selections
-created surplus, and applying the whole order leaves every minimum satisfied and
-every required block present.
+created surplus.
+
+**Every prefix is safe, and that is all it proves.** Applying any prefix — up to
+and including the whole order — leaves every configured minimum satisfied and
+every required block present, which makes the order the cheap correction path
+when giving back currently selected surplus is enough. Exhausting it proves only
+that no more *currently selected* optional surplus can be removed under the
+current hard constraints; it does not prove that no different allocation fits the
+rendered budget. Hard minimums were satisfied at minimum canonical block-content
+cost, and rendering overhead may vary per block, so a block protected by
+`minBlocks` may render more expensively than an unselected candidate of the same
+category that satisfies the same minimum (DEC-033 carries the worked
+counterexample). Future orchestration must therefore be free to reconsider those
+hard-minimum choices against actual rendered cost, or otherwise prove no
+allocation fits, before declaring failure.
 
 Failures are structured and all-or-nothing: `invalid_policy`,
 `duplicate_category_constraint`, `invalid_budget`,
@@ -1104,9 +1117,17 @@ fixed prefixes and suffixes are not measured yet. Until that loop exists:
    exist yet.
 
 The future loop will render the selected blocks, tokenize the complete rendered
-string, consume a prefix of `optionalEvictionOrder` while the result overruns,
-render and tokenize again, and fail when required content plus hard category
-constraints plus rendering overhead still cannot fit.
+string, consume a prefix of `optionalEvictionOrder` while the result overruns, and
+render and tokenize again.
+
+Exhausting that order is not by itself a licence to fail. It is a safe removal
+order for the current selection, not a feasibility proof (section 6.4): when
+blocks protected by `minBlocks` remain and rendering still overruns, the loop must
+reconsider those hard-minimum choices against actual rendered cost, or otherwise
+prove no allocation fits, before returning a structured failure. Immediate failure
+is correct only when the remaining protected set is unavoidable under the active
+policy — required content once every evictable optional block is gone, for
+instance.
 
 Required block content that alone exceeds `availableInputTokens` is already a
 definitive INV-BUDGET-004 failure and is reported by the allocator today, because

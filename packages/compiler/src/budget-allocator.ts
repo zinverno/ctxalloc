@@ -44,10 +44,11 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
  * has rendered, and it therefore publishes `selectedBlockContentTokens` and
  * `unallocatedBlockContentTokens` rather than `compiledTokens` and
  * `unusedTokens`. A later renderer plus orchestration loop will render, tokenize
- * the complete string, evict optional blocks along `optionalEvictionOrder` when
- * the result overruns, render again, and fail when required content plus hard
- * category constraints plus rendering overhead still cannot fit. That loop is
- * not implemented here.
+ * the complete string, and remove optional blocks along `optionalEvictionOrder`
+ * while the result overruns. That order is a safe removal order for *this*
+ * selection, not a proof that no allocation fits: see {@link
+ * AllocatedCandidateSet.optionalEvictionOrder}. That loop is not implemented
+ * here.
  *
  * One thing is already definitive before rendering: block content that alone
  * exceeds the available ceiling can never fit once overhead is added. Required
@@ -128,6 +129,12 @@ export interface BudgetAllocationPolicy {
  * A free-text explanation is never the primary contract: a later trace must be
  * able to report why a block was included or excluded without re-deriving
  * meaning from a message.
+ *
+ * This union is the full vocabulary, for a consumer that handles both decision
+ * arrays together. Neither decision record accepts all of it: an inclusion
+ * carries only an `INCLUDED_*` reason and an exclusion only an `EXCLUDED_*` one,
+ * so a record pairing `included` with `EXCLUDED_BUDGET_EXHAUSTED` is not
+ * expressible in the published contract, exactly as it is unreachable at runtime.
  */
 export type AllocationDecisionReason =
   | 'INCLUDED_REQUIRED'
@@ -147,7 +154,13 @@ export type AllocationDecisionReason =
 export interface IncludedCandidateDecision {
   readonly candidate: ScoredCandidate;
   readonly decision: 'included';
-  readonly reason: AllocationDecisionReason;
+  /**
+   * Only an inclusion reason. The literals are inlined rather than published as
+   * a second exported alias, so the contract narrows without enlarging the
+   * public surface; {@link AllocationDecisionReason} still names all five codes
+   * for a consumer that handles both arrays together.
+   */
+  readonly reason: 'INCLUDED_REQUIRED' | 'INCLUDED_CATEGORY_MINIMUM' | 'INCLUDED_SCORE_ORDER';
   readonly contentTokens: number;
   readonly remainingBefore: number;
   readonly remainingAfter: number;
@@ -162,7 +175,8 @@ export interface IncludedCandidateDecision {
 export interface ExcludedCandidateDecision {
   readonly candidate: ScoredCandidate;
   readonly decision: 'excluded';
-  readonly reason: AllocationDecisionReason;
+  /** Only an exclusion reason, for the reason given on the inclusion record. */
+  readonly reason: 'EXCLUDED_CATEGORY_MAXIMUM' | 'EXCLUDED_BUDGET_EXHAUSTED';
   readonly contentTokens: number;
   readonly remainingTokens: number;
 }
@@ -203,6 +217,40 @@ export interface AllocatedCandidateSet {
   readonly included: readonly IncludedCandidateDecision[];
   readonly excluded: readonly ExcludedCandidateDecision[];
 
+  /**
+   * A safe removal order for *this* selection, for the future render-correction
+   * loop (INV-ALLOC-006).
+   *
+   * Every prefix may be removed from the included set without removing a
+   * required block and without dropping any configured category below its
+   * `minBlocks`. That makes it the cheap correction path whenever giving back
+   * currently selected optional surplus is enough to make the rendered context
+   * fit.
+   *
+   * It is not a feasibility proof. Exhausting the order proves only that no more
+   * currently selected optional surplus can be removed while the current hard
+   * constraints hold. It does not prove that no different allocation satisfies
+   * the rendered budget: this stage minimized canonical block *content* cost for
+   * hard minimums, and rendering overhead may vary per block, so a block
+   * protected by `minBlocks` here may render more expensively than an unselected
+   * candidate of the same category that satisfies the same minimum.
+   *
+   * Concretely, with `availableInputTokens` of 2 and `facts` requiring one block:
+   * candidate A costs 1 content token and 2 rendered overhead tokens, candidate B
+   * costs 2 content tokens and none. This stage correctly reserves A, B does not
+   * fit the remaining content budget, and A is protected — yet B alone renders
+   * within the budget. Concluding "eviction order exhausted, therefore
+   * infeasible" would be wrong.
+   *
+   * So when protected category-minimum blocks remain and rendering still
+   * overruns, future orchestration must either reconsider those hard-minimum
+   * choices against actual rendered cost or otherwise prove that no allocation
+   * fits, before returning a structured failure. It may declare infeasibility
+   * immediately only when the remaining protected set is unavoidable under the
+   * active policy — required content once every evictable optional block is gone,
+   * for instance. Phase 10 implements no render-aware replacement or
+   * reallocation.
+   */
   readonly optionalEvictionOrder: readonly ContextBlockId[];
 }
 
@@ -548,8 +596,8 @@ export class BudgetAllocator {
    * 5. select the remaining optional candidates by score descending, skipping a
    *    candidate whose category is already at its maximum and continuing past
    *    one that does not fit;
-   * 6. precompute the deterministic optional eviction order for the future
-   *    render-correction loop.
+   * 6. precompute the deterministic optional eviction order that is safe to
+   *    apply to this selection during the future render-correction loop.
    *
    * The supplied set and everything reachable from it are treated as immutable.
    * No group, block, attribute, metadata object, source document, score, or
@@ -841,9 +889,20 @@ export class BudgetAllocator {
    * once later selections created surplus in its category, and a block that is
    * protected simply keeps its place in the allocation.
    *
-   * Applying the whole order therefore leaves every configured minimum satisfied
-   * and every required block present. If rendering still does not fit after that,
-   * the future orchestration must fail rather than break either guarantee.
+   * Every prefix of the result is therefore safe to remove from this selection:
+   * applying any of them, up to and including the whole order, leaves every
+   * configured minimum satisfied and every required block present.
+   *
+   * That is the whole of what the order proves. Exhausting it shows only that no
+   * more *currently selected* optional surplus can be given back under the
+   * current hard constraints; it does not show that no other allocation fits the
+   * rendered budget, because rendering overhead may vary per block and this stage
+   * minimized canonical block content instead. A cheaper-by-content block
+   * protected by `minBlocks` may render more expensively than an unselected
+   * candidate of the same category that would satisfy the same minimum. Future
+   * orchestration must therefore be free to reconsider those hard-minimum choices
+   * against actual rendered cost before declaring failure
+   * (see {@link AllocatedCandidateSet.optionalEvictionOrder}).
    */
   #evictionOrder(state: AllocationState): readonly ContextBlockId[] {
     const counts = new Map(state.selectedByCategory);
@@ -881,7 +940,7 @@ export class BudgetAllocator {
   /** Records one inclusion and its exact budget transition. */
   #include(
     entry: AllocationCandidate,
-    reason: AllocationDecisionReason,
+    reason: IncludedCandidateDecision['reason'],
     state: AllocationState,
   ): void {
     const remainingBefore = state.remaining;

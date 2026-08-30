@@ -659,6 +659,46 @@ requireContains('packages/compiler/dist/budget-allocator.d.ts', "'INCLUDED_CATEG
 requireContains('packages/compiler/dist/budget-allocator.d.ts', "'INCLUDED_SCORE_ORDER'");
 requireContains('packages/compiler/dist/budget-allocator.d.ts', "'EXCLUDED_CATEGORY_MAXIMUM'");
 requireContains('packages/compiler/dist/budget-allocator.d.ts', "'EXCLUDED_BUDGET_EXHAUSTED'");
+// Each decision record is discriminated: an inclusion accepts only INCLUDED_*
+// reasons and an exclusion only EXCLUDED_* ones, so the published contract
+// cannot express a state the runtime never produces (DEC-033, INV-TRACE-002).
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  "readonly reason: 'INCLUDED_REQUIRED' | 'INCLUDED_CATEGORY_MINIMUM' | 'INCLUDED_SCORE_ORDER';",
+);
+requireContains(
+  'packages/compiler/dist/budget-allocator.d.ts',
+  "readonly reason: 'EXCLUDED_CATEGORY_MAXIMUM' | 'EXCLUDED_BUDGET_EXHAUSTED';",
+);
+
+{
+  const content = contents.get('packages/compiler/dist/budget-allocator.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // Catches a regression that widens either record back to the full union.
+    if (declarations.includes('readonly reason: AllocationDecisionReason;')) {
+      fail(
+        'packages/compiler/dist/budget-allocator.d.ts widens a decision reason back to AllocationDecisionReason',
+      );
+    }
+    for (const [record, forbidden] of [
+      ['IncludedCandidateDecision', /'EXCLUDED_/],
+      ['ExcludedCandidateDecision', /'INCLUDED_/],
+    ]) {
+      const start = declarations.indexOf(`interface ${record} `);
+      if (start === -1) {
+        fail(`packages/compiler/dist/budget-allocator.d.ts does not declare interface ${record}`);
+        continue;
+      }
+      const body = declarations.slice(start, declarations.indexOf('}', start));
+      if (forbidden.test(body)) {
+        fail(
+          `packages/compiler/dist/budget-allocator.d.ts lets ${record} carry a ${forbidden.source} reason`,
+        );
+      }
+    }
+  }
+}
 requireContains(
   'packages/compiler/dist/budget-allocator.d.ts',
   'type BudgetAllocationIssueCode = ',

@@ -369,7 +369,17 @@ transition. The included order is allocation chronology, not render order.
 
 A deterministic optional eviction order is precomputed for the future
 render-correction loop: required blocks never appear, and a block enters the order
-only when removing it would keep its category at or above its minimum.
+only when removing it would keep its category at or above its minimum, so every
+prefix is safe to remove from the current selection.
+
+That order is a safe removal order, **not** a proof of rendered infeasibility.
+Exhausting it shows only that no more currently selected optional surplus can be
+removed under the current hard constraints. Because hard minimums are satisfied at
+minimum block-content cost while the rendered budget counts per-block overhead
+that may differ between blocks, a protected block may render more expensively than
+an unselected candidate of the same category. Future orchestration must therefore
+be able to reconsider those hard-minimum choices against actual rendered cost, or
+otherwise prove no allocation fits, before failing (DEC-033).
 
 Failures are structured and all-or-nothing, and no partial result is ever
 returned. Ordering, rendering, final rendered token validation, trace generation,

@@ -253,8 +253,12 @@ no partial result is ever returned.
 
 **A deterministic eviction order is precomputed** for the future
 render-correction loop. Required blocks never appear in it, and a block enters it
-only when removing it would keep its category at or above its minimum, so applying
-the whole order preserves every required block and every category minimum.
+only when removing it would keep its category at or above its minimum, so every
+prefix is safe to remove from the current selection. It is a **safe removal order,
+not a feasibility proof**: exhausting it shows only that no more currently
+selected optional surplus can be given back, never that no other allocation fits
+the rendered budget, because hard minimums were satisfied at minimum
+block-content cost and rendering overhead may vary per block.
 
 **Selected block-content tokens are not final rendered tokens.** The allocator
 proves `sum(included canonicalBlock.tokenCount) <= availableInputTokens` exactly
