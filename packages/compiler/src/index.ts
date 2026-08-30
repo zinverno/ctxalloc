@@ -6,19 +6,39 @@
  * candidates and returns compiled context: it never searches an index, reads a
  * file, calls a model, or touches a database (INV-DEP-002).
  *
- * Three stages exist. `CandidateValidator` validates one candidate batch
+ * Four stages exist. `CandidateValidator` validates one candidate batch
  * strictly, all or nothing, and is the runtime trust boundary of the kernel
  * (DEC-030). `CandidateDeduplicator` then collapses exact duplicate content into
  * groups, choosing an existing canonical block and preserving every candidate
  * wrapper as evidence (DEC-031). `CandidateScorer` then normalizes the explicitly
  * configured signals of each group into transparent score components and returns
- * a stable ranking for the future allocator (DEC-032).
+ * a stable ranking (DEC-032). `BudgetAllocator` then resolves required blocks
+ * first, enforces exact category block-count constraints, and selects optional
+ * blocks under the available block-content budget (DEC-033).
  *
- * Policy filtering, allocation, ordering, rendering, trace construction, and
- * compiler orchestration are later phases and are deliberately absent, as is the
+ * Allocation is not the final budget guarantee. INV-BUDGET-002 makes the rendered
+ * string the source of truth, and the renderer does not exist yet, so
+ * `BudgetAllocator` publishes provisional block-content metrics plus a
+ * deterministic eviction order for the future render-correction loop, and never
+ * a final `compiledTokens` or `unusedTokens`.
+ *
+ * Policy filtering, ordering, rendering, trace construction, and compiler
+ * orchestration are later phases and are deliberately absent, as is the
  * candidate provider port, which belongs outside the kernel entirely.
  */
 
+export {
+  BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION,
+  BudgetAllocationError,
+  BudgetAllocator,
+  type AllocatedCandidateSet,
+  type AllocationDecisionReason,
+  type BudgetAllocationIssueCode,
+  type BudgetAllocationPolicy,
+  type CategoryAllocationConstraint,
+  type ExcludedCandidateDecision,
+  type IncludedCandidateDecision,
+} from './budget-allocator.js';
 export {
   CandidateDeduplicator,
   type CanonicalSelectionReason,

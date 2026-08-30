@@ -267,9 +267,15 @@ Model consumes compiled context.
 
 These responsibilities must not be merged.
 
-Three stages are implemented: candidate validation (section 6.1), deterministic
-deduplication (section 6.2), and deterministic scoring (section 6.3). Everything
-below them is future work.
+Four stages are implemented: candidate validation (section 6.1), deterministic
+deduplication (section 6.2), deterministic scoring (section 6.3), and
+deterministic budget allocation (section 6.4). Everything below them is future
+work.
+
+Allocation is not the end of the budget story. `BudgetAllocator` enforces the
+canonical block-content budget exactly; the final rendered context still has to
+be tokenized before any success can satisfy INV-BUDGET-001 and INV-BUDGET-002,
+and that belongs to the renderer and its orchestration loop (section 7).
 
 `CandidateFilter` does not exist, and its position in this flow is **not yet
 decided**. Two constraints are already fixed, and nothing more:
@@ -490,7 +496,8 @@ The policy defines:
 * recency behavior;
 * relevance weights;
 * deduplication rules;
-* category allocation limits;
+* category allocation limits, as block counts in allocation policy schema
+  version 1;
 * ordering rules;
 * rendering rules;
 * stable tie-breaking rules.
@@ -498,6 +505,13 @@ The policy defines:
 Policies must be versioned.
 
 The same policy version and request must produce the same result.
+
+This broad object is still not implemented. Two narrow versioned slices exist
+instead, each owned by the stage that uses it: `CandidateScoringPolicy`
+(section 6.3) and `BudgetAllocationPolicy` (section 6.4). A later
+`CompilationPolicy` may contain or reference them, together with future
+filtering, ordering, and rendering policies, without changing what either stage
+means by its own slice.
 
 ---
 
@@ -791,19 +805,201 @@ provider contract. No redundancy or near-duplicate score exists either.
 
 ### 6.4 BudgetAllocator
 
-Status: future phase.
+Status: implemented (DEC-033).
+
+It consumes a `ScoredCandidateSet`, an explicit `TokenBudget`, and one narrow
+versioned `BudgetAllocationPolicy`, and returns an `AllocatedCandidateSet`, the
+next compiler-stage type:
+
+```ts
+interface AllocatedCandidateSet {
+  readonly scope: Scope;
+  readonly sourceDocuments: readonly SourceDocument[];
+
+  readonly scoringPolicyId: string;
+  readonly scoringPolicyVersion: string;
+  readonly allocationPolicyId: string;
+  readonly allocationPolicyVersion: string;
+  readonly referenceTime: Timestamp;
+
+  readonly tokenBudget: TokenBudget;
+  readonly availableInputTokens: number;
+
+  readonly selectedBlockContentTokens: number;
+  readonly unallocatedBlockContentTokens: number;
+
+  readonly included: readonly IncludedCandidateDecision[];
+  readonly excluded: readonly ExcludedCandidateDecision[];
+
+  readonly optionalEvictionOrder: readonly ContextBlockId[];
+}
+
+interface IncludedCandidateDecision {
+  readonly candidate: ScoredCandidate;
+  readonly decision: 'included';
+  readonly reason: AllocationDecisionReason;
+  readonly contentTokens: number;
+  readonly remainingBefore: number;
+  readonly remainingAfter: number;
+}
+
+interface ExcludedCandidateDecision {
+  readonly candidate: ScoredCandidate;
+  readonly decision: 'excluded';
+  readonly reason: AllocationDecisionReason;
+  readonly contentTokens: number;
+  readonly remainingTokens: number;
+}
+```
+
+The structure is an ephemeral compiler-stage result and is never persisted, so it
+carries no schema version.
 
 Responsibilities:
 
-* calculate available input budget;
-* include required blocks;
-* enforce category minimums and maximums;
-* select optional blocks;
-* prevent budget overruns;
-* return unused budget;
-* fail on impossible required-block budgets.
+* strict runtime validation of the allocation policy and the token budget;
+* required block resolution before every optional block;
+* exact category block-count constraints;
+* deterministic optional selection under the block-content ceiling;
+* one machine-readable decision for every candidate;
+* a deterministic optional eviction order for the future render-correction loop;
+* structured failure when required content or a category constraint is
+  impossible.
 
-Only this component owns final token allocation.
+Only this component owns final optional inclusion (INV-ALLOC-002).
+
+#### Block-content budget, not final rendered budget
+
+`BudgetAllocator` runs before `ContextRenderer`, and rendering does not exist
+yet. It therefore proves exactly one property:
+
+```text
+sum(included canonicalBlock.tokenCount) <= availableInputTokens
+```
+
+and never claims `compiledTokens <= availableInputTokens` for a context nobody
+has rendered. Its metrics are named accordingly — `selectedBlockContentTokens`
+and `unallocatedBlockContentTokens` — and no `compiledTokens` or final
+`unusedTokens` field exists. No rendering reserve is invented to compensate.
+
+Required block content that alone exceeds the ceiling is definitively impossible
+even before overhead is added, so it fails immediately under INV-BUDGET-004. The
+converse does not hold: required content that fits here is not proof that the
+rendered required context will fit.
+
+The budget is validated with the existing `TokenBudgetSchema`, and the ceiling
+comes from the existing `availableInputTokens()`. The model context window is
+never guessed and no reserve is defaulted or injected.
+
+#### BudgetAllocationPolicy is a narrow allocation slice
+
+The stage takes one versioned `BudgetAllocationPolicy`, not the broad future
+`CompilationPolicy` of section 5.6:
+
+```ts
+interface BudgetAllocationPolicy {
+  readonly schemaVersion: 1;
+  readonly policyId: string;
+  readonly policyVersion: string;
+  readonly optionalSelection: 'score-desc-greedy';
+  readonly categoryConstraints?: readonly CategoryAllocationConstraint[];
+}
+
+interface CategoryAllocationConstraint {
+  readonly category: string;
+  readonly minBlocks?: number;
+  readonly maxBlocks?: number;
+}
+```
+
+Policy validation is strict: unknown fields are rejected rather than stripped,
+nothing is coerced, no default is injected, exact strings are preserved, at least
+one bound must be present, `minBlocks <= maxBlocks`, and two constraints owning
+the same exact category are rejected rather than resolved by array order.
+
+#### Category constraints are block counts
+
+In schema version 1 a category minimum and maximum are **block counts**, spelled
+`minBlocks` and `maxBlocks`: at least or at most that many independently
+selectable canonical blocks of one exact category. There is no token quota, no
+percentage share, and no byte or character quota; those remain possible in a
+later policy schema version.
+
+A category is the canonical block's own `attributes.category`, matched by exact
+string equality with no case folding, trimming, prefix matching, or hierarchy. An
+absent category is unconstrained. Duplicate members are provenance, not
+additional selectable blocks, so they never count toward a quota.
+
+#### Required, minimum, and general optional phases
+
+1. **Required.** Every required block is included first, in `canonicalBlock.id`
+   order, by exact safe subtraction. A required block that does not fit fails the
+   whole allocation; none is dropped and no content is trimmed (INV-BUDGET-003,
+   INV-BUDGET-004, INV-ALLOC-004). Required content over a category maximum fails
+   the same way rather than relaxing the maximum.
+2. **Category minimums.** Required blocks count toward a minimum, so only
+   `max(0, minBlocks - requiredCount)` optional blocks are reserved per category,
+   chosen by token count ascending, then score descending, then block identifier.
+   Taking the cheapest blocks that reach the count minimizes the content cost of
+   satisfying it, and categories are disjoint, so the union is the
+   minimum-content-cost selection satisfying every minimum. Every category's
+   selection is computed before anything is subtracted, and if that union does not
+   fit, the failure is a real block-content infeasibility rather than a greedy
+   artifact.
+3. **General optional.** Everything else is considered by score descending, then
+   block identifier ascending.
+
+#### score-desc-greedy
+
+For each remaining optional candidate the category maximum is checked before the
+budget, so a blocked candidate spends nothing. A candidate that fits is included
+and its exact token count subtracted; one that does not fit is excluded and
+traversal continues, so a large high-score candidate never stops smaller
+lower-score ones from being considered.
+
+It is deliberately not knapsack, dynamic programming, integer programming, beam
+search, total-utility maximization, or score-per-token: no score is divided by a
+token count and no token cost is subtracted from a score. The one place cost
+outranks score is the hard-minimum feasibility selection above.
+
+#### Decisions and accounting
+
+Every candidate appears exactly once across `included` and `excluded` with one
+machine-readable reason — `INCLUDED_REQUIRED`, `INCLUDED_CATEGORY_MINIMUM`,
+`INCLUDED_SCORE_ORDER`, `EXCLUDED_CATEGORY_MAXIMUM`, or
+`EXCLUDED_BUDGET_EXHAUSTED` (INV-TRACE-001, INV-TRACE-002). Inclusions carry
+`remainingBefore` and `remainingAfter` differing by exactly `contentTokens`;
+exclusions carry the unchanged remainder. `selectedBlockContentTokens` is the
+exact sum of the included counts and `unallocatedBlockContentTokens` is exactly
+the ceiling minus it.
+
+The included array is allocation chronology — required, then minimums, then score
+order — and is **not** final render order, which `ContextOrderer` owns. The result
+is trace-ready but is not a `CompilationTrace`.
+
+#### Deterministic eviction order
+
+`optionalEvictionOrder` is precomputed for the future render-correction loop
+(INV-ALLOC-006); this stage evicts nothing. Included optional candidates are
+considered in reverse utility order — score ascending, then block identifier
+descending — against a simulated per-category count, and a block enters the order
+only when removing it would leave its category at or above `minBlocks`. Required
+blocks never appear. A maximum restricts inclusion, not removal, so it never
+protects a block here.
+
+Consequently ordinary surplus is given back before higher-utility content, a
+block first included for a minimum may become evictable once later selections
+created surplus, and applying the whole order leaves every minimum satisfied and
+every required block present.
+
+Failures are structured and all-or-nothing: `invalid_policy`,
+`duplicate_category_constraint`, `invalid_budget`,
+`required_content_exceeds_budget`, `required_category_maximum_exceeded`,
+`category_minimum_unreachable`, `category_minimums_exceed_content_budget`, and
+`invalid_allocation_result`. No partial result is ever returned.
+
+The stage reads no clock, calls no tokenizer, renderer, retrieval provider,
+model, or storage, and mutates nothing reachable from its input.
 
 ### 6.5 ContextOrderer
 
@@ -870,9 +1066,53 @@ Budget calculations must account for:
 
 The final rendered context must be tokenized again before returning success.
 
-If rendering causes an overrun, the allocator must remove optional blocks according to policy and render again.
+If rendering causes an overrun, optional blocks must be removed according to
+policy and the context rendered again.
 
 Required blocks must never be silently removed during this correction step.
+
+### 7.1 What is enforced today
+
+`BudgetAllocator` (section 6.4) enforces the **canonical block-content budget**
+exactly:
+
+```text
+sum(included canonicalBlock.tokenCount) <= availableInputTokens
+```
+
+`availableInputTokens` comes from the validated `TokenBudget` and nothing else,
+and the stage adds no reserve of its own. Its published metrics —
+`selectedBlockContentTokens` and `unallocatedBlockContentTokens` — are
+provisional block-content values, not the final `compiledTokens` and
+`unusedTokens` of METRICS 8.4 and 8.10.
+
+The first half of the correction step is also already in place: the allocator
+precomputes `optionalEvictionOrder`, a deterministic sequence of optional block
+identifiers whose removal preserves every required block and every category
+minimum.
+
+### 7.2 What still requires the renderer
+
+`ContextRenderer` and the orchestration loop remain future work, so the rendering
+tokens of source labels, headings, separators, wrappers, emitted metadata, and
+fixed prefixes and suffixes are not measured yet. Until that loop exists:
+
+1. no component may claim a final hard-budget success under INV-BUDGET-001;
+2. INV-BUDGET-002 is not satisfied by any implemented stage, because no rendered
+   string is tokenized;
+3. INV-BUDGET-006 has no implemented producer, because `compiledTokens` does not
+   exist yet.
+
+The future loop will render the selected blocks, tokenize the complete rendered
+string, consume a prefix of `optionalEvictionOrder` while the result overruns,
+render and tokenize again, and fail when required content plus hard category
+constraints plus rendering overhead still cannot fit.
+
+Required block content that alone exceeds `availableInputTokens` is already a
+definitive INV-BUDGET-004 failure and is reported by the allocator today, because
+adding rendering overhead can only make it worse. The converse does not hold: a
+required set that fits the block-content ceiling is not proof of rendered
+feasibility.
 
 ---
 

@@ -395,6 +395,40 @@ compiledTokens
 
 The final rendered string is the source of truth.
 
+## 8.4.1 Provisional Block-Content Metrics
+
+`BudgetAllocator` (ARCHITECTURE 6.4) runs before any renderer exists, so it
+cannot report 8.4 or 8.10. It reports three intermediate values instead:
+
+```text id="p10bcm"
+availableInputTokens
+  = the value of 8.3, from the validated TokenBudget
+
+selectedBlockContentTokens
+  = exact sum of the included canonical blocks' tokenCount
+
+unallocatedBlockContentTokens
+  = availableInputTokens - selectedBlockContentTokens
+```
+
+The stage guarantees `selectedBlockContentTokens <= availableInputTokens`
+exactly.
+
+These are **not**:
+
+* `compiledTokens` (8.4), which is the tokenized final rendered context;
+* `unusedTokens` (8.10), which is measured against `compiledTokens`;
+* `renderingOverheadTokens` (8.6), which the allocator neither measures nor
+  estimates.
+
+`selectedBlockContentTokens` is a provisional value of the same shape as
+`includedContentTokens` (8.5) for the currently selected set; it becomes that
+metric only once a renderer has produced the final selection. Reporting a
+provisional value under a final metric name is a reporting error.
+
+The definitions in 8.4, 8.5, 8.6, 8.9, 8.10, and 8.11 are unchanged and remain
+the responsibility of the renderer and the compiler orchestration.
+
 ## 8.5 Included Content Tokens
 
 ```text id="d6pedc"
