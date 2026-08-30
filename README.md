@@ -9,7 +9,7 @@ or agent framework.
 
 ## Status
 
-Phase 11 — deterministic context ordering. The repository contains
+Phase 12 — deterministic context rendering. The repository contains
 the TypeScript monorepo scaffolding from Phase 1 (workspace structure, strict
 compiler and linting configuration, test infrastructure, package boundaries,
 boundary checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
@@ -19,7 +19,7 @@ validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
 deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
 tokenizer contract test suite, a real offline tokenizer adapter in
 `@ctxalloc/tokenization`, the first two application use cases in
-`@ctxalloc/application`, and the first five compiler-kernel stages in
+`@ctxalloc/application`, and the first six compiler-kernel stages in
 `@ctxalloc/compiler`.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
@@ -263,10 +263,8 @@ block-content cost and rendering overhead may vary per block.
 **Selected block-content tokens are not final rendered tokens.** The allocator
 proves `sum(included canonicalBlock.tokenCount) <= availableInputTokens` exactly
 and publishes `selectedBlockContentTokens` and `unallocatedBlockContentTokens`.
-It deliberately publishes no `compiledTokens` and no final `unusedTokens`: source
-labels, separators, wrappers, and other rendering overhead are not measured,
-because the renderer does not exist yet. **There is no final hard budget guarantee
-until the renderer and its orchestration loop exist.**
+It deliberately publishes no `compiledTokens` and no final `unusedTokens`: those
+belong to a settled selection, which only the future correction loop produces.
 
 `ContextOrderer` is the fifth stage of the kernel (see
 [DEC-034](./docs/DECISIONS.md)). It takes an `AllocatedCandidateSet` and one
@@ -301,11 +299,64 @@ elements with the render order — the allocation chronology holds exactly the s
 decisions, and the eviction order a subset of them — but each answers a different
 question, so none may be derived from another.
 
-**No renderer exists yet.** Nothing produces a compiled string, no rendering
-overhead is measured, and there is still no final hard-budget guarantee. There is
-no rendering policy, trace builder, `CandidateFilter`, policy filtering, compiler
-orchestration, retrieval provider, persistence, HTTP, or CLI behavior. CtxAlloc
-does not yet render context, and it supports no Obsidian integration.
+`ContextRenderer` is the sixth stage of the kernel (see
+[DEC-035](./docs/DECISIONS.md)). It takes an `OrderedCandidateSet`, one narrow
+versioned `ContextRenderingPolicy`, and one project-owned `Tokenizer`, and
+returns a `RenderedContextAttempt`: the current selection serialized as one
+deterministic string, plus the token count of exactly that string.
+
+**Rendering policy v1 has one format: JSON Lines.** One canonical JSON object per
+included block, joined by exactly one LF — no prefix, no suffix, no enclosing
+array, no trailing newline, no blank separator line. One physical line is exactly
+one block, and an empty selection renders as the exact empty string. Each record
+carries `blockId`, `content`, `headingPath` when the block carries one,
+`sourceDocumentId`, and `sourceType`, and nothing else:
+
+```text
+{"blockId":"block-1","content":"The compiler selects final context.","sourceDocumentId":"doc-1","sourceType":"markdown"}
+```
+
+Score, retrieval data, allocation reason, required status, category, priority,
+timestamps, block metadata, source metadata, source titles, `tokenCount`, and
+`normalizedContentHash` are compiler control and provenance data, and none of
+them renders. `sourceDocumentId` is the v1 source label because it exists on
+every canonical block, is stable project-owned identity, and cannot drift from an
+optional title.
+
+**JSON escaping is the boundary mechanism.** A raw delimiter protocol was
+rejected: arbitrary source content can contain any delimiter. Because content,
+heading entries, and identifiers are JSON strings, embedded newlines, quotes, and
+backslashes are escaped, so source content cannot forge a second record. Content
+round-trips exactly — `JSON.parse(line).content` equals the block content byte for
+byte, with no trimming, normalization, truncation, or rewriting. Records follow
+`orderedIncluded` exactly; the renderer never sorts.
+
+**The complete rendered string is tokenized, once.** `renderedTokens` is
+`countTokens(renderedContext)` over the whole string — never a sum of block
+counts, record counts, or separator counts, and never a character estimate. A
+tokenizer that throws or returns an unusable value produces a structured
+`CONTEXT_RENDERING_FAILED`, never a partial result.
+
+**The token delta is signed.** `renderedTokenDelta` is
+`renderedTokens - selectedBlockContentTokens`, and it may be negative.
+Tokenization is not additive — `tokenizer(a + b)` need not equal
+`tokenizer(a) + tokenizer(b)` — so the difference is a diagnostic delta, not an
+additive attribution of separator or label tokens. The old non-negative
+`renderingOverheadTokens` definition was invalid and has been replaced (see
+[METRICS 8.6](./docs/METRICS.md)).
+
+**The renderer can report an over-budget attempt.** `fitsAvailableInputBudget` is
+`renderedTokens <= availableInputTokens` and is observational: `false` is a
+successful measurement, not an error. The renderer evicts nothing, drops no
+required block, replaces no category-minimum choice, re-runs no earlier stage,
+and never raises `REQUIRED_CONTENT_EXCEEDS_BUDGET`.
+
+**No correction loop and no `CompilationResult` yet.** Nothing consumes a render
+attempt to accept or reject a compilation, so there is still no final
+`compiledTokens`, no `unusedTokens`, and **no final hard-budget guarantee**. There
+is no trace builder, `CandidateFilter`, policy filtering, compiler orchestration,
+retrieval provider, persistence, HTTP, or CLI behavior, and CtxAlloc supports no
+Obsidian integration.
 
 ## Prerequisites
 

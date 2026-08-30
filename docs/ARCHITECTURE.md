@@ -267,15 +267,18 @@ Model consumes compiled context.
 
 These responsibilities must not be merged.
 
-Five stages are implemented: candidate validation (section 6.1), deterministic
+Six stages are implemented: candidate validation (section 6.1), deterministic
 deduplication (section 6.2), deterministic scoring (section 6.3), deterministic
-budget allocation (section 6.4), and deterministic context ordering
-(section 6.5). Everything below them is future work.
+budget allocation (section 6.4), deterministic context ordering (section 6.5),
+and deterministic context rendering with exact render measurement
+(section 6.6). Everything below them is future work.
 
-Allocation is not the end of the budget story. `BudgetAllocator` enforces the
-canonical block-content budget exactly; the final rendered context still has to
-be tokenized before any success can satisfy INV-BUDGET-001 and INV-BUDGET-002,
-and that belongs to the renderer and its orchestration loop (section 7).
+Rendering is not the end of the budget story either. `ContextRenderer` tokenizes
+the complete rendered string for **one** selection and reports whether that
+attempt fits; it never evicts, never reallocates, and never fails merely because
+the attempt is too large. Turning a measurement into a success or a structured
+failure under INV-BUDGET-001 and INV-BUDGET-002 belongs to the correction
+orchestration, which does not exist yet (section 7).
 
 `CandidateFilter` does not exist, and its position in this flow is **not yet
 decided**. Two constraints are already fixed, and nothing more:
@@ -1131,15 +1134,126 @@ neither lose nor invent an element, so no reconciliation code is needed.
 
 ### 6.6 ContextRenderer
 
-Status: future phase.
+Status: implemented (DEC-035).
+
+It consumes an `OrderedCandidateSet`, one narrow versioned
+`ContextRenderingPolicy`, and one project-owned `Tokenizer`, and returns a
+`RenderedContextAttempt`:
+
+```ts
+interface ContextRenderingPolicy {
+  readonly schemaVersion: 1;
+  readonly policyId: string;
+  readonly policyVersion: string;
+  readonly format: 'jsonl-blocks';
+}
+
+interface RenderedContextAttempt {
+  readonly ordered: OrderedCandidateSet;
+  readonly renderingPolicyId: string;
+  readonly renderingPolicyVersion: string;
+  readonly rendererId: string;
+  readonly rendererVersion: string;
+  readonly tokenizerId: string;
+  readonly tokenizerVersion: string;
+  readonly renderedContext: string;
+  readonly renderedTokens: number;
+  readonly renderedTokenDelta: number;
+  readonly fitsAvailableInputBudget: boolean;
+}
+```
+
+The structure is an ephemeral compiler-stage result and is never persisted, so it
+carries no schema version. It is deliberately **not** a `CompilationResult`.
 
 Responsibilities:
 
-* serialize selected blocks;
-* include source markers;
-* apply stable separators;
-* avoid unmeasured formatting overhead;
-* report rendering token overhead.
+* strict runtime validation of the rendering policy and of the injected
+  tokenizer;
+* deterministic, boundary-safe serialization of the current selection;
+* exact tokenization of the complete rendered string;
+* one signed diagnostic delta and one budget observation.
+
+It changes no inclusion or exclusion decision, evicts nothing, calls no earlier
+stage, and builds no trace.
+
+#### The v1 format
+
+JSON Lines: one canonical JSON object per included block, joined by exactly one
+LF (`\n`). There is no prefix, no suffix, no enclosing array, no trailing
+newline, and no blank separator line, so one physical line is exactly one block
+and an empty selection renders as the exact empty string.
+
+Each record carries exactly these fields, in canonical key order:
+
+```text
+blockId
+content
+headingPath          only when the canonical block carries it
+sourceDocumentId
+sourceType
+```
+
+Nothing else renders. Score, retrieval data, allocation reason, required status,
+category, priority, timestamps, block metadata, source metadata, source title,
+`tokenCount`, `normalizedContentHash`, and policy internals are compiler control
+and provenance data, not model context in rendering policy v1.
+
+`sourceDocumentId` is the v1 source label (INV-RENDER-003): it exists on every
+trusted canonical block, it is stable project-owned identity (DEC-028), it needs
+no registry lookup, and it cannot drift from an optional title. A human-readable
+title is a future rendering-policy version.
+
+`headingPath` is emitted exactly as the block carries it. An absent path omits
+the key; an explicitly empty array is preserved as `[]`. It is never synthesized
+and never rewritten into Markdown heading text in v1.
+
+#### Boundary safety and content preservation
+
+JSON string serialization *is* the boundary mechanism, which is why no raw
+delimiter protocol is used: arbitrary source content can contain any delimiter,
+but it cannot manufacture a second JSONL record, because newlines, quotes, and
+backslashes inside a JSON string are escaped (INV-RENDER-002, INV-RENDER-003).
+
+Rendering is serialization, not rewriting. For every rendered line,
+`JSON.parse(line).content` equals the canonical block content exactly: no
+trimming, no Unicode normalization, no line-ending normalization, no truncation,
+no summarization, and nothing escaped back into the block (INV-RENDER-005,
+DEC-014). Escape sequences in the serialized string are representation, not
+mutation.
+
+Record order is exactly `orderedIncluded`. The renderer does not sort, group, or
+consult source location, score, required status, or `optionalEvictionOrder`:
+`ContextOrderer` owns order and array position is authoritative (INV-RENDER-001).
+
+#### Exact measurement, not correction
+
+`renderedTokens` is `tokenizer.countTokens(renderedContext)` over the one
+complete string — never a sum of block counts, record counts, or separator
+counts, and never a character estimate (INV-BUDGET-002, INV-RENDER-004). The
+count is validated as a non-negative safe integer before publication, and a
+tokenizer that throws or returns an unusable value produces a structured
+`CONTEXT_RENDERING_FAILED` with `tokenizer_failed` or
+`invalid_rendered_token_count`, never a partial attempt (INV-ADAPTER-003).
+
+`renderedTokenDelta` is `renderedTokens - selectedBlockContentTokens`, a
+**signed** value that may be negative, zero, or positive. Tokenization is not
+additive, so it is a diagnostic delta and not an additive attribution of wrapper,
+separator, or label tokens (METRICS 8.6).
+
+`fitsAvailableInputBudget` is `renderedTokens <= availableInputTokens`, and it is
+observational. `false` is a successful measurement of an over-budget attempt: the
+renderer does not evict an optional block, drop a required one, replace a
+category-minimum choice, re-run allocation or ordering, or raise
+`REQUIRED_CONTENT_EXCEEDS_BUDGET`. That is the correction loop's work
+(section 7.2).
+
+The result publishes `rendererId` / `rendererVersion` (`ctxalloc-jsonl`, `1`) and
+the `tokenizerId` / `tokenizerVersion` that produced the count, so a future trace
+can record exactly what measured what (INV-TRACE-005). No stage contract carries a
+tokenizer identity from 6.1 through to here, so composing the stages with one
+configured tokenizer is a requirement on the future composition root, not a
+property this stage can verify (DEC-035).
 
 ### 6.7 TraceBuilder
 
@@ -1208,21 +1322,31 @@ precomputes `optionalEvictionOrder`, a deterministic sequence of optional block
 identifiers whose removal preserves every required block and every category
 minimum.
 
-### 7.2 What still requires the renderer
+**Exact rendered measurement now exists.** `ContextRenderer` (section 6.6)
+serializes the ordered selection and tokenizes the complete rendered string, so
+the rendering tokens of source labels, heading paths, JSON escaping, separators,
+and record structure are all measured — they are part of the one string that is
+counted. `renderedTokens` is a real measurement of what a model would receive for
+that selection.
 
-`ContextRenderer` and the orchestration loop remain future work, so the rendering
-tokens of source labels, headings, separators, wrappers, emitted metadata, and
-fixed prefixes and suffixes are not measured yet. Until that loop exists:
+### 7.2 What still requires the correction loop
 
-1. no component may claim a final hard-budget success under INV-BUDGET-001;
-2. INV-BUDGET-002 is not satisfied by any implemented stage, because no rendered
-   string is tokenized;
-3. INV-BUDGET-006 has no implemented producer, because `compiledTokens` does not
-   exist yet.
+Measuring an attempt is not settling a compilation. The orchestration loop remains
+future work, so until it exists:
+
+1. no component may claim a final hard-budget success under INV-BUDGET-001: an
+   over-budget `RenderedContextAttempt` is a valid measurement, not a success;
+2. INV-BUDGET-002 is materially advanced but not discharged — a complete rendered
+   string is now tokenized, yet nothing consumes that result to accept or reject a
+   compilation;
+3. INV-BUDGET-003 and INV-BUDGET-004 still require the future correction and
+   failure behavior for rendered required content;
+4. INV-BUDGET-006 has no implemented producer, because final `compiledTokens` and
+   `unusedTokens` do not exist yet.
 
 The future loop will render the selected blocks, tokenize the complete rendered
 string, consume a prefix of `optionalEvictionOrder` while the result overruns, and
-render and tokenize again.
+re-order, render, and tokenize again.
 
 Exhausting that order is not by itself a licence to fail. It is a safe removal
 order for the current selection, not a feasibility proof (section 6.4): when

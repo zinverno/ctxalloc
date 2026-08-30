@@ -2413,6 +2413,200 @@ Phases 7 through 10 are unchanged in behavior. No metric is added: an ordering s
 
 ---
 
+## DEC-035: Render Ordered Context as Boundary-Safe JSONL and Measure the Exact String
+
+### Status
+
+Accepted
+
+### Decision
+
+Deterministic context rendering is the sixth stage of the compiler kernel. It lives in `@ctxalloc/compiler` as `ContextRenderer`, one synchronous, pure, offline class that turns an `OrderedCandidateSet`, one narrow versioned `ContextRenderingPolicy`, and one project-owned `Tokenizer` into a `RenderedContextAttempt`.
+
+Its only injected dependencies are the policy and the tokenizer port. It reads no file, opens no socket, queries no database, calls no model, calls no retrieval provider, reads no clock, and generates no random value (INV-DET-001, INV-DET-003, INV-DET-004, INV-DEP-002). It constructs no tokenizer implementation of its own and imports none: `@ctxalloc/tokenization` is not a compiler dependency (INV-ADAPTER-001).
+
+It does not include, exclude, evict, or replace a candidate, re-run allocation or ordering, score, deduplicate, filter, or build a trace.
+
+### A Render Attempt Is Not a Successful Compilation
+
+This is the decision's central boundary.
+
+`ContextRenderer` measures the rendered cost of the **current** selection. That measurement may exceed the budget:
+
+```text id="r1atmp"
+renderedTokens > availableInputTokens
+```
+
+That is not a renderer error. The result reports it as `fitsAvailableInputBudget: false` and returns normally.
+
+Owning correction here was rejected. The loop that consumes safe optional eviction candidates, re-orders the revised selection, renders again, reconsiders protected category-minimum choices against actual rendered cost, proves final infeasibility, and returns a success or a structured failure is a different responsibility with a different failure model, and INV-DEP-003 forbids two components owning one responsibility. So the renderer never evicts an optional block, never drops a required block, never replaces a category-minimum choice, never calls `BudgetAllocator` or `ContextOrderer`, never raises `REQUIRED_CONTENT_EXCEEDS_BUDGET`, and never fails merely because this attempt is too large.
+
+For the same reason the result is not a `CompilationResult` and its names say so. `renderedTokens` is not `compiledTokens`, and `renderedTokenDelta` is not `renderingTokenDelta` (METRICS 8.4, 8.6). No `unusedTokens`, `tokenReduction`, or `budgetUtilization` appears, because each is defined against a `compiledTokens` that only a settled selection has.
+
+### The Non-Negative Rendering Overhead Metric Was Wrong
+
+METRICS 8.6 previously defined:
+
+```text id="r2ovhd"
+renderingOverheadTokens
+  = compiledTokens - includedContentTokens
+```
+
+and required the value to be non-negative. That requirement is withdrawn.
+
+The `Tokenizer` port promises exactly one thing: the exact count of one supplied string. It does not promise additivity:
+
+```text id="r3addv"
+tokenizer(a + b)
+  is not necessarily
+tokenizer(a) + tokenizer(b)
+```
+
+A subword vocabulary can merge or split differently once content is embedded in a larger string, so the difference between the compiled total and the sum of individual block counts can move in either direction. Nothing in the port, and nothing in a general tokenizer, makes that difference a count of "static overhead".
+
+Forcing the implementation to satisfy the old rule would have meant clamping a real measurement, reporting a value the tokenizer did not produce, or attributing token counts to labels and separators that cannot be attributed. All three break INV-BUDGET-002 in spirit: they publish arithmetic instead of measurement.
+
+The metric is therefore renamed and redefined as a signed `renderingTokenDelta`, and this stage publishes the same quantity for one attempt as `renderedTokenDelta`:
+
+```text id="r4dlta"
+renderedTokenDelta
+  = renderedTokens - selectedBlockContentTokens
+```
+
+It may be negative, zero, or positive; `-0` is canonicalized to `0`; it is never clamped; and a negative value is a valid successful result, not an error. It is diagnostic only and must not be read as an additive attribution of wrapper, separator, source-label, or heading tokens. No exact token count is attributed separately to any part of the rendered string.
+
+All rendering text is nevertheless inside `renderedContext`, and `renderedContext` is what gets tokenized, which is exactly what INV-RENDER-004 requires. The only budget source of truth remains `tokenizer(finalRenderedContext)`.
+
+### A Narrow Versioned Rendering Policy
+
+As in DEC-032, DEC-033, and DEC-034, the broad future `CompilationPolicy` of ARCHITECTURE 5.6 is not built here. Only the rendering slice exists:
+
+```ts
+interface ContextRenderingPolicy {
+  readonly schemaVersion: 1;
+  readonly policyId: string;
+  readonly policyVersion: string;
+  readonly format: 'jsonl-blocks';
+}
+```
+
+`format` names the wire shape explicitly, so a second format arrives as a policy value under a new schema version rather than as a silent change of what this one means.
+
+Policy validation is strict and is a runtime boundary: the object is closed, unknown fields are rejected rather than stripped, nothing is coerced, no default is injected, exact strings are preserved, `policyId` and `policyVersion` must be non-blank, and malformed UTF-16 is rejected with the shared domain helper (INV-BLOCK-007).
+
+### The v1 Format: JSON Lines
+
+One canonical JSON object per included block, joined by exactly one LF (`\n`). No prefix, no suffix, no enclosing array brackets, no trailing newline, and no blank separator line.
+
+The consequences are the point: one physical line is exactly one block, the fixed overhead is minimal, there is no wrapper around the stream, and an empty selection renders as the exact empty string rather than as `[]` or a stray newline.
+
+Each record carries exactly these fields:
+
+```text id="r5recs"
+blockId              canonicalBlock.id
+content              canonicalBlock.content
+headingPath          only when the canonical block carries it
+sourceDocumentId     canonicalBlock.sourceDocumentId
+sourceType           canonicalBlock.sourceType
+```
+
+Key order comes from the existing compiler-internal canonical serializer, so object property insertion order cannot change the output (INV-DET-002).
+
+Score, retrieval data, allocation reason, required status, category, priority, timestamps, arbitrary block metadata, arbitrary `SourceDocument.metadata`, source title, `tokenCount`, `normalizedContentHash`, and policy internals are excluded. They are compiler control and provenance data, not model context: they spend budget, they invite a model to reason about the compiler's own decisions rather than about the content, and arbitrary source metadata is untrusted text that has no business in a prompt without a stated purpose (INV-SEC-001).
+
+### sourceDocumentId Is the v1 Source Label
+
+Every rendered block visibly names its source (INV-RENDER-003), and in v1 that name is `sourceDocumentId`.
+
+It already exists on every trusted canonical block, it is stable project-owned identity (DEC-028), it needs no registry lookup during rendering, and it cannot drift from an optional title. `SourceDocument.title` was rejected for v1: it is optional, it is human-authored, and a label that sometimes exists is not a stable label. A human-readable title is a future rendering-policy version.
+
+### JSON Escaping Is the Boundary Mechanism
+
+A raw delimiter protocol was rejected outright:
+
+```text id="r6delm"
+--- block ---
+<content>
+--- end ---
+```
+
+Arbitrary source content can contain any delimiter, so such a format lets content forge a block boundary. The mitigation would be an escaping scheme, and inventing one is strictly worse than using the one that already exists.
+
+Because `content`, `headingPath` entries, and every identifier are encoded as JSON strings, embedded newlines, quotes, and backslashes are escaped. Source content therefore cannot manufacture another top-level JSONL record, and metadata or heading text cannot break the format (INV-RENDER-002). The physical record count always equals the included block count.
+
+### Rendering Is Serialization, Not Rewriting
+
+The canonical `ContextBlock.content` is unchanged in the domain object, and for every rendered line:
+
+```text id="r7trip"
+JSON.parse(line).content === canonicalBlock.content
+```
+
+exactly. No trimming, no Unicode normalization, no line-ending normalization, no truncation, no summarization, and nothing escaped written back into the block (DEC-014, INV-PROV-004, INV-RENDER-005). Escape sequences inside the serialized string are representation, not mutation of source content. CRLF, tabs, quotes, backslashes, Markdown, fenced code, text resembling a JSON object, text resembling a forged block boundary, supplementary Unicode, and emoji all survive byte for byte.
+
+`headingPath` is emitted exactly as carried: absent omits the key, an explicitly empty array is preserved as `[]`, and values are escaped like any other string. Nothing is synthesized from content or source location, and the path is not turned into Markdown heading text in v1.
+
+### The Renderer Obeys the Order It Is Given
+
+Records follow `OrderedCandidateSet.orderedIncluded` exactly. The renderer does not sort, group, or consult source location, score, required status, or `optionalEvictionOrder`. `ContextOrderer` owns render order (DEC-034), and array position is authoritative here (INV-RENDER-001).
+
+Every ordered included decision is rendered exactly once, no excluded decision is rendered, no block is added, cloned, or mutated, and the `OrderedCandidateSet` is carried in the result by reference (INV-ALLOC-002, INV-ALLOC-004, INV-TRACE-001).
+
+### Exact Full-String Measurement
+
+After the complete `renderedContext` is constructed, `tokenizer.countTokens(renderedContext)` is called on exactly that string, exactly once per `render()`.
+
+The count is never derived by summing block `tokenCount`, summing per-record counts, summing separator counts, estimating JSON escaping, counting characters, or reusing `selectedBlockContentTokens`. The full string is the source of truth (INV-BUDGET-002), and it is what includes every source label, heading path, separator, and escape sequence (INV-RENDER-004).
+
+The returned value is validated before publication: it must be a finite, non-negative, safe integer (INV-BUDGET-005). A tokenizer that throws produces `CONTEXT_RENDERING_FAILED` with `tokenizer_failed`; an unusable count produces `invalid_rendered_token_count`. Neither returns a partial attempt, and neither leaks the provider object or a library exception — a thrown value is described by name and message only (INV-ADAPTER-003, INV-SEC-001).
+
+The tokenizer itself is checked once at construction: it must be a non-null object with a non-blank `id`, a non-blank `version`, and a callable `countTokens`. Identity strings are preserved exactly and never trimmed, because a trace records them verbatim (INV-TRACE-005).
+
+The failure surface is therefore `CONTEXT_RENDERING_FAILED` with `invalid_policy`, `invalid_tokenizer`, `tokenizer_failed`, or `invalid_rendered_token_count`.
+
+### Budget Observation Only
+
+```text id="r8fits"
+fitsAvailableInputBudget
+  = renderedTokens <= allocation.availableInputTokens
+```
+
+No new reserve is subtracted, no model context window is guessed, and the `TokenBudget` is not modified. A `false` value is a successful measurement.
+
+### Cross-Stage Tokenizer Identity Is a Composition Requirement
+
+Counts from different tokenizers are not comparable, and no stage contract from `ValidatedCandidateSet` through `OrderedCandidateSet` carries a tokenizer identity. Redesigning Phases 7 through 11 to add one was rejected: it would change five published stage types to serve a constraint that only the composition root can actually enforce.
+
+The requirement is recorded here instead. **The future `ContextCompiler` composition root must use one configured tokenizer identity and version consistently for `CandidateValidator` block-count validation and for `ContextRenderer` final-string measurement.** A standalone caller that manually composes the stages with different tokenizers is not a valid final compilation.
+
+Phase 12 exposes `tokenizerId` and `tokenizerVersion` on every attempt so the future trace and orchestration can record and enforce that identity. It does not, and cannot, prove cross-stage identity on its own.
+
+### Renderer Identity
+
+The result always exposes `rendererId` (`ctxalloc-jsonl`) and `rendererVersion` (`1`). They are project-owned constants: never derived from package manager state, git, the clock, or an environment variable, all of which would make a recorded identity depend on where the code happened to run (INV-DET-003, INV-DET-004, INV-TRACE-005).
+
+### No Final Hard-Budget Guarantee Yet
+
+This phase materially advances INV-BUDGET-002: for the first time an actual complete rendered string is tokenized. It does not discharge the final compiler invariants.
+
+* INV-BUDGET-001 is not satisfied by an over-budget `RenderedContextAttempt`;
+* INV-BUDGET-003 and INV-BUDGET-004 still require the future correction and failure behavior for rendered required content;
+* INV-BUDGET-006 still has no producer, because final `unusedTokens` does not exist.
+
+Phase 12 supplies the exact measurement primitive. The later orchestration phase will use it until the rendered selection fits or final infeasibility is proven. **"Hard budget guarantee complete" is not a true statement after Phase 12.**
+
+### Consequences
+
+`@ctxalloc/compiler` gains a sixth published stage and no new dependency: `ContextRenderer` needs only `@ctxalloc/domain` types, the `Tokenizer` port, the existing validation library, the Phase 10 and 11 stage types, and two compiler-internal helpers. The boundary allowlist is unchanged.
+
+Phases 7 through 11 are unchanged in behavior.
+
+METRICS changes: 8.6 is renamed and redefined as a signed `renderingTokenDelta`, 8.4.1 loses its stale cross-reference, and a new 8.4.2 defines the render-attempt metrics.
+
+`CandidateFilter`, the broad `CompilationPolicy`, `CompilationRequest`, render-aware correction and reallocation, `TraceBuilder`, `CompilationTrace`, `CompilationResult`, `ContextCompiler`, retrieval, persistence, the CLI, the HTTP API, and the evaluation harness remain later phases.
+
+---
+
 # 4. Rejected Decisions
 
 ## REJ-001: Build a Full AI Operating System
@@ -2881,21 +3075,23 @@ The kernel should remain synchronous unless a concrete requirement proves otherw
 
 ## OPEN-004: How Should Rendering Represent Sources?
 
-Candidate formats include:
+Answered for rendering-policy schema version 1 by DEC-035: JSON Lines, one canonical JSON object per block, with `sourceDocumentId` as the source label.
+
+The question remains open beyond v1. The v1 choice was made for boundary safety, determinism, and stable provenance, not on measured model comprehension. Remaining candidate formats include:
 
 * Markdown sections;
 * XML-like block wrappers;
-* compact JSON;
-* plain text separators.
+* plain text separators;
+* JSONL with human-readable source titles.
 
-The selected format must balance:
+A second format must still balance:
 
 * token overhead;
 * model comprehension;
 * safe escaping;
 * provenance readability.
 
-The choice requires token and answer-quality evaluation.
+Choosing one requires token and answer-quality evaluation, and it arrives as a new `format` value under a new rendering-policy schema version.
 
 ## OPEN-005: Should Near-Duplicate Detection Enter the MVP?
 
