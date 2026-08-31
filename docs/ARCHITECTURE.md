@@ -1746,6 +1746,15 @@ decides exactly the eligible candidates and nothing filtered; that `orderedInclu
 holds exactly the included decisions; and that the rendered budget observation
 matches the rendered count.
 
+Each stage is also compared to the one **before** it across every field its
+contract carries forward — scope, the source registry, the scoring policy
+identity and version, and the reference time — because drift changed on two
+stages at once is internally consistent and still wrong. The allocator's
+published accounting must not contradict itself either: each decision's
+`contentTokens` is its canonical block's own count, the selected sum is the sum
+of the inclusions, each inclusion's transition spends exactly its own cost, and
+the remainder is the request budget's `availableInputTokens` minus that sum.
+
 Comparison is structural, through the project-owned canonical serialization and
 multiset equality, rather than by object identity: identity is not part of the
 persisted meaning of a trace, and requiring it would reject a caller who

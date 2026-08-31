@@ -1,4 +1,5 @@
 import {
+  availableInputTokens,
   findLoneSurrogate,
   safeParse,
   type ContentHash,
@@ -800,6 +801,23 @@ function checkRequestEvidence(evidence: Evidence): ValidationIssue[] {
         'must equal the token budget of the traced compilation request',
       ),
     );
+  } else {
+    // The ceiling the allocator spent against is arithmetic over the request's
+    // own validated budget: total minus the explicitly configured reserves, and
+    // nothing else. This subtracts no hidden reserve and re-allocates nothing —
+    // it is the same domain helper the allocator itself used (METRICS 8.3,
+    // INV-BUDGET-001). It runs only once the budgets are known equal, so a
+    // budget mismatch reports one cause rather than two.
+    const available = availableInputTokens(request.budget);
+    if (allocation.availableInputTokens !== available) {
+      issues.push(
+        issue(
+          REQUEST,
+          ['rendered', 'ordered', 'allocation', 'availableInputTokens'],
+          `must equal the available input tokens of the request budget (${String(available)}), received ${String(allocation.availableInputTokens)}`,
+        ),
+      );
+    }
   }
   issues.push(
     ...checkIdentity(
@@ -833,6 +851,64 @@ function checkIdentity(
       `must have run under the request's ${label} ${quote(expected.id)} version ${quote(expected.version)}, received ${quote(actual.id)} version ${quote(actual.version)}`,
     ),
   ];
+}
+
+/**
+ * One envelope field a stage contract carries forward unchanged.
+ *
+ * `structural` compares canonical serializations, for the scope record and the
+ * source registry; the rest are exact string equality over identities and
+ * timestamps.
+ */
+interface EnvelopeField {
+  readonly name: string;
+  readonly actual: unknown;
+  readonly expected: unknown;
+  readonly structural?: boolean;
+}
+
+/**
+ * Proves a stage carried its predecessor's envelope forward unchanged.
+ *
+ * Every stage from `CandidateScorer` onward copies scope, the source registry,
+ * and the identities it was given, changing only the candidates. A field that
+ * differs therefore means the two results did not come from one pipeline, and
+ * serializing them together would publish a trace describing a run that never
+ * happened.
+ *
+ * The two-sided case is why this matters. A caller who changed a policy version
+ * on the filtered set *and* on the allocation would satisfy every check that
+ * compares those two to each other; only comparing each stage to the one before
+ * it catches drift that is internally consistent but wrong (DEC-037).
+ *
+ * Fields are checked in the fixed order given, so the issue set never depends on
+ * property iteration order (INV-DET-002).
+ */
+function checkEnvelope(
+  path: IssuePath,
+  predecessor: string,
+  fields: readonly EnvelopeField[],
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const field of fields) {
+    const equal =
+      field.structural === true
+        ? structurallyEqual(field.actual, field.expected)
+        : field.actual === field.expected;
+    if (equal) continue;
+    issues.push(
+      issue(
+        STAGE,
+        [...path, field.name],
+        `must equal the ${field.name} the ${predecessor} carries${
+          typeof field.expected === 'string' && typeof field.actual === 'string'
+            ? ` (${quote(field.expected)}), received ${quote(field.actual)}`
+            : ''
+        }`,
+      ),
+    );
+  }
+  return issues;
 }
 
 /**
@@ -938,6 +1014,23 @@ function checkStageEvidence(evidence: Evidence): ValidationIssue[] {
     }
   });
 
+  issues.push(
+    ...checkEnvelope(['filtered', 'scored'], 'deduplicated set', [
+      {
+        name: 'scope',
+        actual: filtered.scored.scope,
+        expected: deduplicated.scope,
+        structural: true,
+      },
+      {
+        name: 'sourceDocuments',
+        actual: filtered.scored.sourceDocuments,
+        expected: deduplicated.sourceDocuments,
+        structural: true,
+      },
+    ]),
+  );
+
   /* Scoring -> filtering. */
   const scoredIds = scored.map(canonicalIdOf);
   const scoredByCanonicalId = new Map<string, ScoredCandidate>();
@@ -980,6 +1073,36 @@ function checkStageEvidence(evidence: Evidence): ValidationIssue[] {
     );
   }
 
+  // `CandidateFilter` publishes the scored envelope unchanged and narrows only
+  // `candidates` (DEC-036), so every other field must still be the scorer's.
+  issues.push(
+    ...checkEnvelope(['filtered', 'eligible'], 'scored set', [
+      {
+        name: 'scope',
+        actual: filtered.eligible.scope,
+        expected: filtered.scored.scope,
+        structural: true,
+      },
+      {
+        name: 'sourceDocuments',
+        actual: filtered.eligible.sourceDocuments,
+        expected: filtered.scored.sourceDocuments,
+        structural: true,
+      },
+      { name: 'policyId', actual: filtered.eligible.policyId, expected: filtered.scored.policyId },
+      {
+        name: 'policyVersion',
+        actual: filtered.eligible.policyVersion,
+        expected: filtered.scored.policyVersion,
+      },
+      {
+        name: 'referenceTime',
+        actual: filtered.eligible.referenceTime,
+        expected: filtered.scored.referenceTime,
+      },
+    ]),
+  );
+
   /* Filtering -> allocation. */
   const allocationDecisions: readonly (IncludedCandidateDecision | ExcludedCandidateDecision)[] = [
     ...allocation.included,
@@ -1020,24 +1143,40 @@ function checkStageEvidence(evidence: Evidence): ValidationIssue[] {
     );
   });
 
-  if (allocation.scoringPolicyId !== filtered.eligible.policyId) {
-    issues.push(
-      issue(
-        STAGE,
-        ['rendered', 'ordered', 'allocation', 'scoringPolicyId'],
-        `must equal the scoring policy the eligible set carries (${quote(filtered.eligible.policyId)}), received ${quote(allocation.scoringPolicyId)}`,
-      ),
-    );
-  }
-  if (allocation.referenceTime !== filtered.eligible.referenceTime) {
-    issues.push(
-      issue(
-        STAGE,
-        ['rendered', 'ordered', 'allocation', 'referenceTime'],
-        'must equal the reference time the eligible set carries',
-      ),
-    );
-  }
+  // `BudgetAllocator` carries the eligible envelope forward and adds its own
+  // allocation identity, so everything it inherited must still match (DEC-033).
+  issues.push(
+    ...checkEnvelope(['rendered', 'ordered', 'allocation'], 'eligible set', [
+      {
+        name: 'scope',
+        actual: allocation.scope,
+        expected: filtered.eligible.scope,
+        structural: true,
+      },
+      {
+        name: 'sourceDocuments',
+        actual: allocation.sourceDocuments,
+        expected: filtered.eligible.sourceDocuments,
+        structural: true,
+      },
+      {
+        name: 'scoringPolicyId',
+        actual: allocation.scoringPolicyId,
+        expected: filtered.eligible.policyId,
+      },
+      {
+        name: 'scoringPolicyVersion',
+        actual: allocation.scoringPolicyVersion,
+        expected: filtered.eligible.policyVersion,
+      },
+      {
+        name: 'referenceTime',
+        actual: allocation.referenceTime,
+        expected: filtered.eligible.referenceTime,
+      },
+    ]),
+    ...checkAllocationAccounting(allocation),
+  );
 
   /* Allocation -> ordering. */
   const includedIds = allocation.included.map((decision) => canonicalIdOf(decision.candidate));
@@ -1107,6 +1246,109 @@ function checkScoredCandidate(
   }
   if (structurallyEqual(candidate, expected)) return [];
   return [issue(STAGE, path, `differs from the scored candidate ${quote(id)}`)];
+}
+
+/**
+ * Proves the allocator's published accounting does not contradict itself.
+ *
+ * The trace persists the allocation summary *and* the content totals, so it must
+ * not serialize an allocator that says one thing in its decisions and another in
+ * its totals. A reader reconciling `selectedBlockContentTokens` against the
+ * included blocks would otherwise find a discrepancy the record gives no way to
+ * explain.
+ *
+ * Every comparison uses values the allocator already published. Nothing here
+ * re-runs allocation, re-counts a token, calls a tokenizer, or re-evaluates a
+ * category rule: it checks that `contentTokens` is the canonical block's own
+ * count, that the selected sum is the sum of the inclusions, that the remainder
+ * is the budget minus that sum, and that each inclusion's budget transition
+ * spends exactly its own cost (DEC-033, INV-TRACE-006).
+ */
+function checkAllocationAccounting(allocation: AllocatedCandidateSet): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const at = (...rest: readonly (string | number)[]): IssuePath => [
+    'rendered',
+    'ordered',
+    'allocation',
+    ...rest,
+  ];
+
+  const checkCost = (
+    decision: IncludedCandidateDecision | ExcludedCandidateDecision,
+    path: IssuePath,
+  ): void => {
+    const expected = decision.candidate.candidate.canonicalBlock.tokenCount;
+    if (decision.contentTokens !== expected) {
+      issues.push(
+        issue(
+          STAGE,
+          [...path, 'contentTokens'],
+          `must equal the canonical block's own token count (${String(expected)}), received ${String(decision.contentTokens)}`,
+        ),
+      );
+    }
+  };
+
+  allocation.included.forEach((decision, index) => {
+    checkCost(decision, at('included', index));
+    // The transition spends exactly this block's cost and nothing else.
+    if (decision.remainingBefore - decision.contentTokens !== decision.remainingAfter) {
+      issues.push(
+        issue(
+          STAGE,
+          at('included', index, 'remainingAfter'),
+          `must equal remainingBefore minus contentTokens (${String(decision.remainingBefore)} - ${String(decision.contentTokens)}), received ${String(decision.remainingAfter)}`,
+        ),
+      );
+    }
+  });
+  allocation.excluded.forEach((decision, index) => {
+    checkCost(decision, at('excluded', index));
+  });
+
+  const selected = safeSum(allocation.included.map((decision) => decision.contentTokens));
+  if (selected === undefined) {
+    issues.push(
+      issue(
+        'invalid_trace_result',
+        at('selectedBlockContentTokens'),
+        'the included content cost leaves the exact non-negative safe integer range',
+      ),
+    );
+    return issues;
+  }
+  if (allocation.selectedBlockContentTokens !== selected) {
+    issues.push(
+      issue(
+        STAGE,
+        at('selectedBlockContentTokens'),
+        `must equal the sum of its included decisions' contentTokens (${String(selected)}), received ${String(allocation.selectedBlockContentTokens)}`,
+      ),
+    );
+  }
+
+  const unallocated = safeDifference(allocation.availableInputTokens, selected);
+  if (unallocated === undefined) {
+    issues.push(
+      issue(
+        'invalid_trace_result',
+        at('unallocatedBlockContentTokens'),
+        'the unallocated remainder leaves the exact non-negative safe integer range',
+      ),
+    );
+    return issues;
+  }
+  if (allocation.unallocatedBlockContentTokens !== unallocated) {
+    issues.push(
+      issue(
+        STAGE,
+        at('unallocatedBlockContentTokens'),
+        `must equal availableInputTokens minus selectedBlockContentTokens (${String(unallocated)}), received ${String(allocation.unallocatedBlockContentTokens)}`,
+      ),
+    );
+  }
+
+  return issues;
 }
 
 /* -------------------------------------------------------------------------- */

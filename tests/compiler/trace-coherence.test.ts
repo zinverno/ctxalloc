@@ -11,6 +11,7 @@ import {
   issuePointersOf,
   issuesOf,
   runPipeline,
+  sourceDocument,
   tracePolicy,
   withAllocation,
   withOrdered,
@@ -407,6 +408,346 @@ describe('the traced evidence must describe one pipeline', () => {
     expectRejected(
       { ...base.input, deduplicated: { ...base.deduplicated, sourceDocuments: [] } },
       { code: 'inconsistent_stage_evidence', pointer: 'deduplicated.sourceDocuments' },
+    );
+  });
+});
+
+describe("DEC-037: every stage envelope must be its predecessor's", () => {
+  const OTHER_SCOPE = { tenantId: 'other-tenant', workspaceId: 'other-workspace' };
+
+  /**
+   * A structurally valid registry that belongs to no traced run.
+   *
+   * `sourceDocument` produces a well-formed record, so these mutations are not
+   * caught by shape validation — only by comparing each stage to the one before.
+   */
+  function ghostRegistry(): ReturnType<typeof runPipeline>['validated']['sourceDocuments'] {
+    return runPipeline({
+      specs: [{ id: 'ghost', tokens: 2, sourceDocumentId: 'ghost-doc' }],
+      sourceDocuments: [sourceDocument({ id: 'ghost-doc' })],
+      policy: THRESHOLD_POLICY,
+      available: 100,
+    }).validated.sourceDocuments;
+  }
+
+  it('rejects a scored set whose scope is not the deduplicated scope', () => {
+    const base = run();
+    expectRejected(
+      {
+        ...base.input,
+        filtered: { ...base.filtered, scored: { ...base.scored, scope: OTHER_SCOPE } },
+      },
+      { code: 'inconsistent_stage_evidence', pointer: 'filtered.scored.scope' },
+    );
+  });
+
+  it('rejects a scored set whose registry is not the deduplicated registry', () => {
+    const base = run();
+    expectRejected(
+      {
+        ...base.input,
+        filtered: {
+          ...base.filtered,
+          scored: { ...base.scored, sourceDocuments: ghostRegistry() },
+        },
+      },
+      { code: 'inconsistent_stage_evidence', pointer: 'filtered.scored.sourceDocuments' },
+    );
+  });
+
+  it.each([
+    ['scope', { scope: OTHER_SCOPE }, 'filtered.eligible.scope'],
+    ['policyId', { policyId: 'other-scoring' }, 'filtered.eligible.policyId'],
+    ['policyVersion', { policyVersion: 'scoring-v2' }, 'filtered.eligible.policyVersion'],
+  ])("rejects an eligible set whose %s is not the scored set's", (_label, patch, pointer) => {
+    const base = run();
+    expectRejected(
+      {
+        ...base.input,
+        filtered: { ...base.filtered, eligible: { ...base.filtered.eligible, ...patch } },
+      },
+      { code: 'inconsistent_stage_evidence', pointer },
+    );
+  });
+
+  it("rejects an eligible set whose registry is not the scored set's", () => {
+    const base = run();
+    expectRejected(
+      {
+        ...base.input,
+        filtered: {
+          ...base.filtered,
+          eligible: { ...base.filtered.eligible, sourceDocuments: ghostRegistry() },
+        },
+      },
+      { code: 'inconsistent_stage_evidence', pointer: 'filtered.eligible.sourceDocuments' },
+    );
+  });
+
+  it("rejects an eligible set whose reference time is not the scored set's", () => {
+    const base = run();
+    const otherTime = runPipeline({
+      specs: SPECS,
+      policy: THRESHOLD_POLICY,
+      available: 10,
+      referenceTime: '2020-01-01T00:00:00.000Z',
+    });
+    expectRejected(
+      {
+        ...base.input,
+        filtered: {
+          ...base.filtered,
+          eligible: {
+            ...base.filtered.eligible,
+            referenceTime: otherTime.filtered.eligible.referenceTime,
+          },
+        },
+      },
+      { code: 'inconsistent_stage_evidence', pointer: 'filtered.eligible.referenceTime' },
+    );
+  });
+
+  it.each([
+    ['scope', { scope: OTHER_SCOPE }, 'scope'],
+    ['scoringPolicyId', { scoringPolicyId: 'other-scoring' }, 'scoringPolicyId'],
+    ['scoringPolicyVersion', { scoringPolicyVersion: 'scoring-v2' }, 'scoringPolicyVersion'],
+  ])("rejects an allocation whose %s is not the eligible set's", (_label, patch, field) => {
+    const base = run();
+    expectRejected(
+      { ...base.input, rendered: withAllocation(base.rendered, patch) },
+      {
+        code: 'inconsistent_stage_evidence',
+        pointer: `rendered.ordered.allocation.${field}`,
+      },
+    );
+  });
+
+  it("rejects an allocation whose registry is not the eligible set's", () => {
+    const base = run();
+    expectRejected(
+      {
+        ...base.input,
+        rendered: withAllocation(base.rendered, { sourceDocuments: ghostRegistry() }),
+      },
+      {
+        code: 'inconsistent_stage_evidence',
+        pointer: 'rendered.ordered.allocation.sourceDocuments',
+      },
+    );
+  });
+
+  it("rejects an allocation whose reference time is not the eligible set's", () => {
+    const base = run();
+    const otherTime = runPipeline({
+      specs: SPECS,
+      policy: THRESHOLD_POLICY,
+      available: 10,
+      referenceTime: '2020-01-01T00:00:00.000Z',
+    });
+    expectRejected(
+      {
+        ...base.input,
+        rendered: withAllocation(base.rendered, {
+          referenceTime: otherTime.allocated.referenceTime,
+        }),
+      },
+      {
+        code: 'inconsistent_stage_evidence',
+        pointer: 'rendered.ordered.allocation.referenceTime',
+      },
+    );
+  });
+});
+
+/**
+ * Two-sided drift: the mutation is internally consistent between the two stages
+ * that carry the field, and wrong.
+ *
+ * These are the cases a check comparing only the filtered set to the allocation
+ * would miss. Each stage is compared to the one **before** it, so the drift is
+ * caught at the boundary where it first appears.
+ */
+describe('DEC-037: internally consistent drift is still rejected', () => {
+  const OTHER_SCOPE = { tenantId: 'other-tenant', workspaceId: 'other-workspace' };
+
+  it('rejects a scoring policy version changed on both the eligible set and the allocation', () => {
+    const base = run();
+    // Before this check existed, the trace recorded composition.policy.scoring
+    // from `filtered.scored` — still the request's version — while accepting an
+    // allocation object claiming it consumed another one.
+    expectRejected(
+      {
+        ...base.input,
+        filtered: {
+          ...base.filtered,
+          eligible: { ...base.filtered.eligible, policyVersion: 'scoring-v2' },
+        },
+        rendered: withAllocation(base.rendered, { scoringPolicyVersion: 'scoring-v2' }),
+      },
+      { code: 'inconsistent_stage_evidence', pointer: 'filtered.eligible.policyVersion' },
+    );
+  });
+
+  it('rejects a scope changed on both the eligible set and the allocation', () => {
+    const base = run();
+    expectRejected(
+      {
+        ...base.input,
+        filtered: {
+          ...base.filtered,
+          eligible: { ...base.filtered.eligible, scope: OTHER_SCOPE },
+        },
+        rendered: withAllocation(base.rendered, { scope: OTHER_SCOPE }),
+      },
+      { code: 'inconsistent_stage_evidence', pointer: 'filtered.eligible.scope' },
+    );
+  });
+
+  it('rejects a registry changed on both the eligible set and the allocation', () => {
+    const base = run();
+    const ghost = runPipeline({
+      specs: [{ id: 'ghost', tokens: 2, sourceDocumentId: 'ghost-doc' }],
+      sourceDocuments: [sourceDocument({ id: 'ghost-doc' })],
+      policy: THRESHOLD_POLICY,
+      available: 100,
+    }).validated.sourceDocuments;
+
+    expectRejected(
+      {
+        ...base.input,
+        filtered: {
+          ...base.filtered,
+          eligible: { ...base.filtered.eligible, sourceDocuments: ghost },
+        },
+        rendered: withAllocation(base.rendered, { sourceDocuments: ghost }),
+      },
+      { code: 'inconsistent_stage_evidence', pointer: 'filtered.eligible.sourceDocuments' },
+    );
+  });
+});
+
+describe("DEC-037: the allocator's published accounting must not contradict itself", () => {
+  it('rejects an included decision whose cost is not its canonical block count', () => {
+    const base = run();
+    const [first, ...rest] = base.allocated.included;
+    if (first === undefined) throw new Error('expected an included decision');
+
+    expectRejected(
+      {
+        ...base.input,
+        rendered: withAllocation(base.rendered, {
+          included: [{ ...first, contentTokens: first.contentTokens + 1 }, ...rest],
+        }),
+      },
+      {
+        code: 'inconsistent_stage_evidence',
+        pointer: 'rendered.ordered.allocation.included[0].contentTokens',
+      },
+    );
+  });
+
+  it('rejects an excluded decision whose cost is not its canonical block count', () => {
+    const base = run();
+    const [first, ...rest] = base.allocated.excluded;
+    if (first === undefined) throw new Error('expected an excluded decision');
+
+    expectRejected(
+      {
+        ...base.input,
+        rendered: withAllocation(base.rendered, {
+          excluded: [{ ...first, contentTokens: first.contentTokens + 5 }, ...rest],
+        }),
+      },
+      {
+        code: 'inconsistent_stage_evidence',
+        pointer: 'rendered.ordered.allocation.excluded[0].contentTokens',
+      },
+    );
+  });
+
+  it('rejects an included decision whose budget transition does not spend its own cost', () => {
+    const base = run();
+    const [first, ...rest] = base.allocated.included;
+    if (first === undefined) throw new Error('expected an included decision');
+
+    expectRejected(
+      {
+        ...base.input,
+        rendered: withAllocation(base.rendered, {
+          included: [{ ...first, remainingAfter: first.remainingAfter - 1 }, ...rest],
+        }),
+      },
+      {
+        code: 'inconsistent_stage_evidence',
+        pointer: 'rendered.ordered.allocation.included[0].remainingAfter',
+      },
+    );
+  });
+
+  it('rejects a selected total that is not the sum of the included costs', () => {
+    const base = run();
+    expectRejected(
+      {
+        ...base.input,
+        rendered: withAllocation(base.rendered, {
+          selectedBlockContentTokens: base.allocated.selectedBlockContentTokens + 1,
+        }),
+      },
+      {
+        code: 'inconsistent_stage_evidence',
+        pointer: 'rendered.ordered.allocation.selectedBlockContentTokens',
+      },
+    );
+  });
+
+  it('rejects a remainder that is not the budget minus the selected total', () => {
+    const base = run();
+    expectRejected(
+      {
+        ...base.input,
+        rendered: withAllocation(base.rendered, {
+          unallocatedBlockContentTokens: base.allocated.unallocatedBlockContentTokens + 1,
+        }),
+      },
+      {
+        code: 'inconsistent_stage_evidence',
+        pointer: 'rendered.ordered.allocation.unallocatedBlockContentTokens',
+      },
+    );
+  });
+
+  it('rejects an included cost sum that leaves the safe integer range', () => {
+    const base = run();
+    const [first, ...rest] = base.allocated.included;
+    if (first === undefined) throw new Error('expected an included decision');
+    expect(rest.length).toBeGreaterThan(0);
+
+    const broken = {
+      ...base.input,
+      rendered: withAllocation(base.rendered, {
+        included: [{ ...first, contentTokens: Number.MAX_SAFE_INTEGER }, ...rest],
+      }),
+    };
+    // Each addend is a safe integer; their sum is not, so the total is refused
+    // rather than published as an approximation (INV-BUDGET-005).
+    expect(Number.isSafeInteger(Number.MAX_SAFE_INTEGER)).toBe(true);
+    expect(issueCodesOf(build(broken))).toContain('invalid_trace_result');
+    expectRejected(broken, { code: 'inconsistent_stage_evidence' });
+  });
+
+  it('rejects an available budget that is not derived from the request budget', () => {
+    const base = run();
+    expectRejected(
+      {
+        ...base.input,
+        rendered: withAllocation(base.rendered, {
+          availableInputTokens: base.allocated.availableInputTokens + 1,
+        }),
+      },
+      {
+        code: 'inconsistent_request_evidence',
+        pointer: 'rendered.ordered.allocation.availableInputTokens',
+      },
     );
   });
 });
