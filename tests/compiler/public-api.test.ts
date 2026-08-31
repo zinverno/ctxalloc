@@ -7,7 +7,9 @@ import {
   CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION,
   CANDIDATE_SCORING_POLICY_SCHEMA_VERSION,
   COMPILATION_POLICY_SCHEMA_VERSION,
+  COMPILATION_REQUEST_FINGERPRINT_VERSION,
   COMPILATION_REQUEST_SCHEMA_VERSION,
+  COMPILATION_TRACE_SCHEMA_VERSION,
   CandidateDeduplicator,
   CandidateFilter,
   CandidateFilteringError,
@@ -19,6 +21,7 @@ import {
   CompilationPolicyValidator,
   CompilationRequestError,
   CompilationRequestValidator,
+  CompilationTraceError,
   CONTEXT_ORDERING_POLICY_SCHEMA_VERSION,
   CONTEXT_RENDERER_ID,
   CONTEXT_RENDERER_VERSION,
@@ -27,6 +30,8 @@ import {
   ContextOrderingError,
   ContextRenderer,
   ContextRenderingError,
+  TraceBuilder,
+  fingerprintCompilationRequest,
   type AllocatedCandidateSet,
   type AllocationDecisionReason,
   type BudgetAllocationPolicy,
@@ -40,6 +45,21 @@ import {
   type CategoryAllocationConstraint,
   type CompilationPolicy,
   type CompilationRequest,
+  type CompilationRequestFingerprint,
+  type CompilationTrace,
+  type CompilationTraceAllocation,
+  type CompilationTraceBuildInput,
+  type CompilationTraceCanonicalBlock,
+  type CompilationTraceComposition,
+  type CompilationTraceDisposition,
+  type CompilationTraceFilteringDecision,
+  type CompilationTraceGroup,
+  type CompilationTraceMember,
+  type CompilationTraceOrdering,
+  type CompilationTraceRendering,
+  type CompilationTraceRequest,
+  type CompilationTraceSource,
+  type CompilationTraceTotals,
   type ContextOrderingPolicy,
   type ContextRenderingPolicy,
   type DeduplicatedCandidate,
@@ -54,6 +74,8 @@ import {
   type RetrievalNormalizationRule,
   type ScoredCandidate,
   type ScoredCandidateSet,
+  type TraceBuilderConfig,
+  type TraceIdentity,
   type ValidatedCandidateSet,
 } from '@ctxalloc/compiler';
 import type { Tokenizer } from '@ctxalloc/ports';
@@ -86,6 +108,9 @@ const manifest = JSON.parse(
 
 const SOURCE_FILES = [
   'packages/compiler/src/index.ts',
+  'packages/compiler/src/compilation-trace.ts',
+  'packages/compiler/src/request-fingerprint.ts',
+  'packages/compiler/src/digest.ts',
   'packages/compiler/src/budget-allocator.ts',
   'packages/compiler/src/context-orderer.ts',
   'packages/compiler/src/context-renderer.ts',
@@ -111,34 +136,41 @@ function importSpecifiers(relativePath: string): string[] {
 
 describe('@ctxalloc/compiler public API', () => {
   it('exports the implemented compiler stages, the request and policy contracts, and their errors only', () => {
-    expect(Object.keys(compiler).sort()).toEqual([
-      'BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION',
-      'BudgetAllocationError',
-      'BudgetAllocator',
-      'CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION',
-      'CANDIDATE_SCORING_POLICY_SCHEMA_VERSION',
-      'COMPILATION_POLICY_SCHEMA_VERSION',
-      'COMPILATION_REQUEST_SCHEMA_VERSION',
-      'CONTEXT_ORDERING_POLICY_SCHEMA_VERSION',
-      'CONTEXT_RENDERER_ID',
-      'CONTEXT_RENDERER_VERSION',
-      'CONTEXT_RENDERING_POLICY_SCHEMA_VERSION',
-      'CandidateDeduplicator',
-      'CandidateFilter',
-      'CandidateFilteringError',
-      'CandidateScorer',
-      'CandidateScoringError',
-      'CandidateValidationError',
-      'CandidateValidator',
-      'CompilationPolicyError',
-      'CompilationPolicyValidator',
-      'CompilationRequestError',
-      'CompilationRequestValidator',
-      'ContextOrderer',
-      'ContextOrderingError',
-      'ContextRenderer',
-      'ContextRenderingError',
-    ]);
+    expect(Object.keys(compiler).sort()).toEqual(
+      [
+        'BUDGET_ALLOCATION_POLICY_SCHEMA_VERSION',
+        'BudgetAllocationError',
+        'BudgetAllocator',
+        'CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION',
+        'CANDIDATE_SCORING_POLICY_SCHEMA_VERSION',
+        'COMPILATION_POLICY_SCHEMA_VERSION',
+        'COMPILATION_REQUEST_SCHEMA_VERSION',
+        'CONTEXT_ORDERING_POLICY_SCHEMA_VERSION',
+        'CONTEXT_RENDERER_ID',
+        'CONTEXT_RENDERER_VERSION',
+        'CONTEXT_RENDERING_POLICY_SCHEMA_VERSION',
+        'CandidateDeduplicator',
+        'CandidateFilter',
+        'CandidateFilteringError',
+        'CandidateScorer',
+        'CandidateScoringError',
+        'CandidateValidationError',
+        'CandidateValidator',
+        'CompilationPolicyError',
+        'CompilationPolicyValidator',
+        'CompilationRequestError',
+        'CompilationRequestValidator',
+        'ContextOrderer',
+        'ContextOrderingError',
+        'ContextRenderer',
+        'ContextRenderingError',
+        'COMPILATION_REQUEST_FINGERPRINT_VERSION',
+        'COMPILATION_TRACE_SCHEMA_VERSION',
+        'CompilationTraceError',
+        'TraceBuilder',
+        'fingerprintCompilationRequest',
+      ].sort(),
+    );
   });
 
   it('exports the documented public types from its entry point', () => {
@@ -171,7 +203,33 @@ describe('@ctxalloc/compiler public API', () => {
       'CompilationPolicy',
       'CompilationPolicyIssueCode',
       'CompilationRequest',
+      'CompilationRequestFingerprint',
       'CompilationRequestIssueCode',
+      'CompilationTrace',
+      'CompilationTraceAllocation',
+      'CompilationTraceAllocationDecision',
+      'CompilationTraceBuildInput',
+      'CompilationTraceCanonicalBlock',
+      'CompilationTraceComposition',
+      'CompilationTraceDisposition',
+      'CompilationTraceExcludedDecision',
+      'CompilationTraceFilteredDecision',
+      'CompilationTraceFilteringDecision',
+      'CompilationTraceGroup',
+      'CompilationTraceIncludedDecision',
+      'CompilationTraceIssueCode',
+      'CompilationTraceMember',
+      'CompilationTraceOrdering',
+      'CompilationTracePolicyEligibleDecision',
+      'CompilationTracePolicyIdentities',
+      'CompilationTraceRendering',
+      'CompilationTraceRequest',
+      'CompilationTraceRequiredEligibleDecision',
+      'CompilationTraceRetrieval',
+      'CompilationTraceRetrievalScore',
+      'CompilationTraceSource',
+      'CompilationTraceTokenizerCoverage',
+      'CompilationTraceTotals',
       'ContextOrderingIssueCode',
       'ContextOrderingPolicy',
       'ContextRenderingIssueCode',
@@ -205,6 +263,8 @@ describe('@ctxalloc/compiler public API', () => {
       'SourcePriorityScoreComponent',
       'SourcePriorityScoreEvidence',
       'SourcePriorityScoringPolicy',
+      'TraceBuilderConfig',
+      'TraceIdentity',
       'ValidatedCandidateSet',
     ]);
   });
@@ -670,14 +730,13 @@ describe('@ctxalloc/compiler public API', () => {
 
   it('exports no later compiler stage and no retrieval port', () => {
     for (const name of [
-      'TraceBuilder',
       'ContextCompiler',
       'CandidateProvider',
       'FakeCandidateProvider',
       'CompilationRequestSchema',
       'CompilationPolicySchema',
       'CompilationResult',
-      'CompilationTrace',
+      'CompilationTraceSchema',
       'compile',
       'score',
       'allocate',
@@ -691,9 +750,110 @@ describe('@ctxalloc/compiler public API', () => {
       'parseContextOrderingPolicy',
       'parseContextRenderingPolicy',
       'parseCompilationPolicy',
+      // Phase 14 publishes the trace foundation, not the settled compilation:
+      // no orchestrator, no correction loop, and no compilation identifier
+      // (DEC-037).
+      'compilationFingerprint',
+      'fingerprintCompilation',
+      'compilationId',
+      'canonicalJson',
+      'domainSeparatedDigest',
     ]) {
       expect(Object.keys(compiler), `exports ${name}`).not.toContain(name);
     }
+  });
+
+  it('accepts the documented trace build input and returns the documented trace', () => {
+    const tokenizer: Tokenizer = wordTokenizer;
+    const request: CompilationRequest = new CompilationRequestValidator().validate({
+      id: 'req-api-1',
+      schemaVersion: COMPILATION_REQUEST_SCHEMA_VERSION,
+      scope: { tenantId: 'local', workspaceId: 'default' },
+      query: 'anything',
+      referenceTime: '2026-06-01T12:00:00.000Z',
+      candidates: [candidate()],
+      sourceDocuments: [sourceDocument()],
+      budget: { totalTokens: 100, reservedOutputTokens: 10 },
+      policy: compilationPolicyFixture({
+        filtering: { schemaVersion: 1, policyId: 'filtering', policyVersion: '3.0.0' },
+      }),
+    });
+
+    const validated = new CandidateValidator(tokenizer).validate({
+      scope: request.scope,
+      sourceDocuments: request.sourceDocuments,
+      candidates: request.candidates,
+    });
+    const deduplicated = new CandidateDeduplicator().deduplicate(validated);
+    const scored = new CandidateScorer(request.policy.scoring).score(
+      deduplicated,
+      request.referenceTime,
+    );
+    const filtered = new CandidateFilter(request.policy.filtering).filter(scored);
+    const allocated = new BudgetAllocator(request.policy.allocation).allocate(
+      filtered.eligible,
+      request.budget,
+    );
+    const ordered = new ContextOrderer(request.policy.ordering).order(allocated);
+    const rendered = new ContextRenderer(request.policy.rendering, tokenizer).render(ordered);
+
+    const config: TraceBuilderConfig = {
+      compilerId: 'ctxalloc-compiler',
+      compilerVersion: '0.14.0',
+    };
+    const input: CompilationTraceBuildInput = {
+      request,
+      validated,
+      deduplicated,
+      filtered,
+      rendered,
+    };
+    const built: CompilationTrace = new TraceBuilder(config).build(input);
+
+    const traceRequest: CompilationTraceRequest = built.request;
+    const fingerprint: CompilationRequestFingerprint = traceRequest.fingerprint;
+    const composition: CompilationTraceComposition = built.composition;
+    const identity: TraceIdentity = composition.compiler;
+    const sources: readonly CompilationTraceSource[] = built.sources;
+    const groups: readonly CompilationTraceGroup[] = built.groups;
+    const group = groups[0];
+    if (group === undefined) throw new Error('expected one traced group');
+    const canonical: CompilationTraceCanonicalBlock = group.canonical;
+    const members: readonly CompilationTraceMember[] = group.members;
+    const score: CandidateScore = group.score;
+    const filtering: CompilationTraceFilteringDecision = group.filtering;
+    const allocation: CompilationTraceAllocation = built.allocation;
+    const ordering: CompilationTraceOrdering = built.ordering;
+    const renderingSummary: CompilationTraceRendering = built.rendering;
+    const totals: CompilationTraceTotals = built.totals;
+    const disposition: CompilationTraceDisposition = group.currentDisposition;
+
+    expect(built.schemaVersion).toBe(COMPILATION_TRACE_SCHEMA_VERSION);
+    expect(built.settled).toBe(false);
+    expect(fingerprint).toBe(fingerprintCompilationRequest(request));
+    expect(identity).toEqual({ id: 'ctxalloc-compiler', version: '0.14.0' });
+    expect(sources).toHaveLength(1);
+    expect(canonical.id).toBe('block-1');
+    expect(members).toHaveLength(1);
+    expect(score.total).toBe(0);
+    expect(filtering.reason).toBe('ELIGIBLE_POLICY');
+    expect(disposition).toBe('included');
+    expect(allocation.includedBlockIds).toEqual(['block-1']);
+    expect(ordering.orderedBlockIds).toEqual(['block-1']);
+    expect(renderingSummary.renderedTokens).toBe(countWords(rendered.renderedContext));
+    expect(totals.candidateCount).toBe(1);
+    expect(COMPILATION_REQUEST_FINGERPRINT_VERSION).toBe(1);
+    expect(CompilationTraceError.prototype).toBeInstanceOf(Error);
+  });
+
+  it('publishes a stable top-level trace error code', () => {
+    try {
+      new TraceBuilder({});
+    } catch (error) {
+      expect((error as CompilationTraceError).code).toBe('COMPILATION_TRACE_BUILD_FAILED');
+      return;
+    }
+    throw new Error('expected the empty config to be rejected');
   });
 
   it('exposes no ingestion, chunking, or tokenizer implementation', () => {
@@ -737,7 +897,7 @@ describe('@ctxalloc/compiler public API', () => {
   });
 
   it('imports only its declared dependencies', () => {
-    const allowed = new Set(['@ctxalloc/domain', '@ctxalloc/ports', 'zod']);
+    const allowed = new Set(['@ctxalloc/domain', '@ctxalloc/ports', 'zod', 'node:crypto']);
     for (const file of SOURCE_FILES) {
       for (const specifier of importSpecifiers(file)) {
         expect(
@@ -748,10 +908,18 @@ describe('@ctxalloc/compiler public API', () => {
     }
   });
 
-  it('INV-DEP-001: imports no Node standard library module', () => {
+  it('INV-DEP-002: imports no Node standard library module but the hash primitive', () => {
+    // `node:crypto` is the one documented exception, and only for hashing. It is
+    // a pure function of a supplied string: it reaches no database, framework,
+    // filesystem, socket, or SDK, exactly as the domain's canonical block content
+    // hash uses it (DEC-030, DEC-037). Every other Node module — `node:fs`,
+    // `node:process`, `node:child_process`, `node:http` — stays forbidden, and no
+    // `node:crypto` type reaches a public declaration.
     for (const file of SOURCE_FILES) {
       for (const specifier of importSpecifiers(file)) {
-        expect(specifier.startsWith('node:'), `${file} imports ${specifier}`).toBe(false);
+        if (!specifier.startsWith('node:')) continue;
+        expect(specifier, `${file} imports ${specifier}`).toBe('node:crypto');
+        expect(file, `${file} imports node:crypto`).toBe('packages/compiler/src/digest.ts');
       }
     }
   });

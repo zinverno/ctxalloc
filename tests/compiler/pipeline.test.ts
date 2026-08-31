@@ -209,14 +209,8 @@ describe('named compiler pipeline', () => {
     expect(attempt.renderedContext).not.toContain('req-pipeline-1');
   });
 
-  it('exposes no orchestrator, correction loop, or trace to compose it for us', () => {
-    for (const absent of [
-      'ContextCompiler',
-      'TraceBuilder',
-      'CompilationTrace',
-      'CompilationResult',
-      'compile',
-    ]) {
+  it('exposes no orchestrator or correction loop to compose it for us', () => {
+    for (const absent of ['ContextCompiler', 'CompilationResult', 'compile']) {
       expect(Object.keys(compiler), `exports ${absent}`).not.toContain(absent);
     }
 

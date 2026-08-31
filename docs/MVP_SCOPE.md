@@ -85,7 +85,7 @@ The MVP includes stable schemas for:
 * CompilationResult;
 * IncludedBlockDecision;
 * ExcludedBlockDecision;
-* CompilationTrace;
+* CompilationTrace — implemented (section 3.8);
 * TokenUsage;
 * EvaluationCase;
 * EvaluationResult.
@@ -393,8 +393,10 @@ conflicting block identifiers remain `CandidateValidator`'s to reject
 (section 3.3), so a request may pass this validator and be rejected by the next
 one.
 
-Neither contract compiles anything. There is no `ContextCompiler`, no request or
-compilation fingerprint, no trace, no correction loop, and no `CompilationResult`.
+Neither contract compiles anything. There is no `ContextCompiler`, no correction
+loop, and no `CompilationResult`. The request **fingerprint** does now exist, as
+part of the trace foundation (section 3.8); a deterministic **compilation**
+identifier does not.
 
 See DEC-036.
 
@@ -510,12 +512,14 @@ and a composed five-slice policy (section 3.5.2), candidate reception and
 validation with scope filtering (section 3.4), duplicate removal (section 3.4),
 scoring (section 3.5), **policy filtering** (section 3.5.1), token budget
 allocation over canonical block content (section 3.6), **stable ordering of the
-included blocks**, and **deterministic rendering with exact measurement of the
-rendered string** (both below).
+included blocks**, **deterministic rendering with exact measurement of the
+rendered string** (both below), and the **compilation trace foundation**
+(section 3.8).
 
 The render/evict/re-render correction, final rendered-token validation of a
-compilation, trace generation, and the compiler orchestration that joins these
-components remain future work. **The compiler is not complete.**
+compilation, the settled final trace, the final `CompilationResult`, and the
+compiler orchestration that joins these components remain future work. **The
+compiler is not complete.**
 
 **Stable ordering is implemented.** `ContextOrderer` consumes an
 `AllocatedCandidateSet` and one narrow versioned `ContextOrderingPolicy`, and
@@ -579,25 +583,68 @@ See DEC-035.
 
 ### 3.8 Compilation Trace
 
-The trace must contain:
+**The trace foundation is implemented.** `CompilationTrace` schema version 1,
+`TraceBuilder`, and the deterministic request fingerprint all exist (DEC-037).
 
-* compiler version;
-* policy version;
-* tokenizer identifier;
-* request scope;
-* original token count;
-* available token budget;
-* compiled token count;
-* unused token budget;
-* included blocks;
-* excluded blocks;
-* decision reasons;
-* source references;
-* warnings;
-* errors;
-* deterministic request fingerprint.
+The trace contains:
 
-The trace must be serializable as JSON.
+* compiler identity and version;
+* the compilation policy identity and version, and all five slice identities;
+* the renderer-observed tokenizer identity and version, with its provenance
+  coverage;
+* renderer identity and version;
+* schema version;
+* request scope, identity, reference time, and budget;
+* the deterministic request fingerprint;
+* a hash of the exact query;
+* minimal source references;
+* every deduplicated group with every validated wrapper as a member;
+* each group's score, filtering decision, and allocation decision;
+* the allocation, ordering, and rendering summaries;
+* a hash and the token count of the rendered attempt;
+* the exact reconciliation totals.
+
+The trace is serializable as JSON and survives a round trip with deep equality.
+
+**`TraceBuilder` is observational.** It receives evidence the compiler components
+already produced and records it; it validates nothing again, decides nothing, and
+changes no compiler output (INV-TRACE-006). It fails explicitly when the supplied
+evidence contradicts itself rather than repairing it.
+
+**The trace records no raw content.** Block content, the query, the rendered
+string, source metadata, block metadata, source titles, and retrieval metadata are
+not representable in schema version 1 — the safest reading of INV-SEC-003 — and
+there is no `includeContent` switch. Deterministic digests carry the audit
+identity instead.
+
+**The request fingerprint identifies the exact validated request value.** Array
+order participates and object property insertion order does not. It is **not** a
+compilation identifier: the composition inputs it excludes are recorded beside it
+in the trace.
+
+**The recorded tokenizer identity is scoped.** It comes from the render attempt
+and proves only which tokenizer measured the rendered string, so the trace
+publishes `tokenizerCoverage: 'rendering-attempt-only'`. The content totals
+reconcile among themselves, but no stage contract carries the identity of the
+tokenizer that produced the validated block counts, so the trace does not
+attribute them. The stronger `validation-and-rendering` coverage is reserved for
+a future `ContextCompiler` that injects one tokenizer into `CandidateValidator`
+and `ContextRenderer` itself.
+
+**Not yet implemented and deliberately absent:**
+
+* the settled final trace — every trace this phase builds carries
+  `settled: false`, and a successful `CompilationResult` requires a settled one;
+* the final `CompilationResult` and its usage metrics;
+* the render-aware correction loop that would settle a selection;
+* a validation-failure trace envelope, which belongs to the future
+  `ContextCompiler`: `CandidateValidator` is all-or-nothing, so a failed batch has
+  no post-validation evidence to trace;
+* warnings and errors as trace fields;
+* a deterministic compilation identifier;
+* trace persistence.
+
+See DEC-037.
 
 ---
 

@@ -2,6 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
+    // Trace digests use the Node standard library, exactly as the domain's
+    // canonical block content hash does. No other global environment is used,
+    // and no `node:crypto` type reaches a public declaration (INV-ADAPTER-001).
+    "types": ["node"],
     "rootDir": "src",
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"

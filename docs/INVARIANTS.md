@@ -638,16 +638,49 @@ Silent string slicing is forbidden.
 
 # 11. Trace Invariants
 
-## INV-TRACE-001: Every Candidate Has a Final Decision
-
-Every validated candidate must appear exactly once in the final trace as:
-
-* included;
-* excluded;
-* deduplicated into another block;
-* rejected as invalid.
+## INV-TRACE-001: Every Candidate Is Accounted For and Every Group Is Decided
 
 No candidate may disappear between stages.
+
+The accounting has **two levels**, because the pipeline has two units. Exact
+deduplication collapses several `CandidateBlock` wrappers into one group with one
+canonical block, and every policy, filtering, and allocation decision after that
+point is made about the **group**, while every original wrapper is retained as
+group membership and provenance evidence (DEC-031, DEC-037).
+
+**1. Wrapper accounting.**
+
+Every successfully validated `CandidateBlock` wrapper must appear exactly once as
+a member of exactly one deduplicated trace group.
+
+Multiplicity is part of the accounting: two byte-identical wrappers produce two
+identical member records. No "representative wrapper" may be selected so that one
+wrapper can be called included and the rest deduplicated. Repeated wrappers can be
+observationally indistinguishable, and choosing one of them by input position
+would be a determinism violation (INV-DET-002).
+
+**2. Group disposition.**
+
+Every deduplicated candidate group must receive exactly one current
+filtering/allocation disposition for the traced selection:
+
+* filtered;
+* included;
+* excluded.
+
+For a **terminal** `CompilationResult` trace, every group must additionally carry
+exactly one final included/excluded disposition, and every validated wrapper
+remains accounted for through its group membership.
+
+**Invalid candidates are not part of a post-validation trace.**
+
+A candidate rejected as invalid never became a validated candidate.
+`CandidateValidator` is all-or-nothing: when candidate validation fails, no
+`ValidatedCandidateSet` exists and the post-validation compiler chain does not
+run (DEC-030). Validation failures remain explicit structured validation errors. A
+future `ContextCompiler` may wrap those errors in a terminal failure trace, but no
+component may fabricate a post-validation trace for a batch that produced no
+validated set.
 
 ---
 
@@ -672,18 +705,69 @@ REJECTED_INVALID_TOKEN_COUNT
 
 ## INV-TRACE-003: Trace Token Totals Reconcile
 
-Trace totals must satisfy:
+The earlier formula subtracted rejected candidates from a successful trace and
+ignored deduplication entirely, so it could not reconcile the implemented
+pipeline: `candidateTokens` is defined over **all validated candidate wrappers**
+(METRICS 8.1), exact deduplication collapses several wrappers to one canonical
+group, allocation works on one canonical block per group, and invalid candidates
+are not part of a successful post-validation trace at all. It is corrected here
+(DEC-037).
+
+A successful trace must satisfy:
 
 ```text
 candidateTokens
-  = includedCandidateTokens
-  + excludedCandidateTokens
-  + rejectedCandidateTokens
+  = canonicalContentTokens
+  + duplicateCandidateTokens
+
+canonicalContentTokens
+  = includedContentTokens
+  + excludedCanonicalContentTokens
+
+excludedCanonicalContentTokens
+  = filteredContentTokens
+  + allocationExcludedContentTokens
 ```
 
-Rendering overhead is reported separately.
+Definitions (METRICS 8.12):
 
-Deduplicated blocks must be counted consistently according to the metrics specification.
+```text
+candidateTokens
+  = sum(block.tokenCount) across EVERY validated CandidateBlock wrapper
+
+canonicalContentTokens
+  = sum(canonicalBlock.tokenCount) across EVERY deduplicated group exactly once
+
+duplicateCandidateTokens
+  = candidateTokens - canonicalContentTokens
+
+filteredContentTokens
+  = sum(canonicalBlock.tokenCount) for groups filtered by CandidateFilter
+
+allocationExcludedContentTokens
+  = sum(canonicalBlock.tokenCount) for eligible groups excluded by BudgetAllocator
+
+includedContentTokens
+  = sum(canonicalBlock.tokenCount) for currently included groups
+```
+
+Every group holds at least one validated member and its canonical block is one of
+the group's own validated blocks, so `duplicateCandidateTokens` is never negative.
+It is a **group-level difference**, never a chosen "duplicate member" wrapper
+subtracted by identity: selecting one among indistinguishable wrappers would be
+arbitrary.
+
+All counts and totals must be finite non-negative safe integers, and the
+arithmetic must be overflow-safe. A total that leaves the exact integer range is a
+structured failure, never a published approximation (INV-BUDGET-005).
+
+Rendering counts do not participate. `renderedTokens` measures a string and is
+reported separately; `renderingTokenDelta` remains defined against a settled
+`compiledTokens` (METRICS 8.6) and is unchanged.
+
+For an **unsettled** trace these are current-selection reconciliation totals, not
+final `CompilationResult` metrics: a later correction may settle a different
+selection.
 
 ---
 
@@ -692,6 +776,15 @@ Deduplicated blocks must be counted consistently according to the metrics specif
 Every rendered source block must correspond to an included trace decision.
 
 Every included trace decision must appear in the rendered output unless policy explicitly marks it as non-rendering metadata.
+
+For an **unsettled** trace the rule applies to the attempt that was traced: every
+block in the current rendered attempt corresponds to a group whose
+`currentDisposition` is included, and every currently included group appears in
+that attempt. For a **settled** `CompilationResult` trace the same rule applies to
+the final selection.
+
+The current rendering policy defines no non-rendering metadata, so the exception
+above has no instance today and none may be invented for one.
 
 ---
 
@@ -704,6 +797,18 @@ Every trace must contain:
 * tokenizer identifier and version;
 * schema version;
 * renderer identifier and version.
+
+**Recorded identities must state their provenance coverage.**
+
+When token quantities in one trace originate at different compiler boundaries,
+the trace must state the provenance coverage of the recorded tokenizer identity.
+A tokenizer identity observed only at rendering must not be presented as though
+it also explains content token counts.
+
+This adds a requirement; it removes none. The identifier and version are still
+mandatory. What is forbidden is publishing them bare beside quantities they were
+never proven to produce, which would let a reader of a persisted record infer an
+attribution the compiler never established (DEC-035, DEC-037).
 
 ---
 
