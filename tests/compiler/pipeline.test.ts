@@ -7,6 +7,7 @@ import {
   CandidateScorer,
   CandidateValidator,
   CompilationRequestValidator,
+  ContextCompiler,
   ContextOrderer,
   ContextRenderer,
   type CompilationRequest,
@@ -23,17 +24,30 @@ const rootUrl = new URL('../../', import.meta.url);
 /**
  * The named pipeline, composed by hand in the test (DEC-036).
  *
- * No `ContextCompiler` exists, so this file is the only place the stages are
- * joined. That is deliberate: composing them is the future orchestration's
- * responsibility, and a test that composes them proves the contracts fit without
- * inventing the component that will own them.
+ * `ContextCompiler` now composes the same stages in production (DEC-038), and
+ * this file keeps composing them by hand deliberately: it proves the stage
+ * contracts still fit end to end without going through the orchestrator, so a
+ * defect in one contract cannot hide behind the component that consumes it.
  *
  * One tokenizer is used for `CandidateValidator` block-count validation and for
  * `ContextRenderer` final-string measurement, which is exactly the composition
- * requirement DEC-035 records.
+ * requirement DEC-035 records and the one `ContextCompiler` now guarantees.
  */
 
 const REFERENCE_TIME = '2026-06-01T12:00:00.000Z';
+
+/**
+ * Counts words plus double quotes.
+ *
+ * On quote-free block content it agrees with `wordTokenizer` exactly, so both
+ * tokenizers accept the same candidates at validation. The rendered JSONL is
+ * full of quotes, so the two disagree about the rendered string.
+ */
+const quoteAwareTokenizer: Tokenizer = {
+  id: 'test:word-plus-quotes',
+  version: '1',
+  countTokens: (text: string): number => countWords(text) + (text.match(/"/g) ?? []).length,
+};
 
 /** A policy that filters optional candidates scoring below 0.4. */
 function policy(): Record<string, unknown> {
@@ -45,6 +59,17 @@ function policy(): Record<string, unknown> {
       minimumTotalScore: 0.4,
     },
   });
+}
+
+/** The explicit compiler composition; nothing is defaulted or discovered. */
+function compilerConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    compilerId: 'ctxalloc-compiler',
+    compilerVersion: '0.15.0',
+    maxCorrectionSelections: 64,
+    ...overrides,
+  };
 }
 
 function requestInput(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -209,22 +234,34 @@ describe('named compiler pipeline', () => {
     expect(attempt.renderedContext).not.toContain('req-pipeline-1');
   });
 
-  it('exposes no orchestrator or correction loop to compose it for us', () => {
-    for (const absent of ['ContextCompiler', 'CompilationResult', 'compile']) {
-      expect(Object.keys(compiler), `exports ${absent}`).not.toContain(absent);
-    }
+  it('DEC-038: ContextCompiler composes exactly these stages, byte for byte', () => {
+    const { attempt } = run();
+    const compiled = new ContextCompiler(compilerConfig(), wordTokenizer).compile(requestInput());
 
+    expect(compiled.compiledContext).toBe(attempt.renderedContext);
+    expect(compiled.usage.compiledTokens).toBe(attempt.renderedTokens);
+    expect(compiled.includedBlocks.map((block) => block.id)).toEqual(idsOf(attempt));
+    expect(compiled.trace.settled).toBe(true);
+  });
+
+  it('keeps orchestration out of the stages themselves', () => {
+    // The orchestrator is one component. No stage may reach for it, and no stage
+    // may publish a settled metric it cannot prove (DEC-035, DEC-038).
     const sources = [
-      'packages/compiler/src/index.ts',
       'packages/compiler/src/candidate-filter.ts',
       'packages/compiler/src/compilation-policy.ts',
       'packages/compiler/src/compilation-request.ts',
+      'packages/compiler/src/budget-allocator.ts',
+      'packages/compiler/src/context-orderer.ts',
+      'packages/compiler/src/context-renderer.ts',
     ].map((path) => readFileSync(new URL(path, rootUrl), 'utf8'));
 
     for (const source of sources) {
       expect(source).not.toContain('class ContextCompiler');
-      expect(source).not.toContain('renderingTokenDelta');
+      expect(source).not.toContain('renderingTokenDelta:');
+      expect(source).not.toContain('compiledTokens:');
     }
+    expect(Object.keys(compiler)).toContain('ContextCompiler');
   });
 });
 
@@ -239,19 +276,6 @@ describe('named compiler pipeline', () => {
  * deliberately not asserted equal.
  */
 describe('INV-DET-001: the deterministic input is the request plus its composition', () => {
-  /**
-   * Counts words plus double quotes.
-   *
-   * On quote-free block content it agrees with `wordTokenizer` exactly, so both
-   * tokenizers accept the same candidates at validation. The rendered JSONL is
-   * full of quotes, so the two disagree about the rendered string.
-   */
-  const quoteAwareTokenizer: Tokenizer = {
-    id: 'test:word-plus-quotes',
-    version: '1',
-    countTokens: (text: string): number => countWords(text) + (text.match(/"/g) ?? []).length,
-  };
-
   it('the request value carries no tokenizer, compiler version, or component instance', () => {
     const { request } = run();
 
@@ -315,7 +339,16 @@ describe('INV-DET-001: the deterministic input is the request plus its compositi
     expect(run(input, quoteAwareTokenizer).attempt).toEqual(b.attempt);
   });
 
-  it('introduces no ContextCompiler to bind that composition', () => {
-    expect(Object.keys(compiler)).not.toContain('ContextCompiler');
+  it('DEC-038: ContextCompiler binds that composition into one identifier', () => {
+    const input = requestInput();
+    const underA = new ContextCompiler(compilerConfig(), wordTokenizer).compile(input);
+    const underB = new ContextCompiler(compilerConfig(), quoteAwareTokenizer).compile(input);
+
+    // One byte-identical request, two configured tokenizers, two genuinely
+    // different deterministic invocations — and two different identifiers.
+    expect(underA.trace.request.fingerprint).toBe(underB.trace.request.fingerprint);
+    expect(underA.compilationId).not.toBe(underB.compilationId);
+    expect(underA.compiledContext).toBe(underB.compiledContext);
+    expect(underB.usage.compiledTokens).toBeGreaterThan(underA.usage.compiledTokens);
   });
 });

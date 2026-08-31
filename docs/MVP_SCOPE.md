@@ -507,19 +507,26 @@ The MVP compiler must:
 
 The compiler must not call an LLM.
 
-Implemented so far: structural request validation with an explicit reference time
-and a composed five-slice policy (section 3.5.2), candidate reception and
-validation with scope filtering (section 3.4), duplicate removal (section 3.4),
-scoring (section 3.5), **policy filtering** (section 3.5.1), token budget
-allocation over canonical block content (section 3.6), **stable ordering of the
-included blocks**, **deterministic rendering with exact measurement of the
-rendered string** (both below), and the **compilation trace foundation**
-(section 3.8).
+Implemented: structural request validation with an explicit reference time and a
+composed five-slice policy (section 3.5.2), candidate reception and validation
+with scope filtering (section 3.4), duplicate removal (section 3.4), scoring
+(section 3.5), **policy filtering** (section 3.5.1), token budget allocation over
+canonical block content (section 3.6), **stable ordering of the included
+blocks**, **deterministic rendering with exact measurement of the rendered
+string** (both below), the **compilation trace** (section 3.8), and the
+**`ContextCompiler` orchestration that joins them and settles the rendered
+budget** (section 3.7.1).
 
-The render/evict/re-render correction, final rendered-token validation of a
-compilation, the settled final trace, the final `CompilationResult`, and the
-compiler orchestration that joins these components remain future work. **The
-compiler is not complete.**
+**The compiler kernel is complete.** `compiler.compile(request)` exists, and a
+successful call returns the exact final rendered context, the exact final
+included canonical blocks in render order, exact final token usage, a
+deterministic compilation identifier, a settled privacy-minimized audit trace,
+and a hard guarantee that the rendered string is within the caller's available
+input budget.
+
+**The product is not complete.** Retrieval integration, persistence, the CLI, the
+HTTP API, model execution, and the evaluation harness remain later phases
+(sections 3.12 through 3.17).
 
 **Stable ordering is implemented.** `ContextOrderer` consumes an
 `AllocatedCandidateSet` and one narrow versioned `ContextOrderingPolicy`, and
@@ -575,16 +582,117 @@ It also publishes **no token delta**. Subtracting the allocated block-content su
 from the rendered count needs one tokenizer identity behind both numbers, and no
 stage contract reaching the renderer carries one, so the stage declines a
 subtraction it cannot justify. The final signed `renderingTokenDelta` belongs to
-the future orchestration that owns same-tokenizer composition.
+`ContextCompiler`, which owns same-tokenizer composition (section 3.7.1).
 
 See DEC-035.
 
 ---
 
+### 3.7.1 Compiler Orchestration and Rendered Budget Settlement
+
+**Implemented (DEC-038).** `ContextCompiler` is the composition root of the
+kernel and the only producer of a `CompilationResult`.
+
+```ts
+const compiler = new ContextCompiler(config, tokenizer);
+const result = compiler.compile(request);
+```
+
+**One tokenizer.** The compiler owns exactly one configured `Tokenizer` and
+injects that same object into `CandidateValidator` block-count validation, into
+the `ContextRenderer` measurement, and into every render-aware correction
+measurement. It constructs no tokenizer of its own and accepts no second one.
+That is what makes `tokenizerCoverage: 'validation-and-rendering'` provable and
+the signed `renderingTokenDelta` a defined quantity.
+
+**Every stage runs.** The whole named topology executes in order, and no stage is
+skipped because the first render happens to fit.
+
+**Exact final rendered budget enforcement.** The complete rendered string is
+tokenized before any success is returned, and no result is returned whose
+`compiledTokens` exceeds `availableInputTokens` (INV-BUDGET-001,
+INV-BUDGET-002).
+
+**The correction loop.** If the initial render is over budget, the compiler
+evicts along `allocation.optionalEvictionOrder` in its exact published order, one
+entry at a time, re-ordering, re-rendering, and re-tokenizing after every
+removal. The first fitting prefix wins. Required blocks are never evicted and
+category minimums are never dropped.
+
+**The bounded fallback search.** Exhausting the eviction order is not a
+feasibility proof: the allocator minimized canonical *content* cost when it chose
+which candidates satisfy each category minimum, and a protected
+cheaper-by-content block may render more expensively than an unselected candidate
+that satisfies the same minimum. The fallback runs in three phases.
+
+1. The exact **required-only probe**, measured and cached. It is never by itself
+   a verdict: tokenization is not monotonic, so a selection containing the same
+   required blocks *plus* an optional one may render smaller.
+2. The **hard bases** — minimal policy-valid selections — in the allocator's own
+   preference order. A fitting hard base settles immediately and is never
+   re-augmented with optional surplus.
+3. The **rescue**, which runs only once every hard base has failed and walks the
+   remaining policy-valid selections, surplus included, because a strict superset
+   of an over-budget base may fit. This is correctness rescue, not optimization.
+
+Every feasibility decision measures **one exact complete rendered string**. No
+per-block rendered cost is computed, cached, or subtracted, because tokenization
+is neither additive nor monotonic.
+
+The search is explicitly bounded by `maxCorrectionSelections`, a required
+configuration value with no default, counting **unique** selections across all
+three phases. Every combinatorial enumeration is lazy and the rescue enumerator
+is category-constraint-aware, so the bound stops the work rather than firing
+after an exponential universe of subsets — valid or invalid — has been walked.
+Reaching the bound is reported as a search limit and never as infeasibility.
+
+The visit count is work rather than a census of valid selections, so an
+exhaustive failure states the two separately: how many unique selections were
+visited, and that no policy-valid final selection renders within the budget.
+
+The compiler claims no maximum of score, block count, token utilization, or
+information retained.
+
+**Three distinct failures.** `required_content_exceeds_budget` and
+`rendered_hard_constraints_exceed_budget` are both raised only after every
+policy-valid selection has actually been visited, and differ by whether a
+non-required category minimum is still active; `correction_search_limit_exceeded`
+claims nothing about feasibility.
+
+**The settled trace.** The compiler projects the observational snapshot plus the
+proven correction evidence into a `SettledCompilationTrace`, never mutating the
+snapshot and never deleting the allocator's original evidence (section 3.8).
+
+**The result.** `CompilationResult` carries the compiled context, the final
+canonical blocks in exact render order, the deterministic `CompilationId`, the
+settled trace, and exact usage: `candidateTokens`, `includedContentTokens`,
+`compiledTokens`, `availableTokens`, `unusedTokens`, and the signed
+`renderingTokenDelta`.
+
+It publishes **no** `reductionTokens` or `reductionRatio`: METRICS 8.7 and 8.8 are
+defined against `baselineInputTokens`, and no baseline exists in a
+`CompilationRequest`. Baselines are evaluation work (section 3.14).
+
+**The deterministic compilation identifier.** `CompilationId` binds the request
+fingerprint plus every explicit composition input — compiler identity and
+version, tokenizer identity and version, renderer identity and version, the
+correction strategy and version, and the search bound. Nothing random, discovered,
+or environmental takes part.
+
+**Not implemented and deliberately absent:** retrieval, `CandidateProvider`
+execution, `SourceReader`, persistence, SQLite, the CLI, the HTTP API, model
+execution, the evaluation harness, baseline measurement, telemetry, and
+generative compression.
+
+See DEC-038.
+
+---
+
 ### 3.8 Compilation Trace
 
-**The trace foundation is implemented.** `CompilationTrace` schema version 1,
-`TraceBuilder`, and the deterministic request fingerprint all exist (DEC-037).
+**The trace is implemented.** `CompilationTrace` schema version 2, `TraceBuilder`,
+the deterministic request fingerprint, and the settled trace all exist (DEC-037,
+DEC-038).
 
 The trace contains:
 
@@ -622,29 +730,58 @@ order participates and object property insertion order does not. It is **not** a
 compilation identifier: the composition inputs it excludes are recorded beside it
 in the trace.
 
-**The recorded tokenizer identity is scoped.** It comes from the render attempt
-and proves only which tokenizer measured the rendered string, so the trace
-publishes `tokenizerCoverage: 'rendering-attempt-only'`. The content totals
-reconcile among themselves, but no stage contract carries the identity of the
-tokenizer that produced the validated block counts, so the trace does not
-attribute them. The stronger `validation-and-rendering` coverage is reserved for
-a future `ContextCompiler` that injects one tokenizer into `CandidateValidator`
-and `ContextRenderer` itself.
+**The recorded tokenizer identity is scoped.** A `TraceBuilder` snapshot records
+the identity from the render attempt, which proves only which tokenizer measured
+the rendered string, so it publishes `tokenizerCoverage:
+'rendering-attempt-only'`. A trace `ContextCompiler` settles publishes
+`'validation-and-rendering'`, because that component injected one tokenizer into
+`CandidateValidator` and `ContextRenderer` itself. The coverage is never inferred
+from matching identifiers or matching numbers.
+
+**Schema version 2 adds the settlement overlay (DEC-038).** Version 1 recorded
+the filtering decision, the allocation decision, the allocator summary, the
+allocation's render order, and the measured attempt — and named its per-group
+verdict `currentDisposition`, not `finalDisposition`, precisely because a
+render-aware correction may settle a different selection. Flipping a version 1
+record's `settled` boolean to `true` would therefore publish a false audit
+record. The version is bumped rather than the meaning of version 1 changed. No
+persistence adapter and no stored trace exist yet, so there is nothing to
+migrate.
+
+The two variants are discriminated on `settled`. `TraceBuilder` emits only an
+`UnsettledCompilationTrace`; a successful `CompilationResult` requires a
+`SettledCompilationTrace`, which additionally carries the `CompilationId` and
+the settlement:
+
+* the strategy name and whether a correction was applied;
+* the initial rendered measurement;
+* the exact evicted block identifiers, in eviction order;
+* the fallback search: whether it ran, how many unique selections it visited,
+  the configured bound, which phase settled a result, and the chosen block set;
+* exactly one **final** decision per deduplicated group, with a render position
+  on every inclusion;
+* the final render order;
+* the digest and `compiledTokens` of the final string;
+* the final usage: `availableInputTokens`, `includedContentTokens`,
+  `unusedTokens`, and the signed `renderingTokenDelta`.
+
+The settlement is an overlay, not a replacement: the original filtering and
+allocation evidence stays exactly where version 1 put it, so an auditor can read
+what the allocator chose beside what the correction settled.
+
+**Settlement is orchestration, not observation.** `TraceBuilder` gains no
+`settle()` method: it still receives only successful stage evidence, never calls
+a tokenizer, and never runs a correction.
 
 **Not yet implemented and deliberately absent:**
 
-* the settled final trace — every trace this phase builds carries
-  `settled: false`, and a successful `CompilationResult` requires a settled one;
-* the final `CompilationResult` and its usage metrics;
-* the render-aware correction loop that would settle a selection;
-* a validation-failure trace envelope, which belongs to the future
-  `ContextCompiler`: `CandidateValidator` is all-or-nothing, so a failed batch has
-  no post-validation evidence to trace;
+* a validation-failure trace envelope: `CandidateValidator` is all-or-nothing, so
+  a failed batch has no post-validation evidence to trace, and a compilation that
+  fails before rendering carries structured issues rather than a trace;
 * warnings and errors as trace fields;
-* a deterministic compilation identifier;
 * trace persistence.
 
-See DEC-037.
+See DEC-037 and DEC-038.
 
 ---
 

@@ -326,6 +326,32 @@ function compareBlocks(a: ContextBlock, b: ContextBlock): number {
   );
 }
 
+/**
+ * Puts any collection of items into the one v1 render order, by their blocks.
+ *
+ * The caller's array is copied before sorting, so nothing is reordered in place
+ * (INV-ALLOC-004). The comparator is a total order over distinct blocks, so the
+ * result does not depend on the order the items arrived in and is not a
+ * sort-stability artifact (INV-DET-005).
+ *
+ * It is generic over the item because two callers hold different things.
+ * `ContextOrderer` orders `IncludedCandidateDecision` records the allocator
+ * produced; `ContextCompiler` orders bare canonical blocks of a corrected
+ * selection that **no allocator produced**, and fabricating allocation decisions
+ * for those would put a manufactured allocator verdict into the pipeline
+ * (DEC-038). Both reach the same comparator, so one selection can never order
+ * two different ways depending on which component asked (INV-DEP-003).
+ *
+ * It is internal to the compiler kernel: the package entry point never
+ * re-exports it, and no public declaration names it (INV-ADAPTER-001).
+ */
+export function orderCandidatesForRendering<TItem>(
+  items: readonly TItem[],
+  blockOf: (item: TItem) => ContextBlock,
+): readonly TItem[] {
+  return [...items].sort((a, b) => compareBlocks(blockOf(a), blockOf(b)));
+}
+
 /* -------------------------------------------------------------------------- */
 /* Orderer                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -361,8 +387,9 @@ export class ContextOrderer {
    * answers a different question and is not render order.
    */
   order(input: AllocatedCandidateSet): OrderedCandidateSet {
-    const orderedIncluded: readonly IncludedCandidateDecision[] = [...input.included].sort((a, b) =>
-      compareBlocks(a.candidate.candidate.canonicalBlock, b.candidate.candidate.canonicalBlock),
+    const orderedIncluded: readonly IncludedCandidateDecision[] = orderCandidatesForRendering(
+      input.included,
+      (decision) => decision.candidate.candidate.canonicalBlock,
     );
 
     return {

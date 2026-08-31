@@ -268,6 +268,9 @@ describe('INV-DET-003, INV-DET-004, INV-DEP-002: the renderer reads no hidden in
     expect(specifiers.sort()).toEqual([
       './canonical-json.js',
       './context-orderer.js',
+      // The shared tokenizer-port rule, so the renderer and `ContextCompiler`
+      // cannot disagree about what a usable tokenizer is (DEC-038).
+      './tokenizer-port.js',
       './validation-issues.js',
       '@ctxalloc/domain',
       '@ctxalloc/ports',

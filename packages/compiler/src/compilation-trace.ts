@@ -30,6 +30,7 @@ import type {
 import type { CandidateScore, ScoredCandidate } from './candidate-scorer.js';
 import type { ValidatedCandidateSet } from './candidate-validator.js';
 import { canonicalJson, compareCodeUnits } from './canonical-json.js';
+import type { CompilationId } from './compilation-id.js';
 import type { CompilationRequest } from './compilation-request.js';
 import type { RenderedContextAttempt } from './context-renderer.js';
 import { domainSeparatedDigest } from './digest.js';
@@ -62,19 +63,21 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
  * provider, and no tokenizer (INV-DET-001, INV-DET-003, INV-DET-004,
  * INV-DEP-002). Its only injected dependency is an explicit compiler identity.
  *
- * ## The trace is not yet a settled compilation
+ * ## The builder never settles a compilation
  *
  * The traced `RenderedContextAttempt` may report `fitsAvailableInputBudget:
- * false`. That is still a valid trace snapshot of a measured attempt, so
- * `settled` exists and Phase 14 always emits `false`: the stage evidence is
- * traced, the render attempt is measured, and no orchestration has settled the
- * compilation. A trace with `settled: false` must never be attached to a
- * successful `CompilationResult`.
+ * false`. That is still a valid snapshot of a measured attempt, so
+ * `TraceBuilder` always emits an `UnsettledCompilationTrace`: the stage evidence
+ * is traced, the render attempt is measured, and no orchestration has settled
+ * the compilation. An unsettled trace must never be attached to a successful
+ * `CompilationResult`, and schema version 2 makes that unrepresentable rather
+ * than merely forbidden (INV-TRACE-006).
  *
- * There is therefore no success or failure outcome, no final failure code, no
- * final included list, no `compiledTokens`, no `unusedTokens`, and no
- * `renderingTokenDelta`. Those belong to the future correction loop and the
- * `CompilationResult` it settles (ARCHITECTURE 7.2, METRICS 8.4, 8.6, 8.10).
+ * Nothing here therefore carries a final outcome, a final included list,
+ * `compiledTokens`, `unusedTokens`, `renderingTokenDelta`, or a compilation
+ * identifier. Those live in `CompilationTraceSettlement`, which only
+ * `ContextCompiler` can prove and only after its render-aware correction has
+ * finished (ARCHITECTURE 7.2, METRICS 8.4, 8.6, 8.10, DEC-038).
  *
  * ## Wrappers are accounted for; groups are decided
  *
@@ -92,14 +95,15 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
  * failures stay structured validation errors; wrapping them in a terminal
  * failure trace belongs to the future `ContextCompiler` (DEC-030, DEC-037).
  *
- * ## Nothing sensitive is representable in schema version 1
+ * ## Nothing sensitive is representable in schema version 2
  *
  * Full source content is not configurable in this schema version — it is simply
  * absent, which is the safest reading of INV-SEC-003. Block content, the raw
- * query, the rendered context, source metadata, block metadata, and retrieval
- * metadata have no field to travel in. Identities, digests, scope, source types,
- * source locations, decision reasons, score components, and token counts do
- * (INV-SEC-001, INV-SEC-003).
+ * query, the rendered context, the final compiled context, source metadata,
+ * block metadata, and retrieval metadata have no field to travel in, in either
+ * trace variant. Identities, digests, scope, source types, source locations,
+ * decision reasons, score components, and token counts do (INV-SEC-001,
+ * INV-SEC-003).
  */
 
 /* -------------------------------------------------------------------------- */
@@ -112,8 +116,24 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
  * Unlike the ephemeral stage-result wrappers, a trace is persistence-oriented:
  * it is meant to be stored and read back by a consumer that did not produce it,
  * so an unsupported future shape must fail clearly rather than be reinterpreted.
+ *
+ * **Version 2 adds the settlement overlay (DEC-038).** Version 1 recorded the
+ * filtering decision, the allocation decision, the allocator summary, the
+ * allocation's render order, and the measured render attempt — and named its
+ * per-group verdict `currentDisposition`, not `finalDisposition`, precisely
+ * because a render-aware correction may settle a different selection. Flipping a
+ * version 1 record's `settled` boolean to `true` would therefore publish a false
+ * audit record: it would still say the initial allocator selection was the
+ * selection that settled.
+ *
+ * `settled` being a boolean avoided a schema change merely to flip finality; it
+ * never meant the correction evidence could be omitted. Representing both the
+ * original stage evidence and the final settlement needs new persisted fields,
+ * so the version is bumped rather than the meaning of version 1 changed. No
+ * persistence adapter and no stored trace exist yet, which makes this the
+ * correct moment to bump (INV-STORE-004).
  */
-export const COMPILATION_TRACE_SCHEMA_VERSION = 1;
+export const COMPILATION_TRACE_SCHEMA_VERSION = 2;
 
 /** Preimage version of `CompilationTraceRequest.queryHash`. */
 const QUERY_HASH_VERSION = 1;
@@ -123,6 +143,26 @@ const RENDERED_CONTEXT_HASH_VERSION = 1;
 
 const QUERY_HASH_LABEL = 'ctxalloc-compilation-request-query';
 const RENDERED_CONTEXT_HASH_LABEL = 'ctxalloc-rendered-context';
+
+/**
+ * The one domain-separated digest of a rendered context string.
+ *
+ * Two components publish such a digest — this builder for the measured attempt,
+ * and `ContextCompiler` for the settled final string — and two implementations
+ * of one preimage would be free to drift, so the rule is owned once, here
+ * (INV-DEP-003, DEC-038). A consumer comparing an attempt digest with a
+ * settlement digest is therefore comparing like with like.
+ *
+ * It is internal to the compiler kernel: the package entry point never
+ * re-exports it, and no public declaration names it (INV-ADAPTER-001).
+ */
+export function hashRenderedContext(renderedContext: string): string {
+  return domainSeparatedDigest(
+    RENDERED_CONTEXT_HASH_LABEL,
+    RENDERED_CONTEXT_HASH_VERSION,
+    renderedContext,
+  );
+}
 
 /* -------------------------------------------------------------------------- */
 /* Public contract: trace shape                                                */
@@ -187,8 +227,9 @@ export interface CompilationTracePolicyIdentities {
  * `validation-and-rendering` — the same tokenizer identity and version produced
  * the validated block counts and the rendered measurement, so it explains every
  * token quantity in the trace. Only a composition root that injects the tokenizer
- * into `CandidateValidator` and `ContextRenderer` itself can establish this, and
- * no such component exists yet: **Phase 14 never emits this value.**
+ * into `CandidateValidator` and `ContextRenderer` itself can establish this.
+ * `ContextCompiler` is that root and owns both injections, so a settled trace
+ * carries this value and an unsettled one never can (DEC-038).
  */
 export type CompilationTraceTokenizerCoverage =
   'rendering-attempt-only' | 'validation-and-rendering';
@@ -236,6 +277,34 @@ export interface CompilationTraceComposition {
   readonly tokenizer: TraceIdentity;
   readonly tokenizerCoverage: CompilationTraceTokenizerCoverage;
   readonly renderer: TraceIdentity;
+}
+
+/**
+ * The composition of an unsettled snapshot: rendering coverage only.
+ *
+ * `TraceBuilder` observes one render attempt, which is the only place a
+ * tokenizer identity is visible from its input, so the recorded identity
+ * explains `rendering.renderedTokens` and nothing else. The literal is part of
+ * the type rather than a runtime convention, so an unsettled trace cannot claim
+ * the stronger coverage even by mistake (DEC-037, DEC-038).
+ */
+export interface UnsettledCompilationTraceComposition extends CompilationTraceComposition {
+  readonly tokenizerCoverage: 'rendering-attempt-only';
+}
+
+/**
+ * The composition of a settled trace: one tokenizer explains every quantity.
+ *
+ * `ContextCompiler` constructs `CandidateValidator` and `ContextRenderer` from
+ * the one configured tokenizer it owns, and measures every render-aware
+ * correction attempt with that same object, so the identity recorded here
+ * explains the validated block counts, the rendered attempt, and the settled
+ * `compiledTokens` alike. That is what makes the signed `renderingTokenDelta` of
+ * METRICS 8.6 a defined quantity rather than the gap between two vocabularies
+ * (DEC-038).
+ */
+export interface SettledCompilationTraceComposition extends CompilationTraceComposition {
+  readonly tokenizerCoverage: 'validation-and-rendering';
 }
 
 /**
@@ -480,24 +549,227 @@ export interface CompilationTraceTotals {
   readonly excludedCanonicalContentTokens: number;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Public contract: final settlement                                           */
+/* -------------------------------------------------------------------------- */
+
 /**
- * One complete compilation trace: a versioned, serializable snapshot.
+ * How one group finally stands, for the selection that was actually returned.
+ *
+ * This is deliberately a different vocabulary from `CompilationTraceDisposition`
+ * even though the three words coincide: that one describes the traced attempt,
+ * this one describes the settlement. Keeping them apart is the whole point of
+ * schema version 2 (DEC-038).
+ */
+export type CompilationTraceFinalDisposition = 'filtered' | 'included' | 'excluded';
+
+/**
+ * A group the filtering policy removed before allocation ever saw it.
+ *
+ * Correction cannot bring such a group back: eligibility is a precondition of
+ * selection, and every candidate the correction may choose comes from
+ * `FilteredCandidateSet.eligible` (INV-ALLOC-002).
+ */
+export interface CompilationTraceFinalFilteredDecision {
+  readonly blockId: ContextBlockId;
+  readonly disposition: 'filtered';
+  readonly reason: 'FILTERED_POLICY';
+}
+
+/**
+ * A group in the settled selection, with its exact position in the final render.
+ *
+ * `renderPosition` addresses the **final** rendered string, not the traced
+ * attempt: the two differ whenever a correction was applied. Positions cover
+ * `0 ... n - 1` exactly once across every final inclusion (INV-TRACE-004).
+ */
+export interface CompilationTraceFinalIncludedDecision {
+  readonly blockId: ContextBlockId;
+  readonly disposition: 'included';
+  /**
+   * Why this group is in the settled selection.
+   *
+   * The first three mirror the allocator's own vocabulary and are used when the
+   * settled selection is the allocator's, or the allocator's minus a safe
+   * eviction prefix, or a hard base whose non-required members were chosen
+   * specifically to satisfy a category minimum.
+   *
+   * `INCLUDED_RENDER_AWARE_CORRECTION` is used for a non-required group the
+   * **rescue** search selected. A rescue selection may carry optional surplus
+   * beyond every category minimum, and asking which of its members "is" the
+   * minimum has no non-arbitrary answer, so the correction claims all of them
+   * as its own rather than attributing one to a rule it did not apply
+   * (DEC-038).
+   */
+  readonly reason:
+    | 'INCLUDED_REQUIRED'
+    | 'INCLUDED_CATEGORY_MINIMUM'
+    | 'INCLUDED_SCORE_ORDER'
+    | 'INCLUDED_RENDER_AWARE_CORRECTION';
+  readonly renderPosition: number;
+}
+
+/**
+ * A group absent from the settled selection, and which decision left it out.
+ *
+ * `EXCLUDED_INITIAL_ALLOCATION` — `BudgetAllocator` did not select it and the
+ * correction never reconsidered it. `EXCLUDED_RENDER_AWARE_CORRECTION` — the
+ * correction itself decided against it, either by evicting an allocator
+ * inclusion or by settling a hard base that does not contain it.
+ *
+ * Neither is `EXCLUDED_BUDGET_EXHAUSTED`. That code belongs to the allocator's
+ * canonical block-content decision and would be false here: a correction
+ * exclusion is a statement about the exact rendered string, and the content
+ * budget may have had room to spare (DEC-033, DEC-038).
+ *
+ * `initialAllocationReason` is present exactly when the allocator itself
+ * excluded the group, so its original verdict stays readable beside the final
+ * one instead of being overwritten by it.
+ */
+export interface CompilationTraceFinalExcludedDecision {
+  readonly blockId: ContextBlockId;
+  readonly disposition: 'excluded';
+  readonly reason: 'EXCLUDED_INITIAL_ALLOCATION' | 'EXCLUDED_RENDER_AWARE_CORRECTION';
+  readonly initialAllocationReason?: 'EXCLUDED_CATEGORY_MAXIMUM' | 'EXCLUDED_BUDGET_EXHAUSTED';
+}
+
+/**
+ * The one final decision every deduplicated group carries (INV-TRACE-001).
+ *
+ * The union is discriminated on `disposition` and `reason` together, so an
+ * impossible pairing — a filtered group carrying a render position, an inclusion
+ * carrying an exclusion reason — is not expressible.
+ */
+export type CompilationTraceFinalDecision =
+  | CompilationTraceFinalFilteredDecision
+  | CompilationTraceFinalIncludedDecision
+  | CompilationTraceFinalExcludedDecision;
+
+/**
+ * Which phase of the bounded fallback search settled a selection, when one did.
+ *
+ * `hard-base` — a minimal policy-valid base: every required group plus exactly
+ * enough non-required candidates to satisfy each category minimum, and no
+ * surplus. This phase runs first and preserves the allocator's own preference
+ * order.
+ *
+ * `policy-selection-rescue` — a policy-valid selection that is not minimal. It
+ * runs only after **every** hard base has failed, because tokenization is not
+ * monotonic: a strict superset of an over-budget selection may render within the
+ * budget (DEC-038).
+ */
+export type CompilationTraceFallbackPhase = 'hard-base' | 'policy-selection-rescue';
+
+/**
+ * What the bounded fallback search did, if it ran.
+ *
+ * `selectionsVisited` counts **unique** selections the fallback visited, keyed
+ * by their exact canonical block-identifier set. A selection whose canonical
+ * content sum exceeds the ceiling is counted and never rendered; a selection the
+ * fallback reaches twice — a hard base the rescue enumeration also produces, for
+ * instance — is counted once. `maxSelections` is the configured bound.
+ *
+ * `phase` and `chosenBlockIds` are absent when the fallback did not run or did
+ * not settle a result, and present together when it did. The identifiers are
+ * ordered ascending, never by `Map` or `Set` insertion, so the record is
+ * reproducible (INV-DET-002).
+ */
+export interface CompilationTraceFallbackSearch {
+  readonly used: boolean;
+  readonly selectionsVisited: number;
+  readonly maxSelections: number;
+  readonly phase?: CompilationTraceFallbackPhase;
+  readonly chosenBlockIds?: readonly ContextBlockId[];
+}
+
+/** The render order of the settled selection, by stable block identifier. */
+export interface CompilationTraceSettlementOrdering {
+  readonly orderedBlockIds: readonly ContextBlockId[];
+}
+
+/**
+ * The settled rendering, by digest and count.
+ *
+ * The final string itself is absent for the same reason the attempt's is: it
+ * contains every included block's content verbatim, which a persisted trace must
+ * not carry by default (INV-SEC-003). It lives only in
+ * `CompilationResult.compiledContext`.
+ *
+ * `compiledTokens` is METRICS 8.4 exactly: the tokenizer count of the final
+ * complete rendered string, never a sum of block counts.
+ */
+export interface CompilationTraceSettlementRendering {
+  readonly renderedContextHash: string;
+  readonly compiledTokens: number;
+}
+
+/**
+ * The final token usage of the settled selection.
+ *
+ * ```text
+ * unusedTokens        = availableInputTokens - compiledTokens
+ * renderingTokenDelta = compiledTokens - includedContentTokens
+ * ```
+ *
+ * `renderingTokenDelta` is signed and is never clamped (METRICS 8.6). It is a
+ * defined quantity here only because `ContextCompiler` proved one tokenizer
+ * identity produced both operands — `composition.tokenizerCoverage` is
+ * `validation-and-rendering` on every settled trace.
+ */
+export interface CompilationTraceSettlementUsage {
+  readonly availableInputTokens: number;
+  readonly includedContentTokens: number;
+  readonly unusedTokens: number;
+  readonly renderingTokenDelta: number;
+}
+
+/**
+ * The complete evidence of the render-aware settlement (DEC-038).
+ *
+ * It is an **overlay**, not a replacement. The original filtering decisions, the
+ * original allocation decisions, the allocator summary, the allocation's render
+ * order, and the measured initial attempt all stay exactly where schema
+ * version 1 put them; this record states separately what the correction then
+ * did. Deleting the allocator's evidence because the final selection differs
+ * would destroy the very comparison an audit needs.
+ *
+ * `evictedBlockIds` is the exact prefix of `allocation.optionalEvictionOrder`
+ * the correction removed, in that order — never sorted, never reordered.
+ */
+export interface CompilationTraceSettlement {
+  readonly strategy: 'render-aware-v1';
+  readonly correctionApplied: boolean;
+
+  /** `rendering.renderedTokens` of the traced attempt, restated for readability. */
+  readonly initialRenderedTokens: number;
+
+  readonly evictedBlockIds: readonly ContextBlockId[];
+  readonly fallbackSearch: CompilationTraceFallbackSearch;
+
+  /** Exactly one decision per deduplicated group, in trace group order. */
+  readonly decisions: readonly CompilationTraceFinalDecision[];
+
+  readonly ordering: CompilationTraceSettlementOrdering;
+  readonly rendering: CompilationTraceSettlementRendering;
+  readonly usage: CompilationTraceSettlementUsage;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Public contract: the trace record                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Everything both trace variants carry: the stage evidence of one compilation.
  *
  * The record survives `JSON.parse(JSON.stringify(trace))` with deep equality. No
  * `Date`, `Map`, `Set`, class instance, `Error`, function, or external SDK type
  * appears anywhere in it, and an absent optional property is genuinely absent
  * rather than present with an `undefined` value.
- *
- * `settled` is a `boolean` rather than the literal `false` this phase emits, so a
- * later phase can publish a settled trace without changing the persisted schema
- * merely to flip finality.
  */
-export interface CompilationTrace {
+export interface CompilationTraceBase {
   readonly schemaVersion: typeof COMPILATION_TRACE_SCHEMA_VERSION;
-  readonly settled: boolean;
 
   readonly request: CompilationTraceRequest;
-  readonly composition: CompilationTraceComposition;
   readonly sources: readonly CompilationTraceSource[];
 
   readonly groups: readonly CompilationTraceGroup[];
@@ -507,6 +779,44 @@ export interface CompilationTrace {
   readonly rendering: CompilationTraceRendering;
   readonly totals: CompilationTraceTotals;
 }
+
+/**
+ * A snapshot of one measured attempt that nothing has settled.
+ *
+ * `TraceBuilder` emits exactly this, always. `settlement` and `compilationId`
+ * are declared as optional `never` rather than merely omitted, so an unsettled
+ * value cannot acquire settlement evidence by a structural assignment and cannot
+ * be passed where a settled trace is required (INV-TRACE-006, DEC-038).
+ */
+export interface UnsettledCompilationTrace extends CompilationTraceBase {
+  readonly settled: false;
+  readonly composition: UnsettledCompilationTraceComposition;
+  readonly compilationId?: never;
+  readonly settlement?: never;
+}
+
+/**
+ * The trace of a selection `ContextCompiler` proved, rendered, and returned.
+ *
+ * Both `compilationId` and `settlement` are required: a settled trace with no
+ * settlement evidence, or with no identity for the invocation that produced it,
+ * is exactly the false audit record schema version 2 exists to prevent.
+ */
+export interface SettledCompilationTrace extends CompilationTraceBase {
+  readonly settled: true;
+  readonly compilationId: CompilationId;
+  readonly composition: SettledCompilationTraceComposition;
+  readonly settlement: CompilationTraceSettlement;
+}
+
+/**
+ * One complete compilation trace: a versioned, serializable snapshot.
+ *
+ * The union is discriminated on `settled`, so a consumer that narrows on it
+ * reaches the settlement evidence with no cast, and a successful
+ * `CompilationResult` can require the settled variant at the type level.
+ */
+export type CompilationTrace = UnsettledCompilationTrace | SettledCompilationTrace;
 
 /* -------------------------------------------------------------------------- */
 /* Public contract: configuration and input                                    */
@@ -1597,7 +1907,7 @@ export class TraceBuilder {
    * @throws {CompilationTraceError} when the evidence contradicts itself or the
    * projected totals do not reconcile.
    */
-  build(input: CompilationTraceBuildInput): CompilationTrace {
+  build(input: CompilationTraceBuildInput): UnsettledCompilationTrace {
     const evidence = evidenceOf(input);
 
     const coherence = [...checkRequestEvidence(evidence), ...checkStageEvidence(evidence)];
@@ -1641,10 +1951,11 @@ export class TraceBuilder {
       throw new CompilationTraceError(issues);
     }
 
-    const trace: CompilationTrace = {
+    const trace: UnsettledCompilationTrace = {
       schemaVersion: COMPILATION_TRACE_SCHEMA_VERSION,
-      // Phase 14 traces one measured attempt. Nothing has settled a compilation,
-      // and no correction loop exists to settle one (ARCHITECTURE 7.2).
+      // The builder traces one measured attempt and nothing more. Settling a
+      // compilation belongs to `ContextCompiler`, which owns the correction and
+      // the same-tokenizer composition (ARCHITECTURE 7.2, DEC-038).
       settled: false,
       request: {
         id: request.id,
@@ -1679,9 +1990,9 @@ export class TraceBuilder {
         // Always `rendering-attempt-only`. The render attempt is the only place a
         // tokenizer identity is observable from this input, so the identity above
         // explains `rendering.renderedTokens` and nothing else. Claiming more
-        // would need a composition root that injected one tokenizer into
-        // `CandidateValidator` and `ContextRenderer` alike, and none exists yet
-        // (DEC-035, DEC-036, DEC-037).
+        // needs a composition root that injected one tokenizer into
+        // `CandidateValidator` and `ContextRenderer` alike, which is
+        // `ContextCompiler` and not this builder (DEC-035, DEC-036, DEC-037).
         tokenizerCoverage: 'rendering-attempt-only',
         renderer: { id: rendered.rendererId, version: rendered.rendererVersion },
       },
@@ -1706,11 +2017,7 @@ export class TraceBuilder {
         ),
       },
       rendering: {
-        renderedContextHash: domainSeparatedDigest(
-          RENDERED_CONTEXT_HASH_LABEL,
-          RENDERED_CONTEXT_HASH_VERSION,
-          rendered.renderedContext,
-        ),
+        renderedContextHash: hashRenderedContext(rendered.renderedContext),
         renderedTokens: rendered.renderedTokens,
         fitsAvailableInputBudget: rendered.fitsAvailableInputBudget,
       },
@@ -1914,4 +2221,64 @@ function checkRenderPositions(groups: readonly CompilationTraceGroup[]): Validat
       `render positions must cover 0 to ${String(includedCount - 1)} exactly once, one for each included group`,
     ),
   ];
+}
+
+/* -------------------------------------------------------------------------- */
+/* Settlement                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Projects one unsettled snapshot plus proven settlement evidence into a settled
+ * trace (DEC-038).
+ *
+ * The snapshot is **not mutated**. A new value is built from its fields, so the
+ * caller's record — and any consumer already holding it — is unchanged
+ * (INV-ALLOC-004). Every stage fact travels through untouched: the original
+ * filtering and allocation decisions, the allocator summary, the allocation's
+ * render order, the measured attempt, and the reconciliation totals all keep
+ * exactly the values `TraceBuilder` observed. Only three things change:
+ * `settled` becomes `true`, the compilation identity is bound, and the
+ * settlement overlay is added.
+ *
+ * `tokenizerCoverage` is upgraded to `validation-and-rendering` because only
+ * `ContextCompiler` calls this, and only after it has validated candidate blocks
+ * and measured every rendered selection with the one tokenizer it owns. The
+ * upgrade is never inferred from matching identifiers or matching numbers: it is
+ * a property of the composition, not of the evidence (DEC-037).
+ *
+ * This function decides nothing. It performs no correction, no measurement, no
+ * ordering, and no tokenization; the caller supplies evidence it has already
+ * proven (INV-TRACE-006).
+ *
+ * Settlement deliberately does **not** become a public `TraceBuilder` method:
+ * the builder is observational, and the correction that produces this evidence
+ * belongs to orchestration. The helper is internal to the compiler kernel — the
+ * package entry point never re-exports it, and no public declaration names it
+ * (INV-ADAPTER-001).
+ */
+export function settleCompilationTrace(
+  snapshot: UnsettledCompilationTrace,
+  compilationId: CompilationId,
+  settlement: CompilationTraceSettlement,
+): SettledCompilationTrace {
+  return {
+    schemaVersion: snapshot.schemaVersion,
+    settled: true,
+    compilationId,
+    request: snapshot.request,
+    composition: {
+      compiler: snapshot.composition.compiler,
+      policy: snapshot.composition.policy,
+      tokenizer: snapshot.composition.tokenizer,
+      tokenizerCoverage: 'validation-and-rendering',
+      renderer: snapshot.composition.renderer,
+    },
+    sources: snapshot.sources,
+    groups: snapshot.groups,
+    allocation: snapshot.allocation,
+    ordering: snapshot.ordering,
+    rendering: snapshot.rendering,
+    totals: snapshot.totals,
+    settlement,
+  };
 }

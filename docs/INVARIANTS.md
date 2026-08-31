@@ -63,6 +63,13 @@ The compiler must not silently guess missing reserve values.
 
 If the final rendered output exceeds the available budget, the compilation must not return success.
 
+**Discharged by `ContextCompiler` (DEC-038).** It validates `compiledTokens <=
+availableTokens` against the exact final rendered string before returning a
+`CompilationResult`, and raises a structured failure instead of returning one
+that would violate this. No earlier stage may claim it: `BudgetAllocator` proves
+only the canonical block-content ceiling, and a `RenderedContextAttempt` that
+does not fit is a valid measurement rather than a success.
+
 ---
 
 ## INV-BUDGET-002: The Rendered Result Is the Source of Truth
@@ -81,6 +88,13 @@ The sum of precomputed block token counts is not sufficient for final validation
 
 The complete rendered string must be tokenized before success is returned.
 
+**Discharged by `ContextCompiler` (DEC-038).** Every selection whose rendered
+feasibility is decided — the initial attempt, every eviction prefix, the
+required-only probe, every hard base, and every rescue selection — is ordered,
+rendered, and tokenized as **one complete string**. No per-block rendered cost is
+computed, cached, or subtracted, because tokenization is neither additive nor
+monotonic (METRICS 8.6).
+
 ---
 
 ## INV-BUDGET-003: Required Blocks Are Never Silently Removed
@@ -91,6 +105,11 @@ A block marked as required must be either:
 2. reported as the cause of a structured compilation failure.
 
 A required block must not be excluded to repair a token budget overrun.
+
+**Preserved through every correction path (DEC-038).**
+`optionalEvictionOrder` contains no required block, so no eviction prefix can
+remove one; every hard-minimum base contains every required eligible group by
+construction; and the result validation rejects a selection missing one.
 
 ---
 
@@ -112,6 +131,39 @@ REQUIRED_CONTENT_EXCEEDS_BUDGET
 ```
 
 The compiler must not return a partial result as a successful compilation.
+
+**Both forms are now reported (DEC-038).** `BudgetAllocator` raises the
+block-content form, where required `tokenCount` alone exceeds the ceiling. That
+one is definitive before anything is rendered, and for a reason that owes nothing
+to rendering: the canonical block-content ceiling is an **independent allocation
+constraint**, so required content exceeding it is an allocation impossibility
+under the active policy. It is *not* the claim that adding rendering overhead can
+only make it worse — a complete rendering may tokenize to fewer tokens than the
+block counts sum to, and render compression is still not permission to violate
+the content-budget contract.
+
+`ContextCompiler` raises the **rendered** form under the same issue code and
+category.
+
+**The rendered form is an exhaustion, not a lower bound.** Tokenization is not
+monotonic, so a required-only selection over the budget does **not** prove that
+no selection containing the required blocks fits: adding an optional block can
+lower the count of the complete rendered string. The compiler therefore treats
+the required-only render as a measurement, and raises this failure only after
+every policy-valid final selection containing every required block has been
+ordered, rendered, tokenized, and found over budget. Its meaning is exactly that
+exhaustion.
+
+A failure where a non-required category minimum is still active is a
+**different** failure (`rendered_hard_constraints_exceed_budget`): category
+minimums are policy constraints, not required-block attributes, and calling one a
+required-content failure would misdirect the caller. Both report the same
+measured fact and differ only in which constraint made the surviving selections
+mandatory.
+
+**A search that stopped at its configured bound is neither.** It is reported as
+`correction_search_limit_exceeded`, and feasibility remains unknown: an
+approximation must never be presented as a proof.
 
 ---
 
@@ -140,6 +192,10 @@ unusedTokens = availableInputTokens - compiledTokens
 ```
 
 The value must not be estimated.
+
+**Producer: `ContextCompiler` (DEC-038).** It publishes the exact difference on
+`CompilationResult.usage` and on the settled trace, and verifies both against the
+measured `compiledTokens` before returning.
 
 ---
 
@@ -195,7 +251,23 @@ The compiler kernel must not use:
 
 Request identifiers may be generated outside the kernel.
 
-A deterministic compilation fingerprint must be derived from canonical request data.
+Two deterministic identities exist, and they answer different questions
+(DEC-037, DEC-038):
+
+* the **request fingerprint** is derived from canonical request data, and from
+  nothing else. It identifies the exact validated caller request value.
+* the **compilation identifier** binds that request fingerprint **plus** the
+  explicit composition inputs that can affect compilation: the compiler identity
+  and version, the tokenizer identity and version, the renderer identity and
+  version, the correction strategy and version, and the configured search bound.
+
+A compilation identifier cannot be request-only. Identical requests compiled
+under different tokenizer or compiler configuration are different deterministic
+inputs, and a request-only identifier would collide across them.
+
+Neither identity may derive from a random value, a clock, a git revision, a
+hostname, a process identifier, or any other environment state. This adds
+precision; it weakens no part of the no-randomness rule.
 
 ---
 
@@ -769,6 +841,12 @@ For an **unsettled** trace these are current-selection reconciliation totals, no
 final `CompilationResult` metrics: a later correction may settle a different
 selection.
 
+A **settled** trace carries these unchanged — they still describe the initial
+selection — plus a separate set of final usage values under `settlement`, which
+equal `CompilationResult.usage` exactly (METRICS 8.12.1, DEC-038). Keeping both
+is what lets an auditor read what the allocator chose beside what the correction
+settled; collapsing them would destroy that comparison.
+
 ---
 
 ## INV-TRACE-004: Trace Matches the Returned Context
@@ -780,8 +858,16 @@ Every included trace decision must appear in the rendered output unless policy e
 For an **unsettled** trace the rule applies to the attempt that was traced: every
 block in the current rendered attempt corresponds to a group whose
 `currentDisposition` is included, and every currently included group appears in
-that attempt. For a **settled** `CompilationResult` trace the same rule applies to
-the final selection.
+that attempt.
+
+For a **settled** trace the same rule applies additionally to the settlement and
+the returned result (DEC-038): every block in `CompilationResult.compiledContext`
+corresponds to a settlement decision whose disposition is included; every such
+decision appears in that string; `settlement.ordering.orderedBlockIds` equals
+`CompilationResult.includedBlocks` in order; and the final render positions cover
+`0 ... n - 1` exactly once. The unsettled rule still holds over the initial
+attempt the same trace records, so the two selections are both reconcilable and
+distinguishable.
 
 The current rendering policy defines no non-rendering metadata, so the exception
 above has no instance today and none may be invented for one.

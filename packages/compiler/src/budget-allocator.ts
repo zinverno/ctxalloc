@@ -51,11 +51,20 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
  * AllocatedCandidateSet.optionalEvictionOrder}. That loop is not implemented
  * here.
  *
- * One thing is already definitive before rendering: block content that alone
- * exceeds the available ceiling can never fit once overhead is added. Required
- * block content over the ceiling therefore fails immediately (INV-BUDGET-004).
- * The converse does not hold — required content that fits here is not proof that
- * the rendered required context will fit.
+ * One thing is already definitive before rendering, and for a reason that owes
+ * nothing to rendering: the canonical block-content ceiling is an **independent
+ * allocation constraint**, not a prediction of the rendered size. Required block
+ * content over that ceiling is an allocation impossibility under the active
+ * policy, so it fails immediately (INV-BUDGET-004).
+ *
+ * That is deliberately *not* the argument "adding overhead can only make it
+ * worse". Token counting promises the exact count of one supplied string and
+ * nothing more, so a complete rendering may count fewer tokens than the block
+ * counts sum to. Render compression is simply not permission to violate the
+ * content-budget contract this stage enforces.
+ *
+ * The converse does not hold either — required content that fits here is not
+ * proof that the rendered required context will fit.
  *
  * What it deliberately does not do: it does not retrieve candidates, revalidate
  * them, re-count tokens, re-hash content, revalidate scope, deduplicate,
@@ -244,13 +253,14 @@ export interface AllocatedCandidateSet {
    * infeasible" would be wrong.
    *
    * So when protected category-minimum blocks remain and rendering still
-   * overruns, future orchestration must either reconsider those hard-minimum
-   * choices against actual rendered cost or otherwise prove that no allocation
-   * fits, before returning a structured failure. It may declare infeasibility
-   * immediately only when the remaining protected set is unavoidable under the
-   * active policy — required content once every evictable optional block is gone,
-   * for instance. Phase 10 implements no render-aware replacement or
-   * reallocation.
+   * overruns, orchestration must reconsider those hard-minimum choices against
+   * actual rendered cost, and then the wider policy-valid space, before
+   * returning a structured failure. It may **not** declare infeasibility merely
+   * because this order is exhausted, and it may not treat the surviving
+   * selection as a floor: tokenization is not monotonic, so a selection that
+   * adds blocks back can render smaller than one that does not. Only exhausting
+   * the policy-valid selections supports an infeasibility claim (DEC-038). This
+   * stage implements no render-aware replacement or reallocation.
    */
   readonly optionalEvictionOrder: readonly ContextBlockId[];
 }

@@ -50,23 +50,33 @@
  * string the source of truth, and `ContextRenderer` is the only stage that
  * tokenizes one — but a `RenderedContextAttempt` may exceed the budget and simply
  * report `fitsAvailableInputBudget: false`. Consuming the eviction order,
- * re-ordering, re-rendering, and proving final infeasibility belong to the future
- * orchestration loop, so no stage publishes a final `compiledTokens`,
- * `unusedTokens`, or `CompilationResult` yet.
+ * re-ordering, re-rendering, and proving final infeasibility belong to
+ * `ContextCompiler`, not to the stage that measured.
  *
  * Tracing observes; it does not settle. `TraceBuilder` receives evidence the
  * components already produced, verifies it belongs to one coherent pipeline, and
- * copies it into a versioned snapshot — so every trace this phase builds carries
- * `settled: false`, and none may be attached to a successful `CompilationResult`
- * (INV-TRACE-006). `fingerprintCompilationRequest` identifies the exact validated
- * request value and is deliberately **not** a compilation identifier: the
- * composition inputs it excludes are recorded beside it in the trace (DEC-036,
- * DEC-037).
+ * copies it into a versioned snapshot — so every trace it builds is an
+ * `UnsettledCompilationTrace`, and none may be attached to a successful
+ * `CompilationResult` (INV-TRACE-006). `fingerprintCompilationRequest` identifies
+ * the exact validated request value and is deliberately **not** a compilation
+ * identifier: the composition inputs it excludes are bound by `CompilationId`
+ * instead (DEC-036, DEC-037, DEC-038).
  *
- * Nothing composes the stages: `ContextCompiler` does not exist, and neither does
- * the correction loop, the settled final trace, `CompilationResult`, nor a
- * deterministic compilation identifier. They are later phases and are
- * deliberately absent, as is the candidate provider port, which belongs outside
+ * `ContextCompiler` composes the stages and closes the kernel (DEC-038). It owns
+ * one configured `Tokenizer` and injects that same object into
+ * `CandidateValidator` and into every rendered measurement, which is what makes
+ * `tokenizerCoverage: 'validation-and-rendering'` provable. It settles the
+ * rendered budget by evicting the allocator's declared safe surplus along
+ * `optionalEvictionOrder`, and, when the protected hard-constraint base is itself
+ * the problem, by an explicitly bounded deterministic search over policy-valid
+ * category-minimum bases — measuring one exact complete rendered string for every
+ * selection it decides. It returns a `CompilationResult` carrying the final
+ * string, the final blocks in render order, exact usage, a deterministic
+ * `CompilationId`, and a `SettledCompilationTrace`.
+ *
+ * The compiler kernel is complete; the product is not. Retrieval, `SourceReader`,
+ * persistence, the CLI, the HTTP API, model execution, and the evaluation harness
+ * remain later phases, as does the candidate provider port, which belongs outside
  * the kernel entirely.
  */
 
@@ -167,13 +177,21 @@ export {
   type CompilationTrace,
   type CompilationTraceAllocation,
   type CompilationTraceAllocationDecision,
+  type CompilationTraceBase,
   type CompilationTraceBuildInput,
   type CompilationTraceCanonicalBlock,
   type CompilationTraceComposition,
   type CompilationTraceDisposition,
   type CompilationTraceExcludedDecision,
+  type CompilationTraceFallbackPhase,
+  type CompilationTraceFallbackSearch,
   type CompilationTraceFilteredDecision,
   type CompilationTraceFilteringDecision,
+  type CompilationTraceFinalDecision,
+  type CompilationTraceFinalDisposition,
+  type CompilationTraceFinalExcludedDecision,
+  type CompilationTraceFinalFilteredDecision,
+  type CompilationTraceFinalIncludedDecision,
   type CompilationTraceGroup,
   type CompilationTraceIncludedDecision,
   type CompilationTraceIssueCode,
@@ -186,12 +204,34 @@ export {
   type CompilationTraceRequiredEligibleDecision,
   type CompilationTraceRetrieval,
   type CompilationTraceRetrievalScore,
+  type CompilationTraceSettlement,
+  type CompilationTraceSettlementOrdering,
+  type CompilationTraceSettlementRendering,
+  type CompilationTraceSettlementUsage,
   type CompilationTraceSource,
   type CompilationTraceTokenizerCoverage,
   type CompilationTraceTotals,
+  type SettledCompilationTrace,
+  type SettledCompilationTraceComposition,
   type TraceBuilderConfig,
   type TraceIdentity,
+  type UnsettledCompilationTrace,
+  type UnsettledCompilationTraceComposition,
 } from './compilation-trace.js';
+export {
+  COMPILATION_RESULT_SCHEMA_VERSION,
+  CONTEXT_COMPILER_CONFIG_SCHEMA_VERSION,
+  ContextCompilationError,
+  ContextCompiler,
+  RENDER_AWARE_CORRECTION_STRATEGY,
+  RENDER_AWARE_CORRECTION_VERSION,
+  type CompilationResult,
+  type CompilationResultUsage,
+  type ContextCompilationIssueCode,
+  type ContextCompilationStage,
+  type ContextCompilerConfig,
+} from './context-compiler.js';
+export { COMPILATION_ID_VERSION, type CompilationId } from './compilation-id.js';
 export {
   COMPILATION_POLICY_SCHEMA_VERSION,
   CompilationPolicyError,
