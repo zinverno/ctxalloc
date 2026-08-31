@@ -42,6 +42,8 @@ const DECLARATIONS = [
   'packages/compiler/dist/compilation-request.d.ts',
   'packages/compiler/dist/compilation-trace.d.ts',
   'packages/compiler/dist/request-fingerprint.d.ts',
+  'packages/compiler/dist/compilation-id.d.ts',
+  'packages/compiler/dist/context-compiler.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -1238,13 +1240,13 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './compilation-requ
 requireContains('packages/compiler/dist/compilation-trace.d.ts', 'interface CompilationTrace');
 requireContains(
   'packages/compiler/dist/compilation-trace.d.ts',
-  'COMPILATION_TRACE_SCHEMA_VERSION = 1',
+  'COMPILATION_TRACE_SCHEMA_VERSION = 2',
 );
 requireContains('packages/compiler/dist/compilation-trace.d.ts', 'declare class TraceBuilder');
 requireContains('packages/compiler/dist/compilation-trace.d.ts', 'constructor(config: unknown);');
 requireContains(
   'packages/compiler/dist/compilation-trace.d.ts',
-  'build(input: CompilationTraceBuildInput): CompilationTrace;',
+  'build(input: CompilationTraceBuildInput): UnsettledCompilationTrace;',
 );
 requireContains(
   'packages/compiler/dist/compilation-trace.d.ts',
@@ -1273,13 +1275,84 @@ for (const member of [
 ]) {
   requireContains('packages/compiler/dist/compilation-trace.d.ts', member);
 }
-// The schema version is the exact literal 1, and finality is a boolean so a
-// later phase can settle a trace without changing the persisted schema.
+// The schema version is the exact literal 2, and the two variants are
+// discriminated on `settled`: an unsettled trace can carry no settlement and no
+// compilation identity, and a settled one requires both (DEC-038).
 requireContains(
   'packages/compiler/dist/compilation-trace.d.ts',
   'readonly schemaVersion: typeof COMPILATION_TRACE_SCHEMA_VERSION;',
 );
-requireContains('packages/compiler/dist/compilation-trace.d.ts', 'readonly settled: boolean;');
+for (const member of [
+  'interface CompilationTraceBase',
+  'interface UnsettledCompilationTrace extends CompilationTraceBase',
+  'readonly settled: false;',
+  'readonly compilationId?: never;',
+  'readonly settlement?: never;',
+  'interface SettledCompilationTrace extends CompilationTraceBase',
+  'readonly settled: true;',
+  'readonly compilationId: CompilationId;',
+  'readonly settlement: CompilationTraceSettlement;',
+  'type CompilationTrace = UnsettledCompilationTrace | SettledCompilationTrace',
+  'interface UnsettledCompilationTraceComposition extends CompilationTraceComposition',
+  "readonly tokenizerCoverage: 'rendering-attempt-only';",
+  'interface SettledCompilationTraceComposition extends CompilationTraceComposition',
+  "readonly tokenizerCoverage: 'validation-and-rendering';",
+]) {
+  requireContains('packages/compiler/dist/compilation-trace.d.ts', member);
+}
+
+// The settlement is the only place a settled token quantity may appear.
+for (const member of [
+  'interface CompilationTraceSettlement',
+  "readonly strategy: 'render-aware-v1';",
+  'readonly correctionApplied: boolean;',
+  'readonly initialRenderedTokens: number;',
+  'readonly evictedBlockIds: readonly ContextBlockId[];',
+  'readonly hardMinimumSearch: CompilationTraceHardMinimumSearch;',
+  'readonly decisions: readonly CompilationTraceFinalDecision[];',
+  'interface CompilationTraceHardMinimumSearch',
+  'readonly combinationsVisited: number;',
+  'readonly maxCombinations: number;',
+  'readonly chosenHardBaseBlockIds?: readonly ContextBlockId[];',
+  'interface CompilationTraceSettlementRendering',
+  'readonly renderedContextHash: string;',
+  'readonly compiledTokens: number;',
+  'interface CompilationTraceSettlementUsage',
+  'readonly unusedTokens: number;',
+  'readonly renderingTokenDelta: number;',
+  'type CompilationTraceFinalDecision',
+  "reason: 'FILTERED_POLICY'",
+  "reason: 'EXCLUDED_INITIAL_ALLOCATION' | 'EXCLUDED_RENDER_AWARE_CORRECTION'",
+  'readonly renderPosition: number;',
+]) {
+  requireContains('packages/compiler/dist/compilation-trace.d.ts', member);
+}
+
+// A settled token quantity never leaks into the attempt or the snapshot totals,
+// where it would read as a final metric it is not (METRICS 8.4, 8.6, 8.10).
+{
+  const content = contents.get('packages/compiler/dist/compilation-trace.d.ts');
+  if (content !== undefined) {
+    for (const [interfaceName, forbidden] of [
+      ['CompilationTraceRendering', ['compiledTokens', 'unusedTokens', 'renderingTokenDelta']],
+      ['CompilationTraceTotals', ['compiledTokens', 'unusedTokens', 'renderingTokenDelta']],
+    ]) {
+      const start = content.indexOf(`interface ${interfaceName} {`);
+      if (start === -1) {
+        fail(`packages/compiler/dist/compilation-trace.d.ts does not declare ${interfaceName}`);
+        continue;
+      }
+      const body = content.slice(start, content.indexOf('}', start));
+      for (const name of forbidden) {
+        if (body.includes(name)) {
+          fail(
+            `packages/compiler/dist/compilation-trace.d.ts declares ${name} on ${interfaceName}`,
+          );
+        }
+      }
+    }
+  }
+}
 
 // The recorded tokenizer identity states the scope of what it explains, so a
 // reader cannot take a rendering-only identity to cover the content totals too
@@ -1293,6 +1366,138 @@ requireContains(
   "type CompilationTraceTokenizerCoverage = 'rendering-attempt-only' | 'validation-and-rendering'",
 );
 requireContains('packages/compiler/dist/index.d.ts', "} from './compilation-trace.js'");
+
+// The deterministic compilation identifier binds the request fingerprint plus
+// every explicit composition input (DEC-038).
+requireContains('packages/compiler/dist/compilation-id.d.ts', 'COMPILATION_ID_VERSION = 1');
+requireContains('packages/compiler/dist/compilation-id.d.ts', 'type CompilationId = string');
+requireContains('packages/compiler/dist/index.d.ts', "} from './compilation-id.js'");
+for (const member of [
+  'readonly compilerId: string;',
+  'readonly compilerVersion: string;',
+  'readonly tokenizerId: string;',
+  'readonly tokenizerVersion: string;',
+  'readonly rendererId: string;',
+  'readonly rendererVersion: string;',
+  'readonly correctionStrategy: string;',
+  'readonly correctionVersion: number;',
+  'readonly maxHardMinimumCombinations: number;',
+]) {
+  requireContains('packages/compiler/dist/compilation-id.d.ts', member);
+}
+
+// The composition root: one config, one Tokenizer, one CompilationResult
+// (DEC-038).
+requireContains('packages/compiler/dist/context-compiler.d.ts', 'declare class ContextCompiler');
+requireContains(
+  'packages/compiler/dist/context-compiler.d.ts',
+  'constructor(config: unknown, tokenizer: Tokenizer);',
+);
+requireContains(
+  'packages/compiler/dist/context-compiler.d.ts',
+  'compile(input: unknown): CompilationResult;',
+);
+requireContains(
+  'packages/compiler/dist/context-compiler.d.ts',
+  'CONTEXT_COMPILER_CONFIG_SCHEMA_VERSION = 1',
+);
+requireContains('packages/compiler/dist/context-compiler.d.ts', 'interface ContextCompilerConfig');
+requireContains(
+  'packages/compiler/dist/context-compiler.d.ts',
+  'readonly schemaVersion: typeof CONTEXT_COMPILER_CONFIG_SCHEMA_VERSION;',
+);
+requireContains(
+  'packages/compiler/dist/context-compiler.d.ts',
+  'readonly maxHardMinimumCombinations: number;',
+);
+requireContains('packages/compiler/dist/index.d.ts', "} from './context-compiler.js'");
+
+// The result publishes exactly the measured quantities, and a settled trace.
+requireContains(
+  'packages/compiler/dist/context-compiler.d.ts',
+  'COMPILATION_RESULT_SCHEMA_VERSION = 1',
+);
+requireContains('packages/compiler/dist/context-compiler.d.ts', 'interface CompilationResult');
+for (const member of [
+  'readonly schemaVersion: typeof COMPILATION_RESULT_SCHEMA_VERSION;',
+  'readonly compilationId: CompilationId;',
+  'readonly requestId: string;',
+  'readonly compiledContext: string;',
+  'readonly includedBlocks: readonly ContextBlock[];',
+  'readonly usage: CompilationResultUsage;',
+  'readonly trace: SettledCompilationTrace;',
+  'interface CompilationResultUsage',
+  'readonly candidateTokens: number;',
+  'readonly includedContentTokens: number;',
+  'readonly compiledTokens: number;',
+  'readonly availableTokens: number;',
+  'readonly unusedTokens: number;',
+  'readonly renderingTokenDelta: number;',
+]) {
+  requireContains('packages/compiler/dist/context-compiler.d.ts', member);
+}
+
+// One structured failure, naming the stage, carrying project-owned issues only.
+requireContains(
+  'packages/compiler/dist/context-compiler.d.ts',
+  'declare class ContextCompilationError extends Error',
+);
+for (const member of [
+  'readonly code = "CONTEXT_COMPILATION_FAILED"',
+  'readonly stage: ContextCompilationStage;',
+  'readonly issues: readonly ValidationIssue[];',
+  'readonly compilationId?: CompilationId;',
+  'readonly trace?: UnsettledCompilationTrace;',
+  'type ContextCompilationStage',
+]) {
+  requireContains('packages/compiler/dist/context-compiler.d.ts', member);
+}
+
+{
+  const content = contents.get('packages/compiler/dist/context-compiler.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const forbidden of [
+      // No reduction metric may be invented from a quantity that is not a
+      // baseline (METRICS 8.7, 8.8, DEC-038).
+      'reductionTokens',
+      'reductionRatio',
+      'baselineInputTokens',
+      'renderingOverheadTokens',
+      'budgetUtilization',
+      // The result carries no unsettled trace, and no raw excluded list.
+      'trace: UnsettledCompilationTrace',
+      'excludedBlocks',
+      // No tokenizer implementation, retrieval, model, or persistence type.
+      'O200kBaseTokenizer',
+      'FakeTokenizer',
+      'CandidateProvider',
+      'SourceReader',
+      'ModelProvider',
+      'Database',
+      'SqliteStore',
+      // The correction internals stay package-private.
+      'CorrectionCandidate',
+      'RenderMeasurement',
+      'CompilationRun',
+      'verifyResult',
+      'combinations(',
+      'cartesian',
+      'selectionKey',
+    ]) {
+      if (declarations.includes(forbidden)) {
+        fail(
+          `packages/compiler/dist/context-compiler.d.ts exposes the forbidden concept "${forbidden}"`,
+        );
+      }
+    }
+    // The optional error members are declared optional, so an absent identifier
+    // or trace is genuinely absent rather than present holding `undefined`.
+    if (!declarations.includes('readonly compilationId?: CompilationId;')) {
+      fail('packages/compiler/dist/context-compiler.d.ts must declare compilationId as optional');
+    }
+  }
+}
 
 // The request fingerprint accepts a validated CompilationRequest and is not a
 // compilation identifier (DEC-037).
@@ -1323,14 +1528,10 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './request-fingerpr
       'readonly metadata',
       'readonly title',
       'includeContent',
-      'readonly compiledTokens',
-      'readonly unusedTokens',
-      'readonly renderingTokenDelta',
-      'compilationId',
       'CompilationResult',
       'ContextCompiler',
-      // Finality is not a literal, and the disposition is current, not final.
-      'settled: false',
+      // The per-group verdict of the stage evidence stays *current*: the final
+      // one lives in the settlement, separately (DEC-038).
       'finalDisposition',
       // Coverage is never a caller assertion: the manual caller is exactly the
       // party who may miscompose the stages (DEC-037).
@@ -1355,6 +1556,7 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './request-fingerpr
     const declarations = stripComments(content);
     for (const forbidden of [
       'compilationId',
+      'CompilationId',
       'CompilationFingerprint',
       'Tokenizer',
       'compilerVersion',
@@ -1401,20 +1603,37 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './request-fingerpr
       'safeSum',
       'multisetOf',
       'GroupEvidence',
+      'hashRenderedContext',
+      'settleCompilationTrace',
+      'orderCandidatesForRendering',
+      'renderOrderedCandidates',
+      'collectTokenizerPortIssues',
+      'countTokensSafely',
+      'describeThrown',
+      'calculateCompilationId',
+      'CompilationIdComposition',
+      'verifyResult',
+      'finalDecisions',
+      'selectionKey',
+      'sumTokens',
+      'CorrectionCandidate',
+      'RenderMeasurement',
+      'CompilationRun',
     ]) {
       if (declarations.includes(internal)) {
         fail(`packages/compiler/dist/index.d.ts re-exports the internal helper "${internal}"`);
       }
     }
-    // The trace foundation is published; the orchestration that settles a
-    // compilation, and the deterministic compilation identifier it will need,
-    // are not (DEC-037).
+    // The kernel is complete; what lies outside it is not (DEC-038). The
+    // fingerprint keeps its own name, and no second spelling of an identity is
+    // published beside it.
     for (const future of [
-      'ContextCompiler',
-      'CompilationResult',
+      'CandidateProvider',
+      'SourceReader',
+      'ModelProvider',
+      'CompilationStore',
       'requestFingerprint',
       'compilationFingerprint',
-      'compilationId',
       'CompilationIdentifier',
     ]) {
       if (declarations.includes(future)) {
@@ -1493,6 +1712,8 @@ for (const relativePath of [
   'packages/compiler/dist/compilation-request.d.ts',
   'packages/compiler/dist/compilation-trace.d.ts',
   'packages/compiler/dist/request-fingerprint.d.ts',
+  'packages/compiler/dist/compilation-id.d.ts',
+  'packages/compiler/dist/context-compiler.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
@@ -1505,17 +1726,36 @@ for (const relativePath of [
       );
     }
   }
-  // No later compiler stage may appear before its phase implements it.
-  // `Deduplicator` left this list in Phase 8, `Scorer` in Phase 9,
-  // `BudgetAllocator` in Phase 10, `ContextOrderer` in Phase 11,
-  // `ContextRenderer` in Phase 12, `CandidateFilter` in Phase 13, and
-  // `TraceBuilder` in Phase 14, when each became a published stage (DEC-031,
-  // DEC-032, DEC-033, DEC-034, DEC-035, DEC-036, DEC-037). Each is therefore
-  // checked by name only where it must not appear.
-  for (const stage of ['ContextCompiler', 'CandidateProvider']) {
+  // The retrieval port belongs outside the kernel entirely and must not appear
+  // in any compiler declaration (INV-DEP-002).
+  for (const stage of ['CandidateProvider']) {
     if (declarations.includes(stage)) {
       fail(`${relativePath} declares the unimplemented stage "${stage}"`);
     }
+  }
+}
+
+// `ContextCompiler` is the composition root and no other component may name it:
+// a stage that reached for its orchestrator would invert the dependency
+// direction (DEC-038).
+for (const relativePath of [
+  'packages/compiler/dist/candidate-validator.d.ts',
+  'packages/compiler/dist/candidate-deduplicator.d.ts',
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/candidate-filter.d.ts',
+  'packages/compiler/dist/budget-allocator.d.ts',
+  'packages/compiler/dist/context-orderer.d.ts',
+  'packages/compiler/dist/context-renderer.d.ts',
+  'packages/compiler/dist/compilation-policy.d.ts',
+  'packages/compiler/dist/compilation-request.d.ts',
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'packages/compiler/dist/request-fingerprint.d.ts',
+  'packages/compiler/dist/compilation-id.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  if (stripComments(content).includes('ContextCompiler')) {
+    fail(`${relativePath} declares the composition root "ContextCompiler"`);
   }
 }
 

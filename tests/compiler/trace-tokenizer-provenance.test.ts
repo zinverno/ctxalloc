@@ -117,7 +117,7 @@ describe('DEC-037: a miscomposed pipeline is traced honestly, not repaired', () 
     // The two tokenizers genuinely disagree about the rendered string.
     expect(renderedTokens).toBeGreaterThan(built.totals.candidateTokens);
     expect(renderedTokens).not.toBe(countWords(''));
-    expect(built.schemaVersion).toBe(1);
+    expect(built.schemaVersion).toBe(2);
   });
 
   it('records the renderer-observed identity with rendering-attempt-only coverage', () => {
@@ -259,8 +259,8 @@ describe('the tokenizer coverage contract', () => {
   });
 });
 
-describe('Phase 14 never emits validation-and-rendering', () => {
-  it('assigns the weaker literal in the only place coverage is projected', () => {
+describe('TraceBuilder never emits validation-and-rendering', () => {
+  it('projects the weaker literal, and upgrades it only when settling', () => {
     const source = readFileSync(
       new URL('packages/compiler/src/compilation-trace.ts', rootUrl),
       'utf8',
@@ -268,14 +268,18 @@ describe('Phase 14 never emits validation-and-rendering', () => {
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/^\s*\/\/.*$/gm, '');
 
-    // The literal exists in the published type, and is assigned nowhere.
-    const assignments = [...source.matchAll(/tokenizerCoverage:\s*'([a-z-]+)'/g)].map(
+    // Exactly two assignments exist: the builder's snapshot, and the settlement
+    // helper `ContextCompiler` calls once it owns both tokenizer injections
+    // (DEC-038). The builder itself never reaches the stronger one.
+    const assignments = [...source.matchAll(/(?<!readonly )tokenizerCoverage:\s*'([a-z-]+)'/g)].map(
       (match) => match[1],
     );
-    expect(assignments).toEqual(['rendering-attempt-only']);
-    expect(source).not.toContain("tokenizerCoverage: 'validation-and-rendering'");
-    // The union itself still declares both, so Phase 15 needs no schema change.
-    expect(source).toContain("| 'validation-and-rendering'");
+    expect(assignments).toEqual(['rendering-attempt-only', 'validation-and-rendering']);
+
+    const build = source.slice(source.indexOf('build(input: CompilationTraceBuildInput)'));
+    const builderBody = build.slice(0, build.indexOf('export function settleCompilationTrace'));
+    expect(builderBody).not.toContain("tokenizerCoverage: 'validation-and-rendering'");
+    expect(builderBody).toContain("tokenizerCoverage: 'rendering-attempt-only'");
   });
 
   it('never produces the stronger value at runtime, under any composition', () => {

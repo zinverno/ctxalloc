@@ -83,6 +83,7 @@ A newer decision has replaced the previous one.
 | DEC-035 | Render ordered context as boundary-safe JSONL and measure the exact string | Accepted |
 | DEC-036 | Compose explicit compilation contracts and filter scored candidates before allocation | Accepted |
 | DEC-037 | Record deterministic privacy-minimized trace snapshots without changing decisions | Accepted |
+| DEC-038 | Settle the compiler by exact render measurement, safe eviction, and bounded hard-minimum search | Accepted |
 
 ---
 
@@ -3261,6 +3262,404 @@ METRICS changes: section 8.12 defines the trace reconciliation totals and separa
 ARCHITECTURE changes: section 4.1 places `TraceBuilder` in the named topology as observational and distinguishes the implemented trace foundation from the future settled trace; 5.7 records that a successful `CompilationResult` requires a settled trace and stays unimplemented; 6.7 becomes implemented with the full contract; 7.2 gains the unsettled-trace clause; correction remains future.
 
 `ContextCompiler`, the render-aware correction and reallocation loop, the settled final trace, the validation-failure trace envelope, `CompilationResult`, the final metrics, the deterministic compilation identifier, warnings, trace persistence, SQLite, retrieval, `SourceReader`, the CLI, the HTTP API, the model provider, and the evaluation harness remain later phases. **"Hard budget guarantee complete" is still not a true statement.**
+
+---
+
+## DEC-038: Settle the Compiler by Exact Render Measurement, Safe Eviction, and Bounded Hard-Minimum Search
+
+### Status
+
+Accepted
+
+### Decision
+
+`ContextCompiler` is added to `@ctxalloc/compiler` as the **composition root** of the deterministic kernel. It joins the named topology, settles the rendered budget, and returns a `CompilationResult` carrying the exact final rendered string, the exact final canonical blocks in render order, exact final token usage, a deterministic `CompilationId`, and a settled privacy-minimized audit trace.
+
+```text id="m9top"
+CompilationRequestValidator
+  -> CandidateValidator      (the one configured Tokenizer)
+  -> CandidateDeduplicator
+  -> CandidateScorer         (request.referenceTime)
+  -> CandidateFilter
+  -> BudgetAllocator         (request.budget)
+  -> ContextOrderer
+  -> ContextRenderer         (the same configured Tokenizer)
+  -> TraceBuilder            (observational snapshot)
+  -> render-aware settlement
+  -> SettledCompilationTrace
+  -> CompilationResult
+```
+
+No stage is skipped because the first render happens to fit, and no stage is reimplemented: each component keeps its own rules and this one composes them (INV-DEP-003). It is synchronous, deterministic, and offline — no clock, random value, file, environment variable, database, network resource, model, retrieval provider, or source reader (INV-DET-001, INV-DET-003, INV-DET-004, INV-DEP-002). No new external dependency is added.
+
+### One Tokenizer, Owned by the Composition Root
+
+```ts
+class ContextCompiler {
+  constructor(config: unknown, tokenizer: Tokenizer);
+  compile(input: unknown): CompilationResult;
+}
+```
+
+The compiler owns exactly **one** configured `Tokenizer` object and uses that same object for candidate block token-count validation, for the initial `ContextRenderer` measurement, and for every render-aware correction measurement. It constructs no tokenizer of its own and accepts no second one.
+
+This is the first component that can prove the stronger provenance claim, because it is the first that owns both injections:
+
+```text id="m9cov"
+tokenizerCoverage = "validation-and-rendering"
+```
+
+DEC-035 recorded that no stage contract from `ValidatedCandidateSet` through `OrderedCandidateSet` carries a tokenizer identity, so no stage could establish this on its own, and DEC-037 therefore had `TraceBuilder` always publish `rendering-attempt-only`. That is unchanged: the builder still cannot see the earlier identity. The upgrade is a property of the composition, never inferred from matching identifiers or matching numbers, so only the component that performed the injections may claim it.
+
+The consequence is that the signed `renderingTokenDelta` of METRICS 8.6 becomes a defined quantity for the first time: both operands were measured under one tokenizer identity and version.
+
+The tokenizer runtime shape check is extracted into one package-internal helper that `ContextRenderer` and `ContextCompiler` share, so the two cannot drift about what a usable tokenizer is. `ContextRenderer`'s public constructor, issue codes, and messages are unchanged. `CandidateValidator` keeps its own copy deliberately: its issues carry that stage's own `invalid_input` code and paths, and rewiring them would change a published failure contract this phase must leave untouched.
+
+### Configuration Is Explicit; Nothing Is Discovered
+
+```ts
+const CONTEXT_COMPILER_CONFIG_SCHEMA_VERSION = 1;
+
+interface ContextCompilerConfig {
+  readonly schemaVersion: 1;
+  readonly compilerId: string;
+  readonly compilerVersion: string;
+  readonly maxHardMinimumCombinations: number;
+}
+```
+
+Validation is strict: closed object, non-blank well-formed UTF-16 identities preserved exactly, no defaults, no coercion. `maxHardMinimumCombinations` is required, is a safe integer of at least one, and has no default. Nothing reads a `package.json` version, a git revision, a build-time constant, an environment variable, or a clock (INV-DET-003, INV-TRACE-005).
+
+### The Deterministic Compilation Identifier
+
+```ts
+const COMPILATION_ID_VERSION = 1;
+type CompilationId = string; // sha256:<64 lowercase hex characters>
+```
+
+The preimage is the domain-separated canonical serialization of:
+
+```text id="m9id"
+["ctxalloc-compilation-id", 1, [
+  requestFingerprint,
+  {
+    compilerId,
+    compilerVersion,
+    tokenizerId,
+    tokenizerVersion,
+    rendererId,
+    rendererVersion,
+    correctionStrategy: "render-aware-v1",
+    correctionVersion: 1,
+    maxHardMinimumCombinations
+  }
+]]
+```
+
+`fingerprintCompilationRequest` (DEC-037) answers *which exact validated caller request value was this?* This identifier answers the larger question, *which complete deterministic compiler invocation was this?* A request-only identifier would collide across runs that differ in tokenizer, compiler version, renderer, or search bound — all of which can change what is compiled (DEC-035, DEC-036, DEC-037).
+
+The whole request is deliberately **not** duplicated into the preimage: the fingerprint already binds the request identifier, scope, query, reference time, candidates, source documents, the `TokenBudget`, and the complete `CompilationPolicy` value, and restating them would create two places for one fact (INV-DEP-003).
+
+`maxHardMinimumCombinations` participates because it is a decision input, not a performance knob: it can change whether the fallback search proves a result or stops with a structured search-limit failure.
+
+Nothing random, discovered, or environmental participates: no git SHA, hostname, process identifier, wall clock, or CI build number (INV-DET-003).
+
+The identifier names the **invocation**, not only a successful output. Every failure after request validation exposes it, which is what lets a structured failure be correlated with the run that produced it. An invalid raw request has none, because no validated request fingerprint exists to bind.
+
+### Correction Strategy Version 1
+
+The strategy is named and versioned (`render-aware-v1`, version 1) and has two paths.
+
+**A. Cheap path — the exact `optionalEvictionOrder` prefix.** Render attempt 0 is the existing `ContextRenderer` attempt. If it fits, no correction is applied and that selection is final. If it does not, the correction iterates `allocation.optionalEvictionOrder` in its exact published order: remove that block from the current selected set, keep every required block, keep every category minimum satisfied — which the allocator's order guarantees for every prefix (INV-ALLOC-006) — then order with the same `ContextOrderer` semantics, render the exact complete string, and tokenize it. The first fitting prefix wins, and the exact evicted sequence is recorded.
+
+The order is never sorted, never reordered, and never skipped to try a later entry first. No score, no score-to-token ratio, and no estimated rendered saving takes part.
+
+**B. Fallback — bounded hard-minimum replacement search.** Exhausting the eviction order is **not** a feasibility proof. It shows only that no more *currently selected* optional surplus can be given back under the current hard constraints. `BudgetAllocator` minimized canonical block **content** cost when it chose which candidates satisfy each category minimum, and rendering overhead varies per block, so a protected cheaper-by-content block may render far more expensively than an unselected candidate of the same category that satisfies the same minimum. This is the counterexample DEC-033 already recorded, and this phase makes it a test rather than a note.
+
+### Exact Render Measurement, Because Tokenization Is Neither Additive Nor Monotonic
+
+The `Tokenizer` port promises the exact count of one supplied string and nothing more:
+
+```text id="m9add"
+tokenizer(a + b)   is not necessarily   tokenizer(a) + tokenizer(b)
+
+S + A over budget  does not imply       every superset of S + A is over budget
+```
+
+So the correction assigns **no rendered cost to any block**, subtracts no guessed wrapper cost, and proves no infeasibility by summing per-block estimates. Every selection whose rendered feasibility is decided is ordered, rendered, and tokenized as one complete string (INV-BUDGET-002, INV-RENDER-004). A complete measurement is cached by a canonical block-identifier set key, so one exact selection is never tokenized twice; no per-block cost is ever cached, because no such quantity exists.
+
+`ContextOrderer` and `ContextRenderer` expose package-internal helpers that both the public stages and the correction call, so a corrected selection orders and renders byte-for-byte as the public stages would. Neither helper is exported from the package entry point.
+
+### The Required-Only Test, and Why It Comes First
+
+Before enumerating alternative category-minimum combinations, the correction measures the exact **required-only** selection: every required eligible candidate, no optional candidate, ordered, rendered, tokenized.
+
+If that alone exceeds `availableInputTokens`, the compilation fails with `required_content_exceeds_budget`, the rendered form of INV-BUDGET-004 and the documented category `REQUIRED_CONTENT_EXCEEDS_BUDGET`. The failure is definitive because required blocks may never be removed, so no selection can be smaller. It is the same issue code `BudgetAllocator` raises for the block-content form of the same impossibility: one product-level failure category, reported at whichever boundary can prove it.
+
+### The Hard Base, and the Deterministic Enumeration
+
+A **hard base** contains every required eligible canonical group, plus exactly enough non-required candidates from each category carrying `minBlocks` to satisfy that minimum after required blocks are counted, and no optional surplus beyond those deficits. Optional candidates in unconstrained categories are absent. Candidates come only from `FilteredCandidateSet.eligible`.
+
+```text id="m9def"
+deficit(category) = max(0, minBlocks - requiredCount(category))
+```
+
+Categories are disjoint, because a canonical block declares at most one exact category. Required category maximums and unreachable minimums have already failed in `BudgetAllocator`, so contradictory data here is an internal compilation failure rather than something to repair.
+
+A hard base must also satisfy the allocation policy's exact content-budget contract:
+
+```text id="m9ceil"
+sum(canonicalBlock.tokenCount) <= availableInputTokens
+```
+
+Render compression is never an excuse to violate the ceiling the allocator enforces (DEC-033).
+
+The enumeration order is fixed:
+
+1. constrained categories sorted by the project-owned code-unit comparison, never by locale;
+2. inside a category, optional eligible candidates sorted by the allocator's own hard-minimum preference — `tokenCount` ascending, then `score.total` descending, then canonical block ID ascending;
+3. k-combinations of size `deficit` in lexicographic **index** order over that sorted list;
+4. the Cartesian product of the per-category combination lists in sorted category order, with the first category varying slowest.
+
+That last rule gives the enumeration its important property: **the first hard base visited is exactly the category-minimum choice `BudgetAllocator` preferred.** The search then walks away from that choice in one defined direction rather than starting somewhere unrelated.
+
+For each visited base whose canonical content sum fits, the selection is ordered, rendered, tokenized, and accepted if `compiledTokens <= availableInputTokens`. The first exact-render fitting base wins and the search stops.
+
+### The Search Limit Is a Stopping Point, Never a Proof
+
+`maxHardMinimumCombinations` counts **visited** Cartesian-product combinations, including combinations skipped because their canonical content sum exceeds the ceiling. Before visiting combination `N + 1`, if `N` already equals the configured maximum, the search stops and the compilation fails with:
+
+```text id="m9lim"
+correction_search_limit_exceeded
+```
+
+reporting the configured maximum and the number of combinations visited, with no partial success. The bound keeps exponential pathological input from hanging the compiler. It is **not** an approximation silently presented as a proof, and the failure never claims that no feasible hard base exists.
+
+### Three Distinct Correction Failures
+
+```text id="m9fail"
+required_content_exceeds_budget          the required blocks alone do not render within the budget
+rendered_hard_constraints_exceed_budget  required-only fits, and no policy-valid hard base renders within it
+correction_search_limit_exceeded         the search stopped at its bound; feasibility is unknown
+```
+
+The second is deliberately not called a required-content failure. Category minimums are **policy constraints**, not required-block attributes, and the caller's fix is a different one, so the code must be different too.
+
+### No Optional Re-Augmentation After the Hard-Minimum Fallback in Version 1
+
+When the fallback finds a fitting hard base, that base is settled as it stands. No optional surplus is added back.
+
+The reasons are cumulative:
+
+* the common path already preserves the initial greedy allocation and removes only the minimum safe prefix needed to fit;
+* the fallback exists only because allocator-chosen protected minima rendered poorly, which is a narrow repair rather than an optimization opportunity;
+* tokenization is non-additive and non-monotonic, so a second "fill every spare token" pass would need its own explicit selection policy, not a greedy loop;
+* the current `CompilationPolicy` has no render-aware optimization slice to express one.
+
+Conservative hard-base settlement is correct, deterministic, auditable, and leaves optimization to a future policy version.
+
+The result therefore claims **no** maximum of score, block count, token utilization, or information retained. It satisfies the hard constraints and the hard rendered budget, and says only that.
+
+### Final Selection Reasons Are Separate From Allocator Decisions
+
+The settlement never rewrites or falsifies the original `BudgetAllocator` decision. The trace continues to preserve the original filtering decision, the original allocation decision, the allocator summary, and the initial ordering and render attempt, exactly where schema version 1 put them. Schema version 2 adds the final decisions **separately**:
+
+```ts
+type CompilationTraceFinalDecision =
+  | { blockId; disposition: 'filtered'; reason: 'FILTERED_POLICY' }
+  | {
+      blockId;
+      disposition: 'included';
+      reason: 'INCLUDED_REQUIRED' | 'INCLUDED_CATEGORY_MINIMUM' | 'INCLUDED_SCORE_ORDER';
+      renderPosition: number;
+    }
+  | {
+      blockId;
+      disposition: 'excluded';
+      reason: 'EXCLUDED_INITIAL_ALLOCATION' | 'EXCLUDED_RENDER_AWARE_CORRECTION';
+      initialAllocationReason?: 'EXCLUDED_CATEGORY_MAXIMUM' | 'EXCLUDED_BUDGET_EXHAUSTED';
+    };
+```
+
+Semantics:
+
+* **initial fit** — the final included and excluded reasons mirror the allocator's own decisions;
+* **cheap eviction** — an allocator-included candidate the correction removed becomes `EXCLUDED_RENDER_AWARE_CORRECTION`; candidates the allocator already excluded stay `EXCLUDED_INITIAL_ALLOCATION`;
+* **hard-minimum fallback** — required inclusions are `INCLUDED_REQUIRED`, the non-required candidates chosen to satisfy category minimums are `INCLUDED_CATEGORY_MINIMUM`, and every other eligible optional candidate not selected is `EXCLUDED_RENDER_AWARE_CORRECTION`, because the correction rebuilt the selection from `FilteredCandidateSet.eligible` and therefore decided every one of them itself;
+* filtered groups stay `FILTERED_POLICY`, because the correction never reconsiders them: eligibility is a precondition of selection (INV-ALLOC-002).
+
+`initialAllocationReason` is present exactly when the allocator itself excluded the group, so its original verdict stays readable beside the final one.
+
+A correction exclusion is never called `EXCLUDED_BUDGET_EXHAUSTED`. That code belongs to the allocator's canonical content-budget decision and would be false here: a correction exclusion is a statement about the exact rendered string, and the content budget may have had room to spare.
+
+### CompilationTrace Schema Version 2, and Why Version 1 Could Not Represent This
+
+`COMPILATION_TRACE_SCHEMA_VERSION` moves from 1 to 2.
+
+Version 1 recorded the `CandidateFilter` decision, the `BudgetAllocator` decision, the allocator summary, the allocation's render order, and the measured render attempt — and named its per-group verdict `currentDisposition`, **not** `finalDisposition`, precisely because a render-aware correction may legitimately remove an allocator-included optional candidate, replace one allocator-selected category-minimum candidate with another eligible candidate, and settle a final render order different from the allocator attempt.
+
+Cloning a version 1 trace and flipping `settled: false` to `true` would therefore create a **false audit record**: it would still say the initial allocator selection was the selection that settled.
+
+`settled` being a boolean avoided a schema change merely to flip finality; it never meant the correction evidence could be omitted. Representing both the original stage evidence and the final settlement requires new persisted fields, so the version is bumped rather than the meaning of version 1 changed (INV-STORE-004). No persistence adapter and no stored trace exist yet, which makes this the correct moment to bump: there is nothing to migrate.
+
+The contract is discriminated on `settled`:
+
+```ts
+interface UnsettledCompilationTrace extends CompilationTraceBase {
+  readonly schemaVersion: 2;
+  readonly settled: false;
+  readonly composition: { tokenizerCoverage: 'rendering-attempt-only'; ... };
+  readonly compilationId?: never;
+  readonly settlement?: never;
+}
+
+interface SettledCompilationTrace extends CompilationTraceBase {
+  readonly schemaVersion: 2;
+  readonly settled: true;
+  readonly compilationId: CompilationId;
+  readonly composition: { tokenizerCoverage: 'validation-and-rendering'; ... };
+  readonly settlement: CompilationTraceSettlement;
+}
+
+type CompilationTrace = UnsettledCompilationTrace | SettledCompilationTrace;
+```
+
+`TraceBuilder.build` returns `UnsettledCompilationTrace`. A successful `CompilationResult` requires `SettledCompilationTrace`, so attaching an unsettled trace to a success is not expressible rather than merely forbidden (INV-TRACE-006).
+
+`TraceBuilder` remains observational: it still receives only successful stage evidence, still never calls a tokenizer, still never runs a correction, and still always emits an unsettled trace. Settlement is a package-internal helper the orchestrator calls after it has proven and selected the final result; no public `TraceBuilder.settle()` is added, because the builder observes and orchestration decides.
+
+### CompilationTraceSettlement
+
+```ts
+interface CompilationTraceSettlement {
+  readonly strategy: 'render-aware-v1';
+  readonly correctionApplied: boolean;
+  readonly initialRenderedTokens: number;
+  readonly evictedBlockIds: readonly ContextBlockId[];
+  readonly hardMinimumSearch: {
+    readonly used: boolean;
+    readonly combinationsVisited: number;
+    readonly maxCombinations: number;
+    readonly chosenHardBaseBlockIds?: readonly ContextBlockId[];
+  };
+  readonly decisions: readonly CompilationTraceFinalDecision[];
+  readonly ordering: { readonly orderedBlockIds: readonly ContextBlockId[] };
+  readonly rendering: { readonly renderedContextHash: string; readonly compiledTokens: number };
+  readonly usage: {
+    readonly availableInputTokens: number;
+    readonly includedContentTokens: number;
+    readonly unusedTokens: number;
+    readonly renderingTokenDelta: number;
+  };
+}
+```
+
+`decisions` holds exactly one entry per deduplicated group, in the trace's own group order; every final inclusion carries one exact `renderPosition`, and the positions cover `0 ... n - 1` exactly once. `chosenHardBaseBlockIds` is absent when the fallback was not used and present when it settled a result, ordered by block identifier ascending rather than by `Map` or `Set` insertion. `evictedBlockIds` is the exact prefix of `optionalEvictionOrder` the correction removed, in that order.
+
+```text id="m9usage"
+unusedTokens        = availableInputTokens - compiledTokens
+renderingTokenDelta = compiledTokens - includedContentTokens
+```
+
+`renderingTokenDelta` is signed and never clamped, and it is legal here only because the composition proved one tokenizer identity produced both operands.
+
+The settled trace records the deterministic digest of the final rendered string and **not** the string. The digest uses the same domain-separated preimage as the attempt digest, extracted into one package-internal helper, so an audit consumer comparing the two is comparing like with like.
+
+### Final Trace Privacy Is Unchanged
+
+Neither trace variant can carry the raw request query, `ContextBlock.content`, the compiled context, the rendered context, `SourceDocument.title`, `SourceDocument.metadata`, `ContextBlock.metadata`, or retrieval metadata. There is no field for any of them and no switch to enable one (INV-SEC-001, INV-SEC-003). The final rendered text appears only in `CompilationResult.compiledContext`.
+
+### CompilationResult
+
+```ts
+const COMPILATION_RESULT_SCHEMA_VERSION = 1;
+
+interface CompilationResult {
+  readonly schemaVersion: 1;
+  readonly compilationId: CompilationId;
+  readonly requestId: string;
+  readonly compiledContext: string;
+  readonly includedBlocks: readonly ContextBlock[];
+  readonly usage: {
+    readonly candidateTokens: number;
+    readonly includedContentTokens: number;
+    readonly compiledTokens: number;
+    readonly availableTokens: number;
+    readonly unusedTokens: number;
+    readonly renderingTokenDelta: number;
+  };
+  readonly trace: SettledCompilationTrace;
+}
+```
+
+`includedBlocks` are canonical `ContextBlock` records, not candidate wrappers, in exact final render order, carried by reference and never rewritten. Excluded blocks are not repeated: `trace.settlement.decisions` explains every deduplicated group exactly once, and a second list would be a place for one truth to disagree with itself.
+
+Before returning, the assembled result is proved: `compiledTokens` is a finite non-negative safe integer no greater than `availableTokens`; `unusedTokens` and `renderingTokenDelta` are exact; every required eligible group is included; every selected group came from `filtered.eligible`; the category minimums and maximums hold; the final canonical content sum is within the ceiling; the final order holds each selected group exactly once; the returned string is exactly the rendering of `includedBlocks`; the trace is settled, carries the same identifier, claims `validation-and-rendering` coverage, and reconciles its ordering, digest, usage, decisions, and render positions with the result. An internal contradiction raises a structured failure at stage `result` rather than returning a success.
+
+### Reduction Metrics Are Deferred, Not Substituted
+
+ARCHITECTURE 5.7 previously sketched `reductionTokens` and `reductionRatio` on the result. METRICS 8.7 and 8.8 define both against `baselineInputTokens`, and **no baseline exists in a `CompilationRequest`**: the evaluation layer owns baselines (METRICS 7).
+
+The core result therefore publishes neither. Substituting `candidateTokens`, `canonicalContentTokens`, `availableInputTokens`, or `totalTokens` for a baseline would publish a different quantity under a documented metric's name, which is a reporting error rather than a convenience. METRICS 8.7 and 8.8 are unchanged; they simply have no producer in the kernel.
+
+### Structured Compilation Failure
+
+```ts
+type ContextCompilationStage =
+  | 'configuration' | 'request-validation' | 'candidate-validation' | 'deduplication'
+  | 'scoring' | 'filtering' | 'allocation' | 'ordering' | 'rendering' | 'trace'
+  | 'correction' | 'result';
+
+class ContextCompilationError extends Error {
+  readonly code = 'CONTEXT_COMPILATION_FAILED';
+  readonly stage: ContextCompilationStage;
+  readonly issues: readonly ValidationIssue[];
+  readonly compilationId?: CompilationId;
+  readonly trace?: UnsettledCompilationTrace;
+}
+```
+
+A stage failure is **wrapped, not flattened**: the owning stage's exact issue code survives and its path is prefixed with the stage deterministically, so a consumer keeps the reason and gains the location. No validation-library error, `DomainValidationError`, nested stage error object, or tokenizer-library exception crosses the boundary, and no partial `CompilationResult` is ever returned (INV-ADAPTER-001, INV-ADAPTER-003). Issues are project-owned, serializable, and deterministically ordered, and no raw source content, query, or rendered string appears in one (INV-SEC-001).
+
+`compilationId` is present for every failure after the request validated and absent for a request-validation failure. `trace` is the coherent unsettled snapshot, present for a correction or result failure and absent before rendering. Both optional members are genuinely absent rather than present holding `undefined`.
+
+### Alternatives Considered
+
+**Flip `settled` on a schema version 1 trace.** Rejected: the record would still describe the allocator's selection as the one that settled. The correction can legitimately remove an inclusion, replace a protected minimum, and reorder the result, and a trace that hid that is a false audit record.
+
+**Treat an exhausted `optionalEvictionOrder` as proof of infeasibility.** Rejected: DEC-033 already recorded the counterexample, and this phase turns it into a test. Failing there would reject compilations that are demonstrably feasible.
+
+**Give each block a rendered cost and subtract it.** Rejected: no such quantity exists. Tokenization is not additive, so a per-block rendered cost is an invention, and a feasibility proof built on summing inventions is not a proof.
+
+**Assume monotonicity — that a superset of an over-budget selection is over budget.** Rejected for the same reason: the project has never promised it, and a subword vocabulary can merge or split differently once content sits in a larger string.
+
+**Run an optional knapsack over the rendered budget.** Rejected: it would claim a maximum the kernel cannot establish under non-additive tokenization, and it needs a render-aware optimization policy that does not exist. Version 1 states what it does and no more.
+
+**Re-augment the settled hard base with optional surplus.** Rejected for version 1, as recorded above.
+
+**Let the fallback fabricate an `AllocatedCandidateSet` and hand it to `TraceBuilder`.** Rejected: correction selections are not allocator outputs, and passing one as though `BudgetAllocator` produced it would put a manufactured allocator verdict into the audit record.
+
+**Reuse `EXCLUDED_BUDGET_EXHAUSTED` for correction exclusions.** Rejected: that code names the allocator's content-budget decision and may simply be false for a block the correction removed to fit a rendered string.
+
+**Add `TraceBuilder.settle()`.** Rejected: the builder is observational by contract (DEC-037). Settlement consumes evidence that only orchestration can produce.
+
+**Publish `reductionTokens` and `reductionRatio` against some available total.** Rejected: see above. A metric with a defined denominator must not be reported against a different one.
+
+**Make the search bound optional with a default.** Rejected: the bound decides whether a failure is a proof or a stopping point, so a value nobody configured would be a decision the compiler invented. It is required, and it participates in the compilation identifier.
+
+### Consequences
+
+`@ctxalloc/compiler` gains `ContextCompiler`, `ContextCompilerConfig`, `CompilationResult`, `CompilationResultUsage`, `CompilationId`, `ContextCompilationError`, `ContextCompilationStage`, `ContextCompilationIssueCode`, the settled and unsettled trace types with `CompilationTraceSettlement` and its members, and the four version constants — and **no new external dependency**: the boundary allowlist is unchanged, `@ctxalloc/tokenization` is still not a compiler dependency, and no validation-library or `node:crypto` type reaches a public declaration.
+
+`CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`, `CandidateFilter`, `BudgetAllocator`, `CompilationRequestValidator`, `CompilationPolicyValidator`, `Tokenizer`, and `MarkdownChunker` are **unchanged in behavior**. `ContextOrderer` and `ContextRenderer` are refactored to call package-internal helpers the compiler shares; their public ordering, their byte-for-byte rendering, their constructors, and their issue codes and messages are unchanged and regression-tested.
+
+INVARIANTS changes: implementation status only, no guarantee is weakened. INV-BUDGET-001, INV-BUDGET-002, and INV-BUDGET-006 gain a producer; INV-BUDGET-003 and INV-BUDGET-004 gain their rendered discharge; INV-DET-003 distinguishes the request fingerprint from the compilation identifier; INV-TRACE-004 covers settled traces as well as unsettled ones.
+
+METRICS changes: 8.4, 8.5, 8.6, 8.10, and 8.11 gain an implemented producer; 8.4.1 and 8.4.2 keep their provisional and attempt-level meanings; 8.7 and 8.8 are unchanged and explicitly have no kernel producer.
+
+ARCHITECTURE changes: 4.1 records `ContextCompiler` as the composition root and drops "nothing composes these components"; 5.7 publishes the implemented result without reduction fields; 6.8 documents the component; 7.2 becomes the implemented settlement algorithm.
+
+**The compiler kernel is complete. The product is not.** Retrieval, `CandidateProvider` execution, `SourceReader`, persistence, SQLite, the CLI, the HTTP API, model execution, the evaluation harness, baseline measurement, telemetry, and generative compression all remain later phases.
 
 ---
 

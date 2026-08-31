@@ -169,12 +169,21 @@ describe('@ctxalloc/compiler public API', () => {
         'CompilationTraceError',
         'TraceBuilder',
         'fingerprintCompilationRequest',
+        'COMPILATION_ID_VERSION',
+        'COMPILATION_RESULT_SCHEMA_VERSION',
+        'CONTEXT_COMPILER_CONFIG_SCHEMA_VERSION',
+        'ContextCompilationError',
+        'ContextCompiler',
+        'RENDER_AWARE_CORRECTION_STRATEGY',
+        'RENDER_AWARE_CORRECTION_VERSION',
       ].sort(),
     );
   });
 
   it('exports the documented public types from its entry point', () => {
-    const exported = [...readSource('packages/compiler/src/index.ts').matchAll(/type (\w+),/g)]
+    const exported = [
+      ...readSource('packages/compiler/src/index.ts').matchAll(/type (\w+)\s*[,}]/g),
+    ]
       .map((match) => match[1])
       .sort();
     expect(exported).toEqual([
@@ -200,14 +209,18 @@ describe('@ctxalloc/compiler public API', () => {
       'CategoryPriorityScoreComponent',
       'CategoryPriorityScoreEvidence',
       'CategoryPriorityScoringPolicy',
+      'CompilationId',
       'CompilationPolicy',
       'CompilationPolicyIssueCode',
       'CompilationRequest',
       'CompilationRequestFingerprint',
       'CompilationRequestIssueCode',
+      'CompilationResult',
+      'CompilationResultUsage',
       'CompilationTrace',
       'CompilationTraceAllocation',
       'CompilationTraceAllocationDecision',
+      'CompilationTraceBase',
       'CompilationTraceBuildInput',
       'CompilationTraceCanonicalBlock',
       'CompilationTraceComposition',
@@ -215,7 +228,13 @@ describe('@ctxalloc/compiler public API', () => {
       'CompilationTraceExcludedDecision',
       'CompilationTraceFilteredDecision',
       'CompilationTraceFilteringDecision',
+      'CompilationTraceFinalDecision',
+      'CompilationTraceFinalDisposition',
+      'CompilationTraceFinalExcludedDecision',
+      'CompilationTraceFinalFilteredDecision',
+      'CompilationTraceFinalIncludedDecision',
       'CompilationTraceGroup',
+      'CompilationTraceHardMinimumSearch',
       'CompilationTraceIncludedDecision',
       'CompilationTraceIssueCode',
       'CompilationTraceMember',
@@ -227,9 +246,16 @@ describe('@ctxalloc/compiler public API', () => {
       'CompilationTraceRequiredEligibleDecision',
       'CompilationTraceRetrieval',
       'CompilationTraceRetrievalScore',
+      'CompilationTraceSettlement',
+      'CompilationTraceSettlementOrdering',
+      'CompilationTraceSettlementRendering',
+      'CompilationTraceSettlementUsage',
       'CompilationTraceSource',
       'CompilationTraceTokenizerCoverage',
       'CompilationTraceTotals',
+      'ContextCompilationIssueCode',
+      'ContextCompilationStage',
+      'ContextCompilerConfig',
       'ContextOrderingIssueCode',
       'ContextOrderingPolicy',
       'ContextRenderingIssueCode',
@@ -259,12 +285,16 @@ describe('@ctxalloc/compiler public API', () => {
       'ScoreAggregation',
       'ScoredCandidate',
       'ScoredCandidateSet',
+      'SettledCompilationTrace',
+      'SettledCompilationTraceComposition',
       'SourcePriorityRule',
       'SourcePriorityScoreComponent',
       'SourcePriorityScoreEvidence',
       'SourcePriorityScoringPolicy',
       'TraceBuilderConfig',
       'TraceIdentity',
+      'UnsettledCompilationTrace',
+      'UnsettledCompilationTraceComposition',
       'ValidatedCandidateSet',
     ]);
   });
@@ -728,14 +758,12 @@ describe('@ctxalloc/compiler public API', () => {
     throw new Error('expected the empty request to be rejected');
   });
 
-  it('exports no later compiler stage and no retrieval port', () => {
+  it('exports no retrieval port and no package-internal helper', () => {
     for (const name of [
-      'ContextCompiler',
       'CandidateProvider',
       'FakeCandidateProvider',
       'CompilationRequestSchema',
       'CompilationPolicySchema',
-      'CompilationResult',
       'CompilationTraceSchema',
       'compile',
       'score',
@@ -750,14 +778,26 @@ describe('@ctxalloc/compiler public API', () => {
       'parseContextOrderingPolicy',
       'parseContextRenderingPolicy',
       'parseCompilationPolicy',
-      // Phase 14 publishes the trace foundation, not the settled compilation:
-      // no orchestrator, no correction loop, and no compilation identifier
-      // (DEC-037).
+      // The orchestrator publishes a settled compilation, and nothing else:
+      // the correction enumerator, the search state, the digest and canonical
+      // JSON helpers, and the internal ordering and rendering helpers all stay
+      // package internals (DEC-038).
       'compilationFingerprint',
       'fingerprintCompilation',
-      'compilationId',
+      'calculateCompilationId',
       'canonicalJson',
       'domainSeparatedDigest',
+      'hashRenderedContext',
+      'settleCompilationTrace',
+      'orderCandidatesForRendering',
+      'renderOrderedCandidates',
+      'collectTokenizerPortIssues',
+      'countTokensSafely',
+      'combinations',
+      'cartesian',
+      'selectionKey',
+      'verifyResult',
+      'finalDecisions',
     ]) {
       expect(Object.keys(compiler), `exports ${name}`).not.toContain(name);
     }

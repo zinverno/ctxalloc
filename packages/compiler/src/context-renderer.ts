@@ -9,7 +9,8 @@ import type { Tokenizer } from '@ctxalloc/ports';
 import { z } from 'zod';
 import type { OrderedCandidateSet } from './context-orderer.js';
 import { canonicalJson } from './canonical-json.js';
-import { pointerFor, quote, type IssuePath } from './validation-issues.js';
+import { collectTokenizerPortIssues, countTokensSafely } from './tokenizer-port.js';
+import { pointerFor, type IssuePath } from './validation-issues.js';
 
 /**
  * Deterministic context rendering and exact render measurement (DEC-035).
@@ -275,34 +276,17 @@ export function parseContextRenderingPolicy(
  * compile-time type alone: this stage is reachable from a runtime boundary where
  * the compile-time type proves nothing.
  *
- * Identity values are checked for blankness and never rewritten: a trace records
- * them verbatim, and trimming here would publish a value the caller never
- * configured (INV-TRACE-005).
+ * The rule itself lives in one package-internal helper that `ContextCompiler`
+ * reuses, so the composition root and this stage cannot drift about what a
+ * usable tokenizer is (INV-DEP-003, DEC-038). The issue code and paths reported
+ * here are unchanged: they belong to this stage's own published vocabulary.
  */
 function validateTokenizer(tokenizer: Tokenizer): readonly ValidationIssue[] {
-  if (typeof tokenizer !== 'object' || tokenizer === null) {
-    return [issue('invalid_tokenizer', ['tokenizer'], 'must be a Tokenizer')];
-  }
-  const issues: ValidationIssue[] = [];
-  if (typeof tokenizer.id !== 'string' || tokenizer.id.trim().length === 0) {
-    issues.push(
-      issue('invalid_tokenizer', ['tokenizer', 'id'], 'must not be empty or whitespace-only'),
-    );
-  }
-  if (typeof tokenizer.version !== 'string' || tokenizer.version.trim().length === 0) {
-    issues.push(
-      issue('invalid_tokenizer', ['tokenizer', 'version'], 'must not be empty or whitespace-only'),
-    );
-  }
-  if (typeof tokenizer.countTokens !== 'function') {
-    issues.push(issue('invalid_tokenizer', ['tokenizer', 'countTokens'], 'must be a function'));
-  }
-  return issues;
-}
-
-function describeThrown(error: unknown): string {
-  if (error instanceof Error) return `${error.name}: ${error.message}`;
-  return `a non-Error value (${typeof error})`;
+  return collectTokenizerPortIssues(
+    tokenizer,
+    'invalid_tokenizer' satisfies ContextRenderingIssueCode,
+    ['tokenizer'],
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -336,9 +320,31 @@ interface RenderedBlockRecord {
 /** Exactly one LF between records: one physical line is one block. */
 const RECORD_SEPARATOR = '\n';
 
+/**
+ * Serializes canonical blocks in the exact order given, as the one v1 string.
+ *
+ * Array position is authoritative: this helper neither sorts nor groups nor
+ * consults source location, score, required status, or `optionalEvictionOrder`
+ * (DEC-034, INV-RENDER-001).
+ *
+ * It is the single implementation of the v1 wire format. `ContextRenderer` calls
+ * it for its published attempt and `ContextCompiler` calls it for every
+ * render-aware correction measurement, so one selection can never render to two
+ * different strings depending on which component asked (INV-DEP-003, DEC-038).
+ *
+ * It is internal to the compiler kernel: the package entry point never
+ * re-exports it, and no public declaration names it (INV-ADAPTER-001).
+ */
+export function renderOrderedCandidates(blocks: readonly ContextBlock[]): string {
+  return blocks.map((block) => canonicalJson(recordOf(block))).join(RECORD_SEPARATOR);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Renderer                                                                    */
 /* -------------------------------------------------------------------------- */
+
+/** Names the measured string in a tokenizer failure message, unchanged from v1. */
+const RENDERED_CONTEXT_SUBJECT = 'the rendered context';
 
 export class ContextRenderer {
   readonly #policy: ContextRenderingPolicy;
@@ -379,9 +385,9 @@ export class ContextRenderer {
     // Array position is authoritative. `ContextOrderer` owns render order, so
     // this stage neither sorts nor groups nor consults source location, score,
     // required status, or `optionalEvictionOrder` (DEC-034, INV-RENDER-001).
-    const renderedContext = input.orderedIncluded
-      .map((decision) => canonicalJson(recordOf(decision.candidate.candidate.canonicalBlock)))
-      .join(RECORD_SEPARATOR);
+    const renderedContext = renderOrderedCandidates(
+      input.orderedIncluded.map((decision) => decision.candidate.candidate.canonicalBlock),
+    );
 
     const renderedTokens = this.#count(renderedContext);
 
@@ -412,28 +418,15 @@ export class ContextRenderer {
    * repair, and no character or word estimate substitutes for it (DEC-027).
    */
   #count(renderedContext: string): number {
-    let tokens: number;
-    try {
-      tokens = this.#tokenizer.countTokens(renderedContext);
-    } catch (error: unknown) {
-      throw new ContextRenderingError([
-        issue(
-          'tokenizer_failed',
-          ['renderedContext'],
-          `tokenizer ${quote(this.#tokenizer.id)} version ${quote(this.#tokenizer.version)} failed to count the rendered context: ${describeThrown(error)}`,
-        ),
-      ]);
-    }
-    if (typeof tokens !== 'number' || !Number.isSafeInteger(tokens) || tokens < 0) {
-      throw new ContextRenderingError([
-        issue(
-          'invalid_rendered_token_count',
-          ['renderedContext'],
-          `tokenizer ${quote(this.#tokenizer.id)} version ${quote(this.#tokenizer.version)} returned ${String(tokens)} for the rendered context: expected a non-negative safe integer`,
-        ),
-      ]);
-    }
-    return tokens;
+    const counted = countTokensSafely(this.#tokenizer, renderedContext, RENDERED_CONTEXT_SUBJECT);
+    if (counted.ok) return counted.tokens;
+    throw new ContextRenderingError([
+      issue(
+        counted.kind === 'threw' ? 'tokenizer_failed' : 'invalid_rendered_token_count',
+        ['renderedContext'],
+        counted.message,
+      ),
+    ]);
   }
 }
 

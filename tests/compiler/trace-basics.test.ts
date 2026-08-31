@@ -105,11 +105,15 @@ describe('a basic compilation trace', () => {
     expect(built.totals.candidateTokens).toBe(0);
   });
 
-  it('publishes schema version 1 and settled false', () => {
+  it('publishes schema version 2 and settled false', () => {
     const built = trace({ specs: SPECS });
-    expect(built.schemaVersion).toBe(1);
+    expect(built.schemaVersion).toBe(2);
     expect(built.schemaVersion).toBe(COMPILATION_TRACE_SCHEMA_VERSION);
     expect(built.settled).toBe(false);
+    // An unsettled snapshot carries no settlement overlay and no compilation
+    // identity: schema version 2 keeps the two variants apart (DEC-038).
+    expect(Object.keys(built)).not.toContain('settlement');
+    expect(Object.keys(built)).not.toContain('compilationId');
   });
 
   it('records the request identity, fingerprint, scope, reference time, and budget', () => {

@@ -395,6 +395,12 @@ compiledTokens
 
 The final rendered string is the source of truth.
 
+**Producer: `ContextCompiler` (ARCHITECTURE 6.8).** It is the tokenizer count of
+`CompilationResult.compiledContext` and of nothing else — never a sum of block
+counts, record counts, or separator counts, and never an estimate from string
+length. It is also `trace.settlement.rendering.compiledTokens`, which reconciles
+with it exactly (DEC-038).
+
 ## 8.4.1 Provisional Block-Content Metrics
 
 `BudgetAllocator` (ARCHITECTURE 6.4) runs before anything is rendered, so it
@@ -426,8 +432,10 @@ These are **not**:
 metric only once the final selection is settled. Reporting a provisional value
 under a final metric name is a reporting error.
 
-The definitions in 8.4, 8.5, 8.6, 8.9, 8.10, and 8.11 remain the responsibility
-of the compiler orchestration that settles the final selection.
+The definitions in 8.4, 8.5, 8.6, 8.10, and 8.11 are the responsibility of
+`ContextCompiler`, which settles the final selection (ARCHITECTURE 6.8, 7.2,
+DEC-038). They are **not** the allocator's, and this section's values are not
+them.
 
 ## 8.4.2 Render-Attempt Metrics
 
@@ -465,11 +473,14 @@ publish the difference between two vocabularies as though it described rendering
 
 That is why `renderingTokenDelta` stays an orchestration metric: the component
 that guarantees one tokenizer across the stages is the component that may report
-it.
+it, and that component is `ContextCompiler` (DEC-038).
 
 These are **not** 8.4, 8.6, 8.7, 8.9, or 8.10. A render attempt becomes those
-final metrics only once the correction loop has settled the final selection, at
-which point `renderedTokens` of the last attempt *is* `compiledTokens`.
+final metrics only once the correction has settled the final selection, at which
+point `renderedTokens` of the last measured attempt *is* `compiledTokens`. The
+trace records both: `rendering.renderedTokens` is the initial attempt, and
+`settlement.rendering.compiledTokens` is the settled measurement, which are the
+same number exactly when no correction was applied.
 
 ## 8.5 Included Content Tokens
 
@@ -479,6 +490,11 @@ includedContentTokens
 ```
 
 This excludes rendering overhead.
+
+**Producer: `ContextCompiler`.** It sums the `tokenCount` of the **final** selected
+canonical blocks — the ones in `CompilationResult.includedBlocks` — after every
+correction. The allocator's `selectedBlockContentTokens` (8.4.1) is the same shape
+over the initial selection and is not this metric (DEC-038).
 
 ## 8.6 Rendering Token Delta
 
@@ -538,6 +554,15 @@ is a reporting error.
 receives no tokenizer identity from the earlier stages and so cannot discharge
 the precondition.
 
+**Producer: `ContextCompiler` (DEC-038).** It discharges the precondition by
+construction: it owns one configured `Tokenizer` object and injects that same
+object into `CandidateValidator` block-count validation and into every rendered
+measurement. Its settled trace therefore records `tokenizerCoverage:
+'validation-and-rendering'`, which is what makes this metric reportable.
+
+The published value is signed and is **never clamped**: negative, zero, and
+positive are all valid outcomes, and none of them is repaired.
+
 ## 8.7 Token Reduction
 
 ```text id="9pusjr"
@@ -563,6 +588,21 @@ compiledTokens = 4,000
 tokenReductionRatio = 60%
 ```
 
+### These metrics have no producer in the compiler kernel
+
+`CompilationResult` does **not** publish `tokenReduction` or `tokenReductionRatio`,
+and it publishes no `reductionTokens` or `reductionRatio` under any other name.
+
+Both are defined against `baselineInputTokens`, and no baseline exists anywhere
+in a `CompilationRequest`: a baseline is what some *other* strategy would have
+sent for the same case, which is a comparison the evaluation layer sets up
+(section 7). Substituting `candidateTokens` (8.1), `canonicalContentTokens`
+(8.12), `availableInputTokens` (8.3), or `totalTokens` for a baseline would
+publish a different quantity under a documented metric's name.
+
+The definitions above are unchanged. They are measured by the evaluation harness
+against the baselines of section 7, not by the compiler (DEC-038).
+
 ## 8.9 Budget Utilization
 
 ```text id="ch0bko"
@@ -574,12 +614,21 @@ High utilization is not automatically better.
 
 A valid compiler may leave budget unused when no useful candidates remain.
 
+`CompilationResult` does not publish this ratio. Both operands are published
+exactly (8.3, 8.4), so a consumer or the evaluation harness derives it when it is
+wanted — and only that consumer needs to decide what the ratio means for a
+zero-token budget, which the kernel has no reason to answer (DEC-038).
+
 ## 8.10 Unused Tokens
 
 ```text id="ep08vw"
 unusedTokens
   = availableInputTokens - compiledTokens
 ```
+
+**Producer: `ContextCompiler`.** The value is exact, never estimated, and is
+verified against both operands before a result is returned (INV-BUDGET-006,
+DEC-038).
 
 ## 8.11 Budget Violation Count
 
@@ -594,6 +643,15 @@ Required target:
 ```text id="igjhlz"
 budgetViolationCount = 0
 ```
+
+The target is now enforced structurally rather than only measured.
+`ContextCompiler` tokenizes the exact final rendered string and refuses to return
+a `CompilationResult` whose `compiledTokens` exceeds `availableInputTokens`,
+raising a structured failure instead (INV-BUDGET-001, INV-BUDGET-002, DEC-038).
+
+A render attempt that does not fit is still not a violation: 8.11 counts
+successful results, and `fitsAvailableInputBudget: false` (8.4.2) is a
+measurement the correction consumes.
 
 ---
 
@@ -691,7 +749,8 @@ This is the same precondition 8.6 already states. `renderingTokenDelta` subtract
 tokenizer identity produced both operands; under `rendering-attempt-only`
 coverage that precondition is demonstrably unmet, so the metric **must not be
 reported**. It becomes reportable only once a composition root publishes
-`validation-and-rendering` and a selection has settled.
+`validation-and-rendering` and a selection has settled — which is exactly what a
+settled trace records (8.12.1).
 
 ### These are not the final metrics whose names they resemble
 
@@ -711,12 +770,39 @@ trace.settled === false              no compilation has been settled
 
 The final `includedContentTokens` of 8.5, `compiledTokens` of 8.4,
 `renderingTokenDelta` of 8.6, `budgetUtilization` of 8.9, and `unusedTokens` of
-8.10 keep their existing definitions and remain the responsibility of the
-compiler orchestration that settles a selection. Reporting an unsettled trace
-total under one of those names is a reporting error.
+8.10 keep their existing definitions and are the responsibility of
+`ContextCompiler`, which settles a selection. Reporting an unsettled trace total
+under one of those names is a reporting error.
 
 A trace with `settled: false` must never be attached to a successful
-`CompilationResult`.
+`CompilationResult`, and schema version 2 makes that unrepresentable rather than
+merely forbidden (DEC-038).
+
+### 8.12.1 Settlement usage totals
+
+A **settled** trace carries a second, separate set of usage values, under
+`settlement` (DEC-038):
+
+```text id="t15set"
+settlement.rendering.compiledTokens        8.4, over the final rendered string
+settlement.usage.availableInputTokens      8.3
+settlement.usage.includedContentTokens     8.5, over the FINAL selected blocks
+settlement.usage.unusedTokens              8.10
+settlement.usage.renderingTokenDelta       8.6, signed
+```
+
+These are the final metrics, and they equal the corresponding fields of
+`CompilationResult.usage` exactly.
+
+The two sets coexist and must not be confused. `totals` stays the stage-snapshot
+reconciliation of the **initial** selection, so `totals.includedContentTokens`
+and `settlement.usage.includedContentTokens` differ whenever a correction was
+applied — and the pair is precisely what lets an auditor see what the correction
+did. Likewise `rendering.renderedTokens` is the initial attempt and
+`settlement.rendering.compiledTokens` is the settled measurement.
+
+The settlement totals are additionally valid as 8.6 operands, because a settled
+trace records `tokenizerCoverage: 'validation-and-rendering'`.
 
 ---
 

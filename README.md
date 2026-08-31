@@ -9,21 +9,25 @@ or agent framework.
 
 ## Status
 
-Phase 14 — deterministic compilation traces and request fingerprinting. The repository contains
-the TypeScript monorepo scaffolding from Phase 1 (workspace structure, strict
-compiler and linting configuration, test infrastructure, package boundaries,
-boundary checker), the runtime-validated domain model in `@ctxalloc/domain` (scope,
-identifiers, content hash values, JSON-safe metadata, source types, source
-locations, `SourceDocument`, `ContextBlock`, `TokenBudget`, and a structured
-validation API), the project-owned `Tokenizer` port in `@ctxalloc/ports`, the
-deterministic `FakeTokenizer` test double in `@ctxalloc/testing` with a reusable
-tokenizer contract test suite, a real offline tokenizer adapter in
-`@ctxalloc/tokenization`, the first two application use cases in
-`@ctxalloc/application`, and the compiler kernel in `@ctxalloc/compiler`:
-structural request and policy validation plus eight components —
-`CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`,
-`CandidateFilter`, `BudgetAllocator`, `ContextOrderer`, `ContextRenderer`, and
-the observational `TraceBuilder`.
+Phase 15 — **the compiler kernel is complete**. `ContextCompiler` composes the
+stages, settles the rendered budget, and returns a `CompilationResult`. The
+repository contains the TypeScript monorepo scaffolding from Phase 1 (workspace
+structure, strict compiler and linting configuration, test infrastructure,
+package boundaries, boundary checker), the runtime-validated domain model in
+`@ctxalloc/domain` (scope, identifiers, content hash values, JSON-safe metadata,
+source types, source locations, `SourceDocument`, `ContextBlock`, `TokenBudget`,
+and a structured validation API), the project-owned `Tokenizer` port in
+`@ctxalloc/ports`, the deterministic `FakeTokenizer` test double in
+`@ctxalloc/testing` with a reusable tokenizer contract test suite, a real offline
+tokenizer adapter in `@ctxalloc/tokenization`, the first two application use
+cases in `@ctxalloc/application`, and the compiler kernel in
+`@ctxalloc/compiler`: structural request and policy validation plus nine
+components — `CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`,
+`CandidateFilter`, `BudgetAllocator`, `ContextOrderer`, `ContextRenderer`, the
+observational `TraceBuilder`, and `ContextCompiler`.
+
+**The product is not complete.** Retrieval integration, persistence, the CLI, the
+HTTP API, model execution, and the evaluation harness remain later phases.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
 `js-tiktoken` (pinned to 1.0.21, see [DEC-027](./docs/DECISIONS.md)). It runs
@@ -477,18 +481,17 @@ overflow-safe, and a total that leaves the exact safe-integer range fails rather
 than being published. Rendering counts take no part: `renderedTokens` is reported
 separately.
 
-**The recorded tokenizer identity is scoped, not global.** It comes from the
-render attempt, so it proves which tokenizer measured the rendered string and
-nothing more — no stage contract carries the identity of the tokenizer that
-produced the validated block counts. A manual composition may legitimately
-validate under one tokenizer and render under another, and the trace would then
-name one identity beside totals another produced. So the trace publishes
-`tokenizerCoverage`, and Phase 14 always says `rendering-attempt-only`: the
-content totals still reconcile among themselves, and the record simply stops
-implying an identity for them. Coverage is never inferred from matching names or
+**The recorded tokenizer identity is scoped, not global.** A `TraceBuilder`
+snapshot takes it from the render attempt, so it proves which tokenizer measured
+the rendered string and nothing more — no stage contract carries the identity of
+the tokenizer that produced the validated block counts. A manual composition may
+legitimately validate under one tokenizer and render under another, and the trace
+would then name one identity beside totals another produced. So the trace
+publishes `tokenizerCoverage`, and a builder snapshot always says
+`rendering-attempt-only`. Coverage is never inferred from matching names or
 numbers and never taken as a caller's word — the manual caller is exactly who
-might miscompose the stages — so the stronger `validation-and-rendering` is
-reserved for a future `ContextCompiler` that injects one tokenizer itself.
+might miscompose the stages — so the stronger `validation-and-rendering` belongs
+to `ContextCompiler`, which injects one tokenizer itself.
 
 **The request fingerprint identifies the exact validated request value.** It is
 SHA-256 over a domain-separated canonical serialization of the whole request, so
@@ -500,20 +503,95 @@ identifier**: it excludes compiler, tokenizer, and renderer identity by design,
 and those are recorded beside it in the trace. Compiler version is injected
 configuration, never read from a manifest, a git revision, or the environment.
 
-**The trace is current, not final.** Every trace this phase builds carries
-`settled: false`: the stage evidence is recorded and the render attempt is
-measured — including an over-budget one, which traces successfully — but nothing
-has accepted or rejected a compilation. A trace with `settled: false` must never
-be attached to a successful `CompilationResult`.
+**A builder snapshot is current, not final.** Every trace `TraceBuilder` produces
+carries `settled: false`: the stage evidence is recorded and the render attempt
+is measured — including an over-budget one, which traces successfully — but
+nothing has accepted or rejected a compilation. Such a trace can never be
+attached to a successful `CompilationResult`; schema version 2 makes that
+unrepresentable rather than merely forbidden.
 
-**No correction loop and no `CompilationResult` yet.** Nothing consumes a render
-attempt to accept or reject a compilation, so there is still no final
-`compiledTokens`, no `unusedTokens`, no `renderingTokenDelta`, and **no final
-hard-budget guarantee**. Nothing composes the components either: there is no
-`ContextCompiler`, no settled trace, no validation-failure trace envelope, no
-deterministic compilation identifier, no trace persistence, no retrieval
-provider, and no HTTP or CLI behavior, and CtxAlloc supports no Obsidian
-integration.
+### The compiler: `compiler.compile(request)`
+
+`ContextCompiler` is the composition root of the kernel (see
+[DEC-038](./docs/DECISIONS.md)). It takes one explicit configuration and one
+`Tokenizer`, runs every stage of the named topology in order, settles the
+rendered budget, and returns a `CompilationResult`.
+
+```ts
+const compiler = new ContextCompiler(
+  {
+    schemaVersion: 1,
+    compilerId: 'ctxalloc-compiler',
+    compilerVersion: '0.15.0',
+    maxHardMinimumCombinations: 64,
+  },
+  tokenizer,
+);
+
+const result = compiler.compile(request);
+```
+
+**A hard final rendered budget.** The complete rendered string is tokenized
+before success is returned, and no result is ever returned whose `compiledTokens`
+exceeds the caller's `availableInputTokens`. An over-budget selection produces a
+correction or a structured failure, never a success.
+
+**Safe eviction first.** If the initial render is over budget, the compiler gives
+back the surplus the allocator itself declared safe, walking
+`optionalEvictionOrder` in its exact published order — one entry at a time,
+re-ordering, re-rendering, and re-tokenizing after every removal. The first
+fitting prefix wins. Required blocks are never evicted and category minimums are
+never dropped.
+
+**A bounded hard-minimum fallback.** Exhausting the eviction order proves
+nothing: the allocator minimized canonical _content_ cost when it picked which
+candidates satisfy each category minimum, so a protected cheaper-by-content block
+can render far more expensively than an unselected candidate that satisfies the
+same minimum. The compiler therefore measures the exact required-only selection
+first — a required-only overrun is definitive — and then searches the
+policy-valid category-minimum bases in a fixed deterministic order for one that
+renders within the budget. The search is explicitly bounded by
+`maxHardMinimumCombinations`; reaching the bound is reported as a search limit,
+never as infeasibility. Version 1 settles the hard base as it stands and claims
+no maximum of score, block count, or token utilization.
+
+**Every decision measures one exact complete string.** No per-block rendered cost
+is computed, cached, or subtracted, because tokenization is neither additive nor
+monotonic: `tokenizer(a + b)` need not equal `tokenizer(a) + tokenizer(b)`, and
+an over-budget selection does not make every superset of it over budget.
+
+**Same-tokenizer composition.** The compiler owns exactly one configured
+`Tokenizer` and injects that same object into candidate block-count validation
+and into every rendered measurement. That is what makes
+`tokenizerCoverage: 'validation-and-rendering'` provable and the signed
+`renderingTokenDelta` a defined quantity rather than the gap between two
+vocabularies.
+
+**A deterministic compilation identifier.** `CompilationId` is SHA-256 over a
+domain-separated preimage binding the request fingerprint plus every explicit
+composition input: compiler identity and version, tokenizer identity and version,
+renderer identity and version, the correction strategy and version, and the
+search bound. Nothing random, discovered, or environmental takes part, and the
+identifier names the invocation — every failure after request validation carries
+it.
+
+**A settled trace.** The settlement is an overlay, not a replacement: the
+original filtering and allocation evidence stays exactly where it was, and the
+settlement states separately what the correction did — the evicted identifiers,
+the search that ran, one final decision per group with its render position, the
+final order, the digest of the final string, and the final usage. The snapshot is
+never mutated, and the final string still appears only on the result.
+
+**Exact final usage.** `candidateTokens`, `includedContentTokens`,
+`compiledTokens`, `availableTokens`, `unusedTokens`, and the signed
+`renderingTokenDelta`. No `reductionTokens` or `reductionRatio`: both are defined
+against a baseline input, no baseline exists in a `CompilationRequest`, and
+baselines are evaluation work.
+
+**What remains after the kernel.** Retrieval and `CandidateProvider` execution,
+`SourceReader`, persistence and SQLite, the CLI, the HTTP API, model execution,
+the evaluation harness and its baselines, and telemetry. CtxAlloc supports no
+Obsidian integration.
 
 ## Prerequisites
 
