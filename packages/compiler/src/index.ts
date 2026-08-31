@@ -187,6 +187,7 @@ export {
   type CompilationTraceRetrieval,
   type CompilationTraceRetrievalScore,
   type CompilationTraceSource,
+  type CompilationTraceTokenizerCoverage,
   type CompilationTraceTotals,
   type TraceBuilderConfig,
   type TraceIdentity,

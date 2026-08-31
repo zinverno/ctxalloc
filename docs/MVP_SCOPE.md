@@ -590,7 +590,8 @@ The trace contains:
 
 * compiler identity and version;
 * the compilation policy identity and version, and all five slice identities;
-* tokenizer identity and version;
+* the renderer-observed tokenizer identity and version, with its provenance
+  coverage;
 * renderer identity and version;
 * schema version;
 * request scope, identity, reference time, and budget;
@@ -620,6 +621,15 @@ identity instead.
 order participates and object property insertion order does not. It is **not** a
 compilation identifier: the composition inputs it excludes are recorded beside it
 in the trace.
+
+**The recorded tokenizer identity is scoped.** It comes from the render attempt
+and proves only which tokenizer measured the rendered string, so the trace
+publishes `tokenizerCoverage: 'rendering-attempt-only'`. The content totals
+reconcile among themselves, but no stage contract carries the identity of the
+tokenizer that produced the validated block counts, so the trace does not
+attribute them. The stronger `validation-and-rendering` coverage is reserved for
+a future `ContextCompiler` that injects one tokenizer into `CandidateValidator`
+and `ContextRenderer` itself.
 
 **Not yet implemented and deliberately absent:**
 

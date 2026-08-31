@@ -1565,7 +1565,8 @@ Responsibilities:
 * verify that the supplied stage evidence belongs to one coherent pipeline;
 * project that evidence into a versioned, serializable `CompilationTrace`;
 * record the request identity and its deterministic fingerprint;
-* record the compiler, policy, tokenizer, and renderer identities;
+* record the compiler, policy, renderer, and renderer-observed tokenizer
+  identities, with the coverage of the tokenizer claim;
 * record every deduplicated group, its members, its score, and its decisions;
 * record the allocation, ordering, and rendering summaries;
 * calculate the exact reconciliation totals;
@@ -1661,6 +1662,39 @@ digests, scope, source types, source locations, required status, category and
 authored priority, policy identities, provider identity and version, rank,
 provider score contract and value, compiler score components, decision reasons,
 token counts, and the rendered digest and count.
+
+#### The tokenizer identity is scoped
+
+`composition.tokenizer` is the tokenizer the **renderer** was given, and it
+proves one thing: which tokenizer turned `renderedContext` into
+`renderedTokens`. It does not prove which tokenizer produced the
+`ContextBlock.tokenCount` values `CandidateValidator` accepted, because no stage
+contract from `ValidatedCandidateSet` through `OrderedCandidateSet` carries a
+tokenizer identity for `TraceBuilder` to read (DEC-035, DEC-036).
+
+A manual composition may validate under one tokenizer and render under another —
+no stage objects, because none receives an identity to compare — and the trace
+would then name one tokenizer beside content totals another produced.
+
+`composition.tokenizerCoverage` states the scope rather than widening it:
+
+```text
+rendering-attempt-only     the identity explains rendering.renderedTokens only;
+                           the content totals under `totals` reconcile among
+                           themselves but their tokenizer identity is unknown here
+
+validation-and-rendering   one identity produced the validated block counts and
+                           the rendered measurement, so it explains every token
+                           quantity in the trace
+```
+
+**Phase 14 always publishes `rendering-attempt-only`.** The coverage is never
+inferred from matching identifiers or matching numbers, and never accepted as a
+caller assertion: the manual caller is exactly the party who might miscompose the
+stages. Only a composition root that injects one tokenizer into
+`CandidateValidator` and `ContextRenderer` itself can claim
+`validation-and-rendering`, and that component is the future `ContextCompiler`
+(section 7.2, DEC-037).
 
 Where a value must be identified rather than stored, a deterministic digest is
 recorded instead: `request.queryHash` over the exact query and

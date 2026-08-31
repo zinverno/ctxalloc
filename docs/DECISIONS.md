@@ -3104,6 +3104,56 @@ Where a value must be identified rather than stored, a **domain-separated digest
 
 Hashing here is **audit identity, not authorization**. Nothing in the kernel grants access, skips a check, reuses a result, or decides inclusion because two digests match, so no correctness rule depends on collision resistance.
 
+### Tokenizer Identity Has Provenance Coverage
+
+`composition.tokenizer` comes from `RenderedContextAttempt`, which is the one stage that publishes a tokenizer identity (DEC-035). It proves exactly one thing:
+
+```text id="m8tokp"
+proven      tokenizer(renderedContext) == rendering.renderedTokens
+
+NOT proven  which tokenizer produced the ContextBlock.tokenCount values
+            CandidateValidator accepted, and therefore every content total
+            under trace.totals
+```
+
+DEC-035 and DEC-036 already record that no stage contract from `ValidatedCandidateSet` through `OrderedCandidateSet` carries a tokenizer identity. `TraceBuilder` reads those contracts and nothing else, so the earlier identity is not merely unrecorded — it is **unobservable from the trace input**.
+
+A bare identity beside the content totals therefore creates a false audit implication. The counterexample is a legal manual composition today:
+
+```text id="m8tokx"
+CandidateValidator   tokenizer tok-A / 1   candidate token count = 100
+ContextRenderer      tokenizer tok-B / 1   rendered string       =  10 tokens
+
+trace.composition.tokenizer      = tok-B / 1
+trace.totals.candidateTokens     = 100
+trace.totals.canonicalContentTokens = 100
+trace.rendering.renderedTokens   =  10
+```
+
+Nothing here is wrong on its own. Every number is the number its stage produced, and no stage can object, because none of them receives an identity to compare. But a reader of the persisted record sees one named tokenizer beside four token quantities and may reasonably conclude that it explains all of them. It explains one.
+
+Schema version 1 therefore publishes the scope of the claim alongside the claim:
+
+```ts
+type CompilationTraceTokenizerCoverage =
+  | 'rendering-attempt-only'
+  | 'validation-and-rendering';
+```
+
+**Phase 14 always emits `rendering-attempt-only`.** The content totals stay exactly as they are — they reconcile among themselves, because every one of them sums the same already-validated numbers — and the trace simply stops implying an identity for them.
+
+`validation-and-rendering` is reserved for a future `ContextCompiler`. That component can make the stronger claim because it **owns the construction**: it injects one tokenizer into `CandidateValidator` and `ContextRenderer` itself, so the guarantee is a property of the composition rather than an observation about it.
+
+Three weaker alternatives were rejected.
+
+**A caller-asserted `validationTokenizerId` on `TraceBuilderConfig.`** The manual caller is precisely the party who may miscompose the stages, so the assertion would be strongest exactly where it is least reliable: the miscomposing caller is the one who would state the wrong value, and `TraceBuilder` could not check it. That is an assertion, not evidence, and a trace must not launder one into the other.
+
+**Inferring coverage when the numbers or the identifiers happen to agree.** Two different tokenizers may agree on one batch and diverge on the next, so agreement is not evidence of identity. Inference would also make the field's meaning depend on the fixture rather than on the composition.
+
+**Rejecting a trace whose validation-tokenizer identity is unavailable.** That identity is unavailable in *every* Phase 14 trace, so this would refuse to record a pipeline that succeeded. The record is not wrong; it was over-claiming, and the fix is to narrow the claim rather than to withhold the record.
+
+The coverage field is not inferred, not configurable, and not caller-supplied: it is a constant of the projection, and the union exists so Phase 15 can strengthen it without a schema-version change.
+
 ### Minimal Source References
 
 ```ts
@@ -3196,7 +3246,7 @@ Nothing is re-run: no token counting, no normalized hash calculation, no scoring
 
 ### Consequences
 
-`@ctxalloc/compiler` gains `TraceBuilder`, `CompilationTrace` and its DTO subtypes, `CompilationTraceError`, and `fingerprintCompilationRequest`, and **no new external dependency**: the boundary allowlist is unchanged, `@ctxalloc/tokenization` is still not a compiler dependency, no application, persistence, or telemetry package is added, and no validation-library or `node:crypto` type reaches a public declaration.
+`@ctxalloc/compiler` gains `TraceBuilder`, `CompilationTrace` and its DTO subtypes (including `CompilationTraceTokenizerCoverage`), `CompilationTraceError`, and `fingerprintCompilationRequest`, and **no new external dependency**: the boundary allowlist is unchanged, `@ctxalloc/tokenization` is still not a compiler dependency, no application, persistence, or telemetry package is added, and no validation-library or `node:crypto` type reaches a public declaration.
 
 `CompilationRequestValidator`, `CompilationPolicyValidator`, `CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`, `CandidateFilter`, `BudgetAllocator`, `ContextOrderer`, `ContextRenderer`, `Tokenizer`, and `MarkdownChunker` are **unchanged in behavior**. No stage source file was edited.
 

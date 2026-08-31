@@ -666,6 +666,33 @@ All values are finite non-negative safe integers, and the arithmetic is
 overflow-safe: a total that leaves the exact integer range is a structured trace
 failure, never a published approximation (INV-BUDGET-005).
 
+### These totals are reconciled, not attributed to a named tokenizer
+
+Every total above sums `ContextBlock.tokenCount` values that `CandidateValidator`
+accepted, so they reconcile exactly **among themselves**. Their tokenizer
+identity is a separate question, and Phase 14 does not answer it.
+
+```text id="t14tokp"
+composition.tokenizer          the tokenizer the RENDERER was given
+
+composition.tokenizerCoverage  what that identity actually explains
+  rendering-attempt-only         rendering.renderedTokens, and nothing else
+  validation-and-rendering       every token quantity in the trace
+```
+
+A Phase 14 trace always carries `rendering-attempt-only`, because no stage
+contract reaching `TraceBuilder` carries the identity of the tokenizer that
+produced the block counts (DEC-035, DEC-036). Reporting a content total *as
+though* `composition.tokenizer` produced it is therefore a reporting error, and
+so is deriving one from a rendered count under that coverage.
+
+This is the same precondition 8.6 already states. `renderingTokenDelta` subtracts
+`includedContentTokens` from `compiledTokens` and is defined only when one
+tokenizer identity produced both operands; under `rendering-attempt-only`
+coverage that precondition is demonstrably unmet, so the metric **must not be
+reported**. It becomes reportable only once a composition root publishes
+`validation-and-rendering` and a selection has settled.
+
 ### These are not the final metrics whose names they resemble
 
 A trace carries `settled`. While it is `false`, its totals describe the

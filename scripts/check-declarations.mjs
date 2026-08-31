@@ -1280,6 +1280,18 @@ requireContains(
   'readonly schemaVersion: typeof COMPILATION_TRACE_SCHEMA_VERSION;',
 );
 requireContains('packages/compiler/dist/compilation-trace.d.ts', 'readonly settled: boolean;');
+
+// The recorded tokenizer identity states the scope of what it explains, so a
+// reader cannot take a rendering-only identity to cover the content totals too
+// (DEC-037).
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'readonly tokenizerCoverage: CompilationTraceTokenizerCoverage;',
+);
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  "type CompilationTraceTokenizerCoverage = 'rendering-attempt-only' | 'validation-and-rendering'",
+);
 requireContains('packages/compiler/dist/index.d.ts', "} from './compilation-trace.js'");
 
 // The request fingerprint accepts a validated CompilationRequest and is not a
@@ -1320,6 +1332,13 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './request-fingerpr
       // Finality is not a literal, and the disposition is current, not final.
       'settled: false',
       'finalDisposition',
+      // Coverage is never a caller assertion: the manual caller is exactly the
+      // party who may miscompose the stages (DEC-037).
+      'validationTokenizerId',
+      'validationTokenizerVersion',
+      'validationTokenizer',
+      'tokenizerInstance',
+      'Tiktoken',
     ]) {
       if (declarations.includes(forbidden)) {
         fail(

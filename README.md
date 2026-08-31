@@ -477,6 +477,19 @@ overflow-safe, and a total that leaves the exact safe-integer range fails rather
 than being published. Rendering counts take no part: `renderedTokens` is reported
 separately.
 
+**The recorded tokenizer identity is scoped, not global.** It comes from the
+render attempt, so it proves which tokenizer measured the rendered string and
+nothing more — no stage contract carries the identity of the tokenizer that
+produced the validated block counts. A manual composition may legitimately
+validate under one tokenizer and render under another, and the trace would then
+name one identity beside totals another produced. So the trace publishes
+`tokenizerCoverage`, and Phase 14 always says `rendering-attempt-only`: the
+content totals still reconcile among themselves, and the record simply stops
+implying an identity for them. Coverage is never inferred from matching names or
+numbers and never taken as a caller's word — the manual caller is exactly who
+might miscompose the stages — so the stronger `validation-and-rendering` is
+reserved for a future `ContextCompiler` that injects one tokenizer itself.
+
 **The request fingerprint identifies the exact validated request value.** It is
 SHA-256 over a domain-separated canonical serialization of the whole request, so
 `request.id`, the query, and **array order** all participate, while object

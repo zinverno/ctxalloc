@@ -798,6 +798,18 @@ Every trace must contain:
 * schema version;
 * renderer identifier and version.
 
+**Recorded identities must state their provenance coverage.**
+
+When token quantities in one trace originate at different compiler boundaries,
+the trace must state the provenance coverage of the recorded tokenizer identity.
+A tokenizer identity observed only at rendering must not be presented as though
+it also explains content token counts.
+
+This adds a requirement; it removes none. The identifier and version are still
+mandatory. What is forbidden is publishing them bare beside quantities they were
+never proven to produce, which would let a reader of a persisted record infer an
+attribution the compiler never established (DEC-035, DEC-037).
+
 ---
 
 ## INV-TRACE-006: Trace Generation Cannot Change Decisions

@@ -228,6 +228,7 @@ describe('@ctxalloc/compiler public API', () => {
       'CompilationTraceRetrieval',
       'CompilationTraceRetrievalScore',
       'CompilationTraceSource',
+      'CompilationTraceTokenizerCoverage',
       'CompilationTraceTotals',
       'ContextOrderingIssueCode',
       'ContextOrderingPolicy',

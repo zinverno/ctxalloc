@@ -160,6 +160,9 @@ describe('a basic compilation trace', () => {
         rendering: { id: 'rendering', version: '6.0.0' },
       },
       tokenizer: { id: 'test:word', version: '1' },
+      // The renderer's tokenizer, and only that: no stage contract carries the
+      // identity that produced the validated block counts (DEC-035, DEC-037).
+      tokenizerCoverage: 'rendering-attempt-only',
       renderer: { id: 'ctxalloc-jsonl', version: '1' },
     });
   });

@@ -174,12 +174,56 @@ export interface CompilationTracePolicyIdentities {
 }
 
 /**
+ * Which token quantities the recorded tokenizer identity actually explains
+ * (DEC-037).
+ *
+ * `rendering-attempt-only` — the identity is proven for
+ * `rendering.renderedTokens` and for nothing else. The block-content totals under
+ * `totals` reconcile exactly among themselves, but the tokenizer that produced
+ * the `ContextBlock.tokenCount` values they sum is **unknown at this trace
+ * boundary**.
+ *
+ * `validation-and-rendering` — the same tokenizer identity and version produced
+ * the validated block counts and the rendered measurement, so it explains every
+ * token quantity in the trace. Only a composition root that injects the tokenizer
+ * into `CandidateValidator` and `ContextRenderer` itself can establish this, and
+ * no such component exists yet: **Phase 14 never emits this value.**
+ */
+export type CompilationTraceTokenizerCoverage =
+  'rendering-attempt-only' | 'validation-and-rendering';
+
+/**
  * The composition inputs the request itself does not carry (INV-TRACE-005).
  *
  * `compiler` comes from explicit `TraceBuilderConfig`, never from a manifest, a
  * git revision, or an environment variable. `tokenizer` and `renderer` come from
  * the `RenderedContextAttempt`, which is the one stage that publishes them
  * (DEC-035).
+ *
+ * ## The tokenizer identity is scoped, not global
+ *
+ * `tokenizer` is the tokenizer the **renderer** was given. It proves exactly one
+ * thing: which tokenizer turned `renderedContext` into `renderedTokens`. It does
+ * **not** prove which tokenizer produced the `ContextBlock.tokenCount` values
+ * `CandidateValidator` accepted, because no stage contract from
+ * `ValidatedCandidateSet` through `OrderedCandidateSet` carries a tokenizer
+ * identity for `TraceBuilder` to read (DEC-035, DEC-036).
+ *
+ * A manual composition may legitimately validate under one tokenizer and render
+ * under another. The trace would then name the renderer's tokenizer beside a
+ * `candidateTokens` total the other tokenizer produced, and a reader could
+ * reasonably take the one named identity to explain both. That inference would be
+ * false, and `TraceBuilder` cannot detect the mismatch: its inputs do not carry
+ * the earlier identity.
+ *
+ * `tokenizerCoverage` closes that hole by stating the scope of the claim rather
+ * than widening it. Phase 14 always publishes `rendering-attempt-only`.
+ *
+ * The coverage is never inferred from evidence. Matching identifiers or matching
+ * numbers prove nothing — two tokenizers may agree on one batch and diverge on
+ * the next — and a caller-supplied assertion would be worth less still, since the
+ * manual caller is exactly the party who might miscompose the stages. Only a
+ * component that owns the construction can claim `validation-and-rendering`.
  *
  * Complete policy JSON is not recorded in schema version 1. Identities are what
  * an audit needs to state which rules ran, and copying whole policies would put
@@ -189,6 +233,7 @@ export interface CompilationTraceComposition {
   readonly compiler: TraceIdentity;
   readonly policy: CompilationTracePolicyIdentities;
   readonly tokenizer: TraceIdentity;
+  readonly tokenizerCoverage: CompilationTraceTokenizerCoverage;
   readonly renderer: TraceIdentity;
 }
 
@@ -405,6 +450,14 @@ export interface CompilationTraceRendering {
  * not METRICS 8.5 of a settled selection, and rendering counts never participate
  * in these equations: `renderedTokens` is reported separately, under
  * `rendering`.
+ *
+ * Their **tokenizer identity is unknown at this trace boundary**. They sum
+ * `ContextBlock.tokenCount` values `CandidateValidator` accepted, and no stage
+ * contract carries the identity of the tokenizer that produced them, so
+ * `composition.tokenizer` does not explain them — see
+ * `composition.tokenizerCoverage`. The totals still reconcile exactly among
+ * themselves, because every one of them sums the same already-validated
+ * numbers.
  */
 export interface CompilationTraceTotals {
   readonly candidateCount: number;
@@ -1381,6 +1434,13 @@ export class TraceBuilder {
           rendering: { id: rendered.renderingPolicyId, version: rendered.renderingPolicyVersion },
         },
         tokenizer: { id: rendered.tokenizerId, version: rendered.tokenizerVersion },
+        // Always `rendering-attempt-only`. The render attempt is the only place a
+        // tokenizer identity is observable from this input, so the identity above
+        // explains `rendering.renderedTokens` and nothing else. Claiming more
+        // would need a composition root that injected one tokenizer into
+        // `CandidateValidator` and `ContextRenderer` alike, and none exists yet
+        // (DEC-035, DEC-036, DEC-037).
+        tokenizerCoverage: 'rendering-attempt-only',
         renderer: { id: rendered.rendererId, version: rendered.rendererVersion },
       },
       // The registry is ordered by stable identity with the project-owned

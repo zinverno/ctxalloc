@@ -108,20 +108,22 @@ describe('INV-TRACE-006: building a trace changes nothing', () => {
       .replace(/^\s*\/\/.*$/gm, '');
 
     for (const stage of [
-      'new CandidateValidator',
-      'new CandidateDeduplicator',
-      'new CandidateScorer',
-      'new CandidateFilter',
-      'new BudgetAllocator',
-      'new ContextOrderer',
-      'new ContextRenderer',
-      // No tokenizer reaches it, and no hash rule is recomputed.
-      'Tokenizer',
-      'countTokens',
-      'calculateNormalizedContentHash',
-      'normalizeContextBlockContentForHash',
+      /new CandidateValidator/,
+      /new CandidateDeduplicator/,
+      /new CandidateScorer/,
+      /new CandidateFilter/,
+      /new BudgetAllocator/,
+      /new ContextOrderer/,
+      /new ContextRenderer/,
+      // No tokenizer port reaches it, and no hash rule is recomputed. The
+      // pattern is word-bounded: `CompilationTraceTokenizerCoverage` is a
+      // published trace type, while the bare `Tokenizer` is the port.
+      /\bTokenizer\b/,
+      /\bcountTokens\b/,
+      /calculateNormalizedContentHash/,
+      /normalizeContextBlockContentForHash/,
     ]) {
-      expect(source, `the trace module uses ${stage}`).not.toContain(stage);
+      expect(stage.test(source), `the trace module uses ${stage.source}`).toBe(false);
     }
     // Every stage type it does name arrives as a type-only import.
     for (const module of [
