@@ -22,8 +22,7 @@ import {
  *
  * `BudgetAllocator` already fails when required **block content** alone exceeds
  * the ceiling. The converse never held: required content that fits the content
- * ceiling is not proof that the rendered required context fits. This is the
- * failure only a component that renders and tokenizes can prove.
+ * ceiling is not proof that the rendered required context fits.
  *
  * ```text
  * must     required, 2 content tokens
@@ -33,8 +32,14 @@ import {
  *
  * required content     2  <= 6      BudgetAllocator succeeds
  * {must, opt} rendered 4 + 16 = 20  > 6
- * {must}      rendered 2 +  8 = 10  > 6   definitive
+ * {must}      rendered 2 +  8 = 10  > 6
  * ```
+ *
+ * **The required-only overrun is not by itself the verdict.** Tokenization is not
+ * monotonic, so a selection containing `must` *and* an optional block could
+ * render smaller than `must` alone — see `compiler-rescue.test.ts`, where exactly
+ * that happens. Here every policy-valid selection is visited and every one is
+ * over, and only that exhaustion supports the failure.
  */
 
 const SPECS: readonly CandidateSpec[] = [
@@ -92,9 +97,9 @@ describe('INV-BUDGET-004: required content exceeds the rendered budget', () => {
     const failure = failureOf(run);
     expect(failure.name).toBe('ContextCompilationError');
     expect(failure.code).toBe('CONTEXT_COMPILATION_FAILED');
-    const message = failure.issues[0] as { code: string; pointer: string } | undefined;
-    expect(message?.code).toBe('required_content_exceeds_budget');
-    expect(message?.pointer).toBe('correction.requiredBlocks');
+    const first = failure.issues[0];
+    expect(first?.code).toBe('required_content_exceeds_budget');
+    expect(first?.pointer).toBe('correction.fallbackSearch');
     let text = '';
     try {
       run();
@@ -102,6 +107,21 @@ describe('INV-BUDGET-004: required content exceeds the rendered budget', () => {
       text = (error as Error).message;
     }
     expect(text).toContain('REQUIRED_CONTENT_EXCEEDS_BUDGET');
+  });
+
+  it('states an exhaustion, not a token lower bound', () => {
+    let message = '';
+    try {
+      run();
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    // The truthful claim: every policy-valid selection containing every required
+    // block was measured and none fits. Not "required-only is the smallest".
+    expect(message).toContain('policy-valid selection(s) containing every required block');
+    expect(message).not.toContain('alone');
+    expect(message).not.toContain('smaller');
+    expect(message).not.toContain('lower bound');
   });
 
   it('returns no successful result', () => {

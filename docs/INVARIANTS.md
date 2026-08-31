@@ -135,17 +135,28 @@ The compiler must not return a partial result as a successful compilation.
 **Both forms are now reported (DEC-038).** `BudgetAllocator` raises the
 block-content form, where required `tokenCount` alone exceeds the ceiling; adding
 rendering overhead can only make that worse, so it is definitive before anything
-is rendered. `ContextCompiler` raises the **rendered** form: after every safe
-optional eviction, it measures the exact required-only selection, and a
-required-only render over the budget fails with the same issue code under the
-same category. The converse never held — required content that fits the content
-ceiling is not proof of rendered feasibility, which is why the rendered test
-exists.
+is rendered. `ContextCompiler` raises the **rendered** form under the same issue
+code and category.
 
-A failure of the category minimums is a **different** failure
-(`rendered_hard_constraints_exceed_budget`): category minimums are policy
-constraints, not required-block attributes, and calling one a required-content
-failure would misdirect the caller.
+**The rendered form is an exhaustion, not a lower bound.** Tokenization is not
+monotonic, so a required-only selection over the budget does **not** prove that
+no selection containing the required blocks fits: adding an optional block can
+lower the count of the complete rendered string. The compiler therefore treats
+the required-only render as a measurement, and raises this failure only after
+every policy-valid final selection containing every required block has been
+ordered, rendered, tokenized, and found over budget. Its meaning is exactly that
+exhaustion.
+
+A failure where a non-required category minimum is still active is a
+**different** failure (`rendered_hard_constraints_exceed_budget`): category
+minimums are policy constraints, not required-block attributes, and calling one a
+required-content failure would misdirect the caller. Both report the same
+measured fact and differ only in which constraint made the surviving selections
+mandatory.
+
+**A search that stopped at its configured bound is neither.** It is reported as
+`correction_search_limit_exceeded`, and feasibility remains unknown: an
+approximation must never be presented as a proof.
 
 ---
 

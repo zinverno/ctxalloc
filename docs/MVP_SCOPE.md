@@ -619,29 +619,40 @@ entry at a time, re-ordering, re-rendering, and re-tokenizing after every
 removal. The first fitting prefix wins. Required blocks are never evicted and
 category minimums are never dropped.
 
-**The hard-minimum render-aware fallback.** Exhausting the eviction order is not
-a feasibility proof: the allocator minimized canonical *content* cost when it
-chose which candidates satisfy each category minimum, and a protected
+**The bounded fallback search.** Exhausting the eviction order is not a
+feasibility proof: the allocator minimized canonical *content* cost when it chose
+which candidates satisfy each category minimum, and a protected
 cheaper-by-content block may render more expensively than an unselected candidate
-that satisfies the same minimum. The compiler therefore measures the exact
-required-only selection first, then searches the policy-valid category-minimum
-bases in a fixed deterministic order for one that renders within the budget.
+that satisfies the same minimum. The fallback runs in three phases.
+
+1. The exact **required-only probe**, measured and cached. It is never by itself
+   a verdict: tokenization is not monotonic, so a selection containing the same
+   required blocks *plus* an optional one may render smaller.
+2. The **hard bases** — minimal policy-valid selections — in the allocator's own
+   preference order. A fitting hard base settles immediately and is never
+   re-augmented with optional surplus.
+3. The **rescue**, which runs only once every hard base has failed and walks the
+   remaining policy-valid selections, surplus included, because a strict superset
+   of an over-budget base may fit. This is correctness rescue, not optimization.
 
 Every feasibility decision measures **one exact complete rendered string**. No
 per-block rendered cost is computed, cached, or subtracted, because tokenization
 is neither additive nor monotonic.
 
-The search is explicitly bounded by `maxHardMinimumCombinations`, a required
-configuration value with no default. Reaching the bound is reported as a search
-limit and never as infeasibility.
+The search is explicitly bounded by `maxCorrectionSelections`, a required
+configuration value with no default, counting **unique** selections across all
+three phases. Every combinatorial enumeration is lazy, so the bound stops the
+work rather than firing after an exponential universe has been built. Reaching
+the bound is reported as a search limit and never as infeasibility.
 
-Version 1 does **not** re-augment a settled hard base with optional surplus, and
-claims no maximum of score, block count, token utilization, or information
-retained.
+The compiler claims no maximum of score, block count, token utilization, or
+information retained.
 
-**Three distinct failures.** `required_content_exceeds_budget` (the rendered form
-of `REQUIRED_CONTENT_EXCEEDS_BUDGET`), `rendered_hard_constraints_exceed_budget`,
-and `correction_search_limit_exceeded`.
+**Three distinct failures.** `required_content_exceeds_budget` and
+`rendered_hard_constraints_exceed_budget` are both raised only after every
+policy-valid selection has actually been visited, and differ by whether a
+non-required category minimum is still active; `correction_search_limit_exceeded`
+claims nothing about feasibility.
 
 **The settled trace.** The compiler projects the observational snapshot plus the
 proven correction evidence into a `SettledCompilationTrace`, never mutating the
@@ -740,8 +751,8 @@ the settlement:
 * the strategy name and whether a correction was applied;
 * the initial rendered measurement;
 * the exact evicted block identifiers, in eviction order;
-* the hard-minimum search: whether it ran, how many combinations it visited,
-  the configured bound, and the chosen hard base;
+* the fallback search: whether it ran, how many unique selections it visited,
+  the configured bound, which phase settled a result, and the chosen block set;
 * exactly one **final** decision per deduplicated group, with a render position
   on every inclusion;
 * the final render order;

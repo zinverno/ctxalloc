@@ -107,12 +107,14 @@ describe('DEC-038: render-aware replacement of a protected category minimum', ()
   });
 
   it('visits the allocator-preferred base A first, then reaches B', () => {
-    const search = counterexample().trace.settlement.hardMinimumSearch;
+    const search = counterexample().trace.settlement.fallbackSearch;
 
     expect(search.used).toBe(true);
-    // Two combinations: {req, a} (the allocator's own preference) then {req, b}.
-    expect(search.combinationsVisited).toBe(2);
-    expect(search.maxCombinations).toBe(64);
+    // Three selections: the required-only probe, then {req, a} — the allocator's
+    // own preference — then {req, b}.
+    expect(search.selectionsVisited).toBe(3);
+    expect(search.maxSelections).toBe(64);
+    expect(search.phase).toBe('hard-base');
   });
 
   it("B's exact rendered string fits, and B is what settles", () => {
@@ -122,7 +124,8 @@ describe('DEC-038: render-aware replacement of a protected category minimum', ()
     expect(includedIds(result)).not.toContain('a');
     expect(result.usage.compiledTokens).toBe(8);
     expect(result.usage.compiledTokens).toBeLessThanOrEqual(COUNTEREXAMPLE_AVAILABLE);
-    expect(result.trace.settlement.hardMinimumSearch.chosenHardBaseBlockIds).toEqual(['b', 'req']);
+    expect(result.trace.settlement.fallbackSearch.chosenBlockIds).toEqual(['b', 'req']);
+    expect(result.trace.settlement.fallbackSearch.phase).toBe('hard-base');
   });
 
   it('records B as a category minimum and A as a correction exclusion', () => {
@@ -182,8 +185,8 @@ describe('DEC-038: render-aware replacement of a protected category minimum', ()
     for (const result of results) {
       expect(result.compiledContext).toBe(first?.compiledContext);
       expect(result.usage).toEqual(first?.usage);
-      expect(result.trace.settlement.hardMinimumSearch).toEqual(
-        first?.trace.settlement.hardMinimumSearch,
+      expect(result.trace.settlement.fallbackSearch).toEqual(
+        first?.trace.settlement.fallbackSearch,
       );
     }
   });
@@ -244,7 +247,7 @@ describe('DEC-038: version 1 never re-augments a settled hard base', () => {
   it('settles the hard base alone', () => {
     const result = withSurplus();
     expect([...includedIds(result)].sort()).toEqual(['b', 'req']);
-    expect(result.trace.settlement.hardMinimumSearch.used).toBe(true);
+    expect(result.trace.settlement.fallbackSearch.used).toBe(true);
   });
 
   it('leaves an unconstrained optional block excluded even though it would fit', () => {
@@ -280,8 +283,8 @@ describe('DEC-038: version 1 never re-augments a settled hard base', () => {
       new URL('packages/compiler/src/context-compiler.ts', rootUrl),
       'utf8',
     );
-    expect(source).toContain('No optional re-augmentation in v1');
+    expect(source).toContain('Version 1 adds no optional');
     const decisions = readFileSync(new URL('docs/DECISIONS.md', rootUrl), 'utf8');
-    expect(decisions).toContain('No Optional Re-Augmentation');
+    expect(decisions).toContain('A Fitting Hard Base Is Never Re-Augmented');
   });
 });

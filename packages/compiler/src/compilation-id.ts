@@ -64,11 +64,11 @@ const COMPILATION_ID_LABEL = 'ctxalloc-compilation-id';
  * closed: adding a hidden input later would silently change stored identities,
  * so a new input arrives with a new {@link COMPILATION_ID_VERSION}.
  *
- * `maxHardMinimumCombinations` participates because it is a decision input, not
- * a performance knob. It can change whether the bounded hard-minimum search
- * proves a result or stops with a structured search-limit failure, so two runs
- * that differ only in that bound are genuinely different deterministic
- * invocations (DEC-038).
+ * `maxCorrectionSelections` participates because it is a decision input, not a
+ * performance knob. It can change whether the bounded fallback search proves a
+ * result or stops with a structured search-limit failure, so two runs that
+ * differ only in that bound are genuinely different deterministic invocations
+ * (DEC-038).
  */
 export interface CompilationIdComposition {
   readonly compilerId: string;
@@ -79,7 +79,7 @@ export interface CompilationIdComposition {
   readonly rendererVersion: string;
   readonly correctionStrategy: string;
   readonly correctionVersion: number;
-  readonly maxHardMinimumCombinations: number;
+  readonly maxCorrectionSelections: number;
 }
 
 /**

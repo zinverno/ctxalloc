@@ -95,11 +95,11 @@ describe('deterministic compilation identifier', () => {
     expect(idOf({ specs: SPECS }, otherVersion)).not.toBe(idOf());
   });
 
-  it('changes when maxHardMinimumCombinations changes', () => {
+  it('changes when maxCorrectionSelections changes', () => {
     // The bound is a decision input, not a performance knob: it can change
     // whether the fallback search proves a result or stops without one.
     expect(
-      idOf({ specs: SPECS }, wordTokenizer, compilerConfig({ maxHardMinimumCombinations: 65 })),
+      idOf({ specs: SPECS }, wordTokenizer, compilerConfig({ maxCorrectionSelections: 65 })),
     ).not.toBe(idOf());
   });
 
@@ -123,7 +123,7 @@ describe('deterministic compilation identifier', () => {
       'rendererVersion',
       'correctionStrategy',
       'correctionVersion',
-      'maxHardMinimumCombinations',
+      'maxCorrectionSelections',
     ]) {
       expect(preimage, `omits ${member}`).toContain(`readonly ${member}:`);
     }

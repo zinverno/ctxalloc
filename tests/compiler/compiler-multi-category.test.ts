@@ -56,9 +56,11 @@ describe('DEC-038: multi-category hard-base enumeration', () => {
   it('INV-DET-002: sorts constrained categories by code unit, never by locale', () => {
     const result = twoCategories();
 
-    // Code-unit order visits {bOne, aOne} then {bOne, aTwo}, and the second one
-    // fits. A locale order ("a" before "B") would need a third visit.
-    expect(result.trace.settlement.hardMinimumSearch.combinationsVisited).toBe(2);
+    // After the required-only probe, code-unit order visits {bOne, aOne} then
+    // {bOne, aTwo}, and the second one fits. A locale order ("a" before "B")
+    // would need one visit more.
+    expect(result.trace.settlement.fallbackSearch.selectionsVisited).toBe(3);
+    expect(result.trace.settlement.fallbackSearch.phase).toBe('hard-base');
     expect([...includedIds(result)].sort()).toEqual(['aTwo', 'bOne', 'req']);
     expect('B'.localeCompare('a')).toBeGreaterThan(0);
   });
@@ -80,7 +82,7 @@ describe('DEC-038: multi-category hard-base enumeration', () => {
       blockPenaltyTokenizer({ aHigh: 20 }, 'test:high-penalty'),
     );
 
-    expect(result.trace.settlement.hardMinimumSearch.combinationsVisited).toBe(2);
+    expect(result.trace.settlement.fallbackSearch.selectionsVisited).toBe(3);
     expect([...includedIds(result)].sort()).toEqual(['aLow', 'req']);
     expect(finalReasons(result)['aLow']).toBe('INCLUDED_CATEGORY_MINIMUM');
     expect(finalReasons(result)['aHigh']).toBe('EXCLUDED_RENDER_AWARE_CORRECTION');
@@ -99,7 +101,10 @@ describe('DEC-038: multi-category hard-base enumeration', () => {
     } catch (error) {
       message = (error as Error).message;
     }
-    expect(message).toContain('4 policy-valid category-minimum base(s)');
+    // The probe plus four hard bases plus the rescue selections that are not
+    // duplicates of them: every policy-valid selection was visited.
+    expect(message).toContain('policy-valid selection(s) satisfying every required block');
+    expect(message).toContain('category block-count constraint');
   });
 
   it('counts a content-over-budget base as visited but never renders it', () => {
@@ -174,20 +179,16 @@ describe('DEC-038: multi-category hard-base enumeration', () => {
     const [first] = results;
     for (const result of results) {
       expect(result.compiledContext).toBe(first?.compiledContext);
-      expect(result.trace.settlement.hardMinimumSearch).toEqual(
-        first?.trace.settlement.hardMinimumSearch,
+      expect(result.trace.settlement.fallbackSearch).toEqual(
+        first?.trace.settlement.fallbackSearch,
       );
     }
   });
 
   it('settles the first exact-render fitting base and stops searching', () => {
     const result = twoCategories();
-    expect(result.trace.settlement.hardMinimumSearch.combinationsVisited).toBe(2);
-    expect(result.trace.settlement.hardMinimumSearch.chosenHardBaseBlockIds).toEqual([
-      'aTwo',
-      'bOne',
-      'req',
-    ]);
+    expect(result.trace.settlement.fallbackSearch.selectionsVisited).toBe(3);
+    expect(result.trace.settlement.fallbackSearch.chosenBlockIds).toEqual(['aTwo', 'bOne', 'req']);
     expect(result.usage.compiledTokens).toBeLessThanOrEqual(8);
   });
 });

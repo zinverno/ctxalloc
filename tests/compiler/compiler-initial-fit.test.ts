@@ -87,9 +87,9 @@ describe('ContextCompiler: the initial render fits', () => {
 
     expect(settlement.correctionApplied).toBe(false);
     expect(settlement.evictedBlockIds).toEqual([]);
-    expect(settlement.hardMinimumSearch.used).toBe(false);
-    expect(settlement.hardMinimumSearch.combinationsVisited).toBe(0);
-    expect(settlement.hardMinimumSearch).not.toHaveProperty('chosenHardBaseBlockIds');
+    expect(settlement.fallbackSearch.used).toBe(false);
+    expect(settlement.fallbackSearch.selectionsVisited).toBe(0);
+    expect(settlement.fallbackSearch).not.toHaveProperty('chosenBlockIds');
   });
 
   it('DEC-035: compiledContext is exactly the ContextRenderer string', () => {

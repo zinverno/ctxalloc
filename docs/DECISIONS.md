@@ -83,7 +83,7 @@ A newer decision has replaced the previous one.
 | DEC-035 | Render ordered context as boundary-safe JSONL and measure the exact string | Accepted |
 | DEC-036 | Compose explicit compilation contracts and filter scored candidates before allocation | Accepted |
 | DEC-037 | Record deterministic privacy-minimized trace snapshots without changing decisions | Accepted |
-| DEC-038 | Settle the compiler by exact render measurement, safe eviction, and bounded hard-minimum search | Accepted |
+| DEC-038 | Settle the compiler by exact render measurement, safe eviction, and a bounded exhaustive selection search | Accepted |
 
 ---
 
@@ -3265,7 +3265,7 @@ ARCHITECTURE changes: section 4.1 places `TraceBuilder` in the named topology as
 
 ---
 
-## DEC-038: Settle the Compiler by Exact Render Measurement, Safe Eviction, and Bounded Hard-Minimum Search
+## DEC-038: Settle the Compiler by Exact Render Measurement, Safe Eviction, and a Bounded Exhaustive Selection Search
 
 ### Status
 
@@ -3324,11 +3324,11 @@ interface ContextCompilerConfig {
   readonly schemaVersion: 1;
   readonly compilerId: string;
   readonly compilerVersion: string;
-  readonly maxHardMinimumCombinations: number;
+  readonly maxCorrectionSelections: number;
 }
 ```
 
-Validation is strict: closed object, non-blank well-formed UTF-16 identities preserved exactly, no defaults, no coercion. `maxHardMinimumCombinations` is required, is a safe integer of at least one, and has no default. Nothing reads a `package.json` version, a git revision, a build-time constant, an environment variable, or a clock (INV-DET-003, INV-TRACE-005).
+Validation is strict: closed object, non-blank well-formed UTF-16 identities preserved exactly, no defaults, no coercion. `maxCorrectionSelections` is required, is a safe integer of at least one, and has no default. It bounds the whole fallback search rather than one phase of it, which is why it is not named after hard minimums. Nothing reads a `package.json` version, a git revision, a build-time constant, an environment variable, or a clock (INV-DET-003, INV-TRACE-005).
 
 ### The Deterministic Compilation Identifier
 
@@ -3351,7 +3351,7 @@ The preimage is the domain-separated canonical serialization of:
     rendererVersion,
     correctionStrategy: "render-aware-v1",
     correctionVersion: 1,
-    maxHardMinimumCombinations
+    maxCorrectionSelections
   }
 ]]
 ```
@@ -3360,7 +3360,7 @@ The preimage is the domain-separated canonical serialization of:
 
 The whole request is deliberately **not** duplicated into the preimage: the fingerprint already binds the request identifier, scope, query, reference time, candidates, source documents, the `TokenBudget`, and the complete `CompilationPolicy` value, and restating them would create two places for one fact (INV-DEP-003).
 
-`maxHardMinimumCombinations` participates because it is a decision input, not a performance knob: it can change whether the fallback search proves a result or stops with a structured search-limit failure.
+`maxCorrectionSelections` participates because it is a decision input, not a performance knob: it can change whether the fallback search proves a result or stops with a structured search-limit failure.
 
 Nothing random, discovered, or environmental participates: no git SHA, hostname, process identifier, wall clock, or CI build number (INV-DET-003).
 
@@ -3383,18 +3383,43 @@ The `Tokenizer` port promises the exact count of one supplied string and nothing
 ```text id="m9add"
 tokenizer(a + b)   is not necessarily   tokenizer(a) + tokenizer(b)
 
-S + A over budget  does not imply       every superset of S + A is over budget
+S over budget      does not imply       every superset of S is over budget
 ```
 
 So the correction assigns **no rendered cost to any block**, subtracts no guessed wrapper cost, and proves no infeasibility by summing per-block estimates. Every selection whose rendered feasibility is decided is ordered, rendered, and tokenized as one complete string (INV-BUDGET-002, INV-RENDER-004). A complete measurement is cached by a canonical block-identifier set key, so one exact selection is never tokenized twice; no per-block cost is ever cached, because no such quantity exists.
 
+Non-monotonicity constrains what may be **concluded**, and two invalid inferences are easy to make. Both are forbidden here:
+
+```text id="m9infer"
+INVALID   render(requiredOnly) > budget
+          therefore no selection containing the required blocks fits
+
+INVALID   every MINIMAL policy-valid base is over budget
+          therefore no policy-valid selection fits
+```
+
+The first is invalid because adding an optional block can *lower* the count of the complete rendered string. A legal deterministic tokenizer may satisfy `tokens(render({R})) = 11` and `tokens(render({R, X})) = 8` against a budget of 8: `R` is present in both, and the second string simply tokenizes differently. The second is invalid for the same reason applied to supersets: a strict policy-valid superset of an over-budget base may fit.
+
+Both are therefore treated as **measurements, not verdicts**, and infeasibility is claimed only after every policy-valid selection has actually been visited.
+
 `ContextOrderer` and `ContextRenderer` expose package-internal helpers that both the public stages and the correction call, so a corrected selection orders and renders byte-for-byte as the public stages would. Neither helper is exported from the package entry point.
 
-### The Required-Only Test, and Why It Comes First
+### The Required-Only Probe Is a Measurement, Not a Verdict
 
-Before enumerating alternative category-minimum combinations, the correction measures the exact **required-only** selection: every required eligible candidate, no optional candidate, ordered, rendered, tokenized.
+Before enumerating alternatives, the correction measures the exact **required-only** selection: every required eligible candidate, no optional candidate, ordered, rendered, tokenized, and cached.
 
-If that alone exceeds `availableInputTokens`, the compilation fails with `required_content_exceeds_budget`, the rendered form of INV-BUDGET-004 and the documented category `REQUIRED_CONTENT_EXCEEDS_BUDGET`. The failure is definitive because required blocks may never be removed, so no selection can be smaller. It is the same issue code `BudgetAllocator` raises for the block-content form of the same impossibility: one product-level failure category, reported at whichever boundary can prove it.
+It does **not** by itself fail the compilation. Required-only over budget is not a token lower bound, for the reason above: a selection containing the same required blocks *plus* an optional one may render smaller. Concluding `REQUIRED_CONTENT_EXCEEDS_BUDGET` there would reject compilations that demonstrably succeed.
+
+The probe earns its place for two other reasons: it seeds the measurement cache with the selection most other candidates share, and when there is no category-minimum deficit it *is* the first hard base, so the phase that follows finds it already measured.
+
+`required_content_exceeds_budget` is still raised — but only after the exhaustive search below, and with a truthful meaning:
+
+```text id="m9req"
+no policy-valid final selection containing every required block
+renders within the available input budget
+```
+
+That is the rendered form of INV-BUDGET-004 and the documented category `REQUIRED_CONTENT_EXCEEDS_BUDGET`. It is the same issue code `BudgetAllocator` raises for the block-content form of the same impossibility: one product-level failure category, reported at whichever boundary can prove it. `BudgetAllocator`'s form remains definitive without any search, because it compares canonical content against the ceiling and adding rendering overhead can only make that worse.
 
 ### The Hard Base, and the Deterministic Enumeration
 
@@ -3425,40 +3450,79 @@ That last rule gives the enumeration its important property: **the first hard ba
 
 For each visited base whose canonical content sum fits, the selection is ordered, rendered, tokenized, and accepted if `compiledTokens <= availableInputTokens`. The first exact-render fitting base wins and the search stops.
 
+### The Rescue Phase, and Why Hard Bases Are Not Enough
+
+If every hard base is over budget, the search does **not** stop. Minimal bases are only part of the policy-valid space, and a strict superset of an over-budget base may render within the budget.
+
+The rescue therefore enumerates the remaining distinct policy-valid final selections: every one contains every required eligible group, draws only from `FilteredCandidateSet.eligible`, satisfies every `minBlocks` and `maxBlocks`, and satisfies the canonical content ceiling — but it may carry optional surplus and may include candidates from unconstrained categories.
+
+Its order is a simple project-owned total order, deliberately different from the hard-base phase's:
+
+1. eligible non-required candidates sorted by category presence, then category, then block ID, all by code unit;
+2. optional subset cardinality ascending;
+3. lexicographic index-combination order inside one cardinality.
+
+It does not reproduce the allocator's preference and does not need to: the hard-base phase already ran, so everything the allocator preferred has been visited. A selection that breaks a category bound is not policy-valid at all and is skipped without being visited or counted.
+
+The first fitting rescue selection wins. **This is correctness rescue, not optimization**: it claims no maximum of score, blocks, utilization, or information retained.
+
+### A Fitting Hard Base Is Never Re-Augmented
+
+When the hard-base phase finds a selection that fits, it settles as it stands: no optional surplus is added back.
+
+The reasons are cumulative:
+
+* the common path already preserves the initial greedy allocation and removes only the minimum safe prefix needed to fit;
+* the hard-base phase exists only because allocator-chosen protected minima rendered poorly, which is a narrow repair rather than an optimization opportunity;
+* tokenization is non-additive, so a "fill every spare token" pass would need its own explicit selection policy, not a greedy loop;
+* the current `CompilationPolicy` has no render-aware optimization slice to express one.
+
+This is a limit on ambition, not on correctness. The rescue phase still runs whenever no hard base fits, so declining to optimize a *fitting* result never costs a compilation that could have succeeded.
+
 ### The Search Limit Is a Stopping Point, Never a Proof
 
-`maxHardMinimumCombinations` counts **visited** Cartesian-product combinations, including combinations skipped because their canonical content sum exceeds the ceiling. Before visiting combination `N + 1`, if `N` already equals the configured maximum, the search stops and the compilation fails with:
+`maxCorrectionSelections` counts **unique** selections the fallback visits, across all three phases: the required-only probe, every hard base, and every rescue selection. A selection is identified by its exact canonical block-identifier set, so a hard base the rescue enumeration also produces is counted once and tokenized once. A selection whose canonical content sum exceeds the ceiling is counted and never rendered: considering it is the work the bound limits.
+
+Before admitting unique selection `N + 1`, if `N` already equals the configured maximum, the search stops and the compilation fails with:
 
 ```text id="m9lim"
 correction_search_limit_exceeded
 ```
 
-reporting the configured maximum and the number of combinations visited, with no partial success. The bound keeps exponential pathological input from hanging the compiler. It is **not** an approximation silently presented as a proof, and the failure never claims that no feasible hard base exists.
+reporting the configured maximum, with no partial success. It is **not** an approximation silently presented as a proof, and the failure never claims that no policy-valid selection fits.
+
+### The Bound Must Stop Work, Not Just Results
+
+A bound that fires only after the enumeration has been materialized protects nothing, because building the universe *is* the pathological cost. With 24 eligible candidates and a category minimum of 12 there are `C(24, 12) = 2,704,156` minimal bases; at 60 and 30 there are more than 10^17.
+
+Every combinatorial enumeration is therefore **lazy**. `combinations` is a generator that yields one index tuple at a time and accumulates nothing. The Cartesian product takes restartable **factories** rather than sequences, because it replays each inner sequence once per item of the outer one and a generator cannot be rewound; passing arrays would materialize each category's combinations up front. The rescue walks cardinalities and index combinations through the same generator.
+
+The bound is checked as each unique selection is admitted, so a pathological policy stops after roughly `maxCorrectionSelections` selections rather than after precomputing an exponential universe.
 
 ### Three Distinct Correction Failures
 
 ```text id="m9fail"
-required_content_exceeds_budget          the required blocks alone do not render within the budget
-rendered_hard_constraints_exceed_budget  required-only fits, and no policy-valid hard base renders within it
+required_content_exceeds_budget          every policy-valid selection containing every required
+                                         block was visited, and none renders within the budget
+rendered_hard_constraints_exceed_budget  the same, where a non-required category minimum is
+                                         active and made the surviving selections mandatory
 correction_search_limit_exceeded         the search stopped at its bound; feasibility is unknown
+```
+
+The first two report the **same measured fact** — every policy-valid selection was ordered, rendered, tokenized, and found over budget — and differ only in which constraint made the surviving selections mandatory, because that is what tells the caller which configuration to change. Neither is a claim about a token lower bound.
+
+The classification is decided by whether any constrained category still has a deficit beyond the required blocks:
+
+```text id="m9class"
+deficit(category) = max(0, minBlocks - requiredCount(category))
+
+no active deficit    -> required_content_exceeds_budget
+some active deficit  -> rendered_hard_constraints_exceed_budget
 ```
 
 The second is deliberately not called a required-content failure. Category minimums are **policy constraints**, not required-block attributes, and the caller's fix is a different one, so the code must be different too.
 
-### No Optional Re-Augmentation After the Hard-Minimum Fallback in Version 1
-
-When the fallback finds a fitting hard base, that base is settled as it stands. No optional surplus is added back.
-
-The reasons are cumulative:
-
-* the common path already preserves the initial greedy allocation and removes only the minimum safe prefix needed to fit;
-* the fallback exists only because allocator-chosen protected minima rendered poorly, which is a narrow repair rather than an optimization opportunity;
-* tokenization is non-additive and non-monotonic, so a second "fill every spare token" pass would need its own explicit selection policy, not a greedy loop;
-* the current `CompilationPolicy` has no render-aware optimization slice to express one.
-
-Conservative hard-base settlement is correct, deterministic, auditable, and leaves optimization to a future policy version.
-
-The result therefore claims **no** maximum of score, block count, token utilization, or information retained. It satisfies the hard constraints and the hard rendered budget, and says only that.
+The result claims **no** maximum of score, block count, token utilization, or information retained. It satisfies the hard constraints and the hard rendered budget, and says only that.
 
 ### Final Selection Reasons Are Separate From Allocator Decisions
 
@@ -3470,7 +3534,11 @@ type CompilationTraceFinalDecision =
   | {
       blockId;
       disposition: 'included';
-      reason: 'INCLUDED_REQUIRED' | 'INCLUDED_CATEGORY_MINIMUM' | 'INCLUDED_SCORE_ORDER';
+      reason:
+        | 'INCLUDED_REQUIRED'
+        | 'INCLUDED_CATEGORY_MINIMUM'
+        | 'INCLUDED_SCORE_ORDER'
+        | 'INCLUDED_RENDER_AWARE_CORRECTION';
       renderPosition: number;
     }
   | {
@@ -3485,7 +3553,8 @@ Semantics:
 
 * **initial fit** — the final included and excluded reasons mirror the allocator's own decisions;
 * **cheap eviction** — an allocator-included candidate the correction removed becomes `EXCLUDED_RENDER_AWARE_CORRECTION`; candidates the allocator already excluded stay `EXCLUDED_INITIAL_ALLOCATION`;
-* **hard-minimum fallback** — required inclusions are `INCLUDED_REQUIRED`, the non-required candidates chosen to satisfy category minimums are `INCLUDED_CATEGORY_MINIMUM`, and every other eligible optional candidate not selected is `EXCLUDED_RENDER_AWARE_CORRECTION`, because the correction rebuilt the selection from `FilteredCandidateSet.eligible` and therefore decided every one of them itself;
+* **hard-base fallback** — required inclusions are `INCLUDED_REQUIRED`, the non-required candidates chosen to satisfy category minimums are `INCLUDED_CATEGORY_MINIMUM`, and every other eligible optional candidate not selected is `EXCLUDED_RENDER_AWARE_CORRECTION`, because the correction rebuilt the selection from `FilteredCandidateSet.eligible` and therefore decided every one of them itself;
+* **rescue** — required inclusions stay `INCLUDED_REQUIRED`, and every non-required inclusion is `INCLUDED_RENDER_AWARE_CORRECTION`. A rescue selection may carry surplus beyond every category minimum, so asking which of its members "is" the minimum has no non-arbitrary answer; the correction claims all of them rather than attributing one to a rule it did not apply. Pretending the allocator selected them would be worse still — it did not;
 * filtered groups stay `FILTERED_POLICY`, because the correction never reconsiders them: eligibility is a precondition of selection (INV-ALLOC-002).
 
 `initialAllocationReason` is present exactly when the allocator itself excluded the group, so its original verdict stays readable beside the final one.
@@ -3536,11 +3605,12 @@ interface CompilationTraceSettlement {
   readonly correctionApplied: boolean;
   readonly initialRenderedTokens: number;
   readonly evictedBlockIds: readonly ContextBlockId[];
-  readonly hardMinimumSearch: {
+  readonly fallbackSearch: {
     readonly used: boolean;
-    readonly combinationsVisited: number;
-    readonly maxCombinations: number;
-    readonly chosenHardBaseBlockIds?: readonly ContextBlockId[];
+    readonly selectionsVisited: number;
+    readonly maxSelections: number;
+    readonly phase?: 'hard-base' | 'policy-selection-rescue';
+    readonly chosenBlockIds?: readonly ContextBlockId[];
   };
   readonly decisions: readonly CompilationTraceFinalDecision[];
   readonly ordering: { readonly orderedBlockIds: readonly ContextBlockId[] };
@@ -3554,7 +3624,7 @@ interface CompilationTraceSettlement {
 }
 ```
 
-`decisions` holds exactly one entry per deduplicated group, in the trace's own group order; every final inclusion carries one exact `renderPosition`, and the positions cover `0 ... n - 1` exactly once. `chosenHardBaseBlockIds` is absent when the fallback was not used and present when it settled a result, ordered by block identifier ascending rather than by `Map` or `Set` insertion. `evictedBlockIds` is the exact prefix of `optionalEvictionOrder` the correction removed, in that order.
+`decisions` holds exactly one entry per deduplicated group, in the trace's own group order; every final inclusion carries one exact `renderPosition`, and the positions cover `0 ... n - 1` exactly once. `selectionsVisited` counts unique selections across all three fallback phases, so an audit reads how much of the space was actually searched against the bound that limited it. `phase` and `chosenBlockIds` are absent when the fallback did not run or did not settle a result, and present together when it did, ordered by block identifier ascending rather than by `Map` or `Set` insertion. `evictedBlockIds` is the exact prefix of `optionalEvictionOrder` the correction removed, in that order.
 
 ```text id="m9usage"
 unusedTokens        = availableInputTokens - compiledTokens
@@ -3631,11 +3701,13 @@ A stage failure is **wrapped, not flattened**: the owning stage's exact issue co
 
 **Give each block a rendered cost and subtract it.** Rejected: no such quantity exists. Tokenization is not additive, so a per-block rendered cost is an invention, and a feasibility proof built on summing inventions is not a proof.
 
-**Assume monotonicity — that a superset of an over-budget selection is over budget.** Rejected for the same reason: the project has never promised it, and a subword vocabulary can merge or split differently once content sits in a larger string.
+**Assume monotonicity — that a superset of an over-budget selection is over budget.** Rejected: the project has never promised it, and a subword vocabulary can merge or split differently once content sits in a larger string. Two tempting shortcuts follow from assuming it, and both are rejected explicitly: failing at the required-only probe, and treating exhaustion of the *minimal* policy-valid bases as a global proof. Each would reject compilations that demonstrably succeed, and this phase pins both as regressions.
+
+**Collect the combination universe, then bound the visits.** Rejected: the bound would then fire only after the pathological cost had already been paid. `C(24, 12)` is 2,704,156 and `C(60, 30)` exceeds 10^17, so a materialized enumeration exhausts memory before any bound can stop it. Every enumerator is a generator, and the Cartesian product takes restartable factories, so the bound stops the work rather than the results.
 
 **Run an optional knapsack over the rendered budget.** Rejected: it would claim a maximum the kernel cannot establish under non-additive tokenization, and it needs a render-aware optimization policy that does not exist. Version 1 states what it does and no more.
 
-**Re-augment the settled hard base with optional surplus.** Rejected for version 1, as recorded above.
+**Re-augment a *fitting* hard base with optional surplus.** Rejected for version 1, as recorded above. This is a limit on ambition rather than on correctness: the rescue phase still runs whenever no hard base fits, so declining to optimize a fitting result never costs a compilation that could have succeeded.
 
 **Let the fallback fabricate an `AllocatedCandidateSet` and hand it to `TraceBuilder`.** Rejected: correction selections are not allocator outputs, and passing one as though `BudgetAllocator` produced it would put a manufactured allocator verdict into the audit record.
 
@@ -3649,7 +3721,7 @@ A stage failure is **wrapped, not flattened**: the owning stage's exact issue co
 
 ### Consequences
 
-`@ctxalloc/compiler` gains `ContextCompiler`, `ContextCompilerConfig`, `CompilationResult`, `CompilationResultUsage`, `CompilationId`, `ContextCompilationError`, `ContextCompilationStage`, `ContextCompilationIssueCode`, the settled and unsettled trace types with `CompilationTraceSettlement` and its members, and the four version constants — and **no new external dependency**: the boundary allowlist is unchanged, `@ctxalloc/tokenization` is still not a compiler dependency, and no validation-library or `node:crypto` type reaches a public declaration.
+`@ctxalloc/compiler` gains `ContextCompiler`, `ContextCompilerConfig`, `CompilationResult`, `CompilationResultUsage`, `CompilationId`, `ContextCompilationError`, `ContextCompilationStage`, `ContextCompilationIssueCode`, the settled and unsettled trace types with `CompilationTraceSettlement`, `CompilationTraceFallbackSearch`, `CompilationTraceFallbackPhase` and the rest of its members, and the four version constants — and **no new external dependency**: the boundary allowlist is unchanged, `@ctxalloc/tokenization` is still not a compiler dependency, and no validation-library or `node:crypto` type reaches a public declaration.
 
 `CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`, `CandidateFilter`, `BudgetAllocator`, `CompilationRequestValidator`, `CompilationPolicyValidator`, `Tokenizer`, and `MarkdownChunker` are **unchanged in behavior**. `ContextOrderer` and `ContextRenderer` are refactored to call package-internal helpers the compiler shares; their public ordering, their byte-for-byte rendering, their constructors, and their issue codes and messages are unchanged and regression-tested.
 

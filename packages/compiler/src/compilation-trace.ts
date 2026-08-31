@@ -586,7 +586,26 @@ export interface CompilationTraceFinalFilteredDecision {
 export interface CompilationTraceFinalIncludedDecision {
   readonly blockId: ContextBlockId;
   readonly disposition: 'included';
-  readonly reason: 'INCLUDED_REQUIRED' | 'INCLUDED_CATEGORY_MINIMUM' | 'INCLUDED_SCORE_ORDER';
+  /**
+   * Why this group is in the settled selection.
+   *
+   * The first three mirror the allocator's own vocabulary and are used when the
+   * settled selection is the allocator's, or the allocator's minus a safe
+   * eviction prefix, or a hard base whose non-required members were chosen
+   * specifically to satisfy a category minimum.
+   *
+   * `INCLUDED_RENDER_AWARE_CORRECTION` is used for a non-required group the
+   * **rescue** search selected. A rescue selection may carry optional surplus
+   * beyond every category minimum, and asking which of its members "is" the
+   * minimum has no non-arbitrary answer, so the correction claims all of them
+   * as its own rather than attributing one to a rule it did not apply
+   * (DEC-038).
+   */
+  readonly reason:
+    | 'INCLUDED_REQUIRED'
+    | 'INCLUDED_CATEGORY_MINIMUM'
+    | 'INCLUDED_SCORE_ORDER'
+    | 'INCLUDED_RENDER_AWARE_CORRECTION';
   readonly renderPosition: number;
 }
 
@@ -627,21 +646,40 @@ export type CompilationTraceFinalDecision =
   | CompilationTraceFinalExcludedDecision;
 
 /**
- * What the bounded hard-minimum replacement search did, if it ran.
+ * Which phase of the bounded fallback search settled a selection, when one did.
  *
- * `combinationsVisited` counts visited Cartesian-product combinations, including
- * combinations skipped because their canonical content sum exceeded the ceiling.
- * `maxCombinations` is the configured bound the compiler was given.
+ * `hard-base` — a minimal policy-valid base: every required group plus exactly
+ * enough non-required candidates to satisfy each category minimum, and no
+ * surplus. This phase runs first and preserves the allocator's own preference
+ * order.
  *
- * `chosenHardBaseBlockIds` is absent when the fallback was not used and present
- * when it settled a result. It is ordered by block identifier ascending, never
- * by `Map` or `Set` insertion, so the record is reproducible (INV-DET-002).
+ * `policy-selection-rescue` — a policy-valid selection that is not minimal. It
+ * runs only after **every** hard base has failed, because tokenization is not
+ * monotonic: a strict superset of an over-budget selection may render within the
+ * budget (DEC-038).
  */
-export interface CompilationTraceHardMinimumSearch {
+export type CompilationTraceFallbackPhase = 'hard-base' | 'policy-selection-rescue';
+
+/**
+ * What the bounded fallback search did, if it ran.
+ *
+ * `selectionsVisited` counts **unique** selections the fallback visited, keyed
+ * by their exact canonical block-identifier set. A selection whose canonical
+ * content sum exceeds the ceiling is counted and never rendered; a selection the
+ * fallback reaches twice — a hard base the rescue enumeration also produces, for
+ * instance — is counted once. `maxSelections` is the configured bound.
+ *
+ * `phase` and `chosenBlockIds` are absent when the fallback did not run or did
+ * not settle a result, and present together when it did. The identifiers are
+ * ordered ascending, never by `Map` or `Set` insertion, so the record is
+ * reproducible (INV-DET-002).
+ */
+export interface CompilationTraceFallbackSearch {
   readonly used: boolean;
-  readonly combinationsVisited: number;
-  readonly maxCombinations: number;
-  readonly chosenHardBaseBlockIds?: readonly ContextBlockId[];
+  readonly selectionsVisited: number;
+  readonly maxSelections: number;
+  readonly phase?: CompilationTraceFallbackPhase;
+  readonly chosenBlockIds?: readonly ContextBlockId[];
 }
 
 /** The render order of the settled selection, by stable block identifier. */
@@ -706,7 +744,7 @@ export interface CompilationTraceSettlement {
   readonly initialRenderedTokens: number;
 
   readonly evictedBlockIds: readonly ContextBlockId[];
-  readonly hardMinimumSearch: CompilationTraceHardMinimumSearch;
+  readonly fallbackSearch: CompilationTraceFallbackSearch;
 
   /** Exactly one decision per deduplicated group, in trace group order. */
   readonly decisions: readonly CompilationTraceFinalDecision[];

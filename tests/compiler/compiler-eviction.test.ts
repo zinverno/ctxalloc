@@ -95,7 +95,7 @@ describe('ContextCompiler: cheap eviction along optionalEvictionOrder', () => {
 
     expect(result.trace.settlement.evictedBlockIds).toEqual(['low', 'mid']);
     expect([...includedIds(result)].sort()).toEqual(['high', 'must']);
-    expect(result.trace.settlement.hardMinimumSearch.used).toBe(false);
+    expect(result.trace.settlement.fallbackSearch.used).toBe(false);
   });
 
   it('consumes optionalEvictionOrder in its exact published order, unsorted', () => {

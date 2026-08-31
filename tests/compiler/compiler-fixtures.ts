@@ -116,6 +116,53 @@ export function blockPenaltyTokenizer(
   };
 }
 
+/**
+ * Counts words, plus a surcharge that depends on the **record count** of the
+ * rendered string.
+ *
+ * This is what makes non-monotonic tokenization concrete. A legal deterministic
+ * tokenizer may charge more for a one-record string than for a two-record one,
+ * so `tokens(render({R})) > tokens(render({R, X}))` even though `{R}` is a
+ * strict subset. Block content has zero records, so it always counts as pure
+ * words and `CandidateValidator` accepts the declared counts.
+ */
+export function recordCountTokenizer(
+  surcharge: Readonly<Record<number, number>>,
+  id = 'test:record-count',
+): Tokenizer {
+  return {
+    id,
+    version: '1',
+    countTokens: (text: string): number =>
+      Math.max(0, countWords(text) + (surcharge[recordCount(text)] ?? 0)),
+  };
+}
+
+/**
+ * Counts words, plus a per-block surcharge, plus a record-count surcharge.
+ *
+ * Combining the two is what lets a fixture distinguish two selections of equal
+ * size, which a record-count rule alone cannot do.
+ */
+export function mixedPenaltyTokenizer(
+  penalties: Readonly<Record<string, number>>,
+  surcharge: Readonly<Record<number, number>>,
+  id = 'test:mixed-penalty',
+): Tokenizer {
+  return {
+    id,
+    version: '1',
+    countTokens: (text: string): number => {
+      let total = countWords(text) + (surcharge[recordCount(text)] ?? 0);
+      for (const [blockId, penalty] of Object.entries(penalties)) {
+        const marker = `"blockId":${JSON.stringify(blockId)}`;
+        total += penalty * (text.split(marker).length - 1);
+      }
+      return Math.max(0, total);
+    },
+  };
+}
+
 /** A tokenizer that records the exact texts it was asked to count. */
 export function recordingTokenizer(calls: string[], inner: Tokenizer = wordTokenizer): Tokenizer {
   return {
@@ -143,7 +190,7 @@ export function compilerConfig(overrides: Record<string, unknown> = {}): Record<
     schemaVersion: 1,
     compilerId: 'ctxalloc-compiler',
     compilerVersion: '0.15.0',
-    maxHardMinimumCombinations: 64,
+    maxCorrectionSelections: 64,
     ...overrides,
   };
 }

@@ -12,6 +12,7 @@ import {
   BudgetAllocator,
   type AllocatedCandidateSet,
   type BudgetAllocationPolicy,
+  type CategoryAllocationConstraint,
 } from './budget-allocator.js';
 import { CandidateDeduplicator } from './candidate-deduplicator.js';
 import { CandidateFilter, type FilteredCandidateSet } from './candidate-filter.js';
@@ -34,7 +35,8 @@ import {
   hashRenderedContext,
   settleCompilationTrace,
   type CompilationTraceFinalDecision,
-  type CompilationTraceHardMinimumSearch,
+  type CompilationTraceFallbackPhase,
+  type CompilationTraceFallbackSearch,
   type CompilationTraceSettlement,
   type SettledCompilationTrace,
   type UnsettledCompilationTrace,
@@ -89,13 +91,32 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
  * ## Rendered tokenization is neither additive nor monotonic
  *
  * The `Tokenizer` port promises the exact count of one supplied string and
- * nothing more. `tokens(A + B)` need not equal `tokens(A) + tokens(B)`, and a
- * selection being over budget does not make every superset of it over budget.
+ * nothing more:
+ *
+ * ```text
+ * tokens(A + B)      is not necessarily   tokens(A) + tokens(B)
+ * S over budget      does not imply       every superset of S is over budget
+ * ```
+ *
  * The correction therefore assigns **no rendered cost to any block**, subtracts
  * no guessed wrapper cost, and proves no infeasibility by summing per-block
  * estimates. Every selection whose rendered feasibility is decided is ordered,
  * rendered, and tokenized as one complete string (INV-BUDGET-002,
  * INV-RENDER-004).
+ *
+ * Non-monotonicity has two consequences the fallback must honour, and both are
+ * about what may **not** be concluded:
+ *
+ * 1. a required-only selection over the budget is **not** a lower bound. Adding
+ *    an optional block can lower the count of the complete rendered string, so
+ *    required-only over budget does not prove that no selection containing the
+ *    required blocks fits;
+ * 2. exhausting the **minimal** policy-valid bases is **not** a global
+ *    infeasibility proof, because a strict policy-valid superset of an
+ *    over-budget base may fit.
+ *
+ * So infeasibility is claimed only after every policy-valid selection has
+ * actually been visited within the configured bound.
  *
  * ## It is synchronous, deterministic, and offline
  *
@@ -142,16 +163,20 @@ export interface ContextCompilerConfig {
   readonly compilerVersion: string;
 
   /**
-   * The maximum number of hard-minimum candidate combinations the correction
-   * fallback may **visit** before returning a structured search-limit failure.
+   * The maximum number of **unique** candidate selections the correction
+   * fallback may visit before returning a structured search-limit failure.
    *
    * It is required, it is a safe integer of at least one, and it has no default.
-   * The bound keeps pathological input from hanging the compiler, and it is a
-   * decision input rather than a performance knob: it can change whether the
-   * search proves a result or stops without one, so it participates in the
+   * The bound covers the whole bounded search — the required-only probe, every
+   * hard base, and every rescue selection — and it is enforced against lazily
+   * generated candidates, so a pathological policy stops after roughly this many
+   * selections rather than after materializing an exponential universe.
+   *
+   * It is a decision input rather than a performance knob: it can change whether
+   * the search proves a result or stops without one, so it participates in the
    * compilation identifier (DEC-038).
    */
-  readonly maxHardMinimumCombinations: number;
+  readonly maxCorrectionSelections: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -386,11 +411,9 @@ const ContextCompilerConfigSchema = z.strictObject({
   schemaVersion: z.literal(CONTEXT_COMPILER_CONFIG_SCHEMA_VERSION),
   compilerId: identityString,
   compilerVersion: identityString,
-  maxHardMinimumCombinations: z
-    .number()
-    .refine((value) => Number.isSafeInteger(value) && value >= 1, {
-      message: 'must be a safe integer greater than or equal to 1',
-    }),
+  maxCorrectionSelections: z.number().refine((value) => Number.isSafeInteger(value) && value >= 1, {
+    message: 'must be a safe integer greater than or equal to 1',
+  }),
 });
 
 /* -------------------------------------------------------------------------- */
@@ -451,12 +474,26 @@ interface RenderMeasurement {
   readonly renderedTokens: number;
 }
 
+/**
+ * Bookkeeping shared by every phase of the bounded fallback search.
+ *
+ * `measured` spans the whole compilation, so a selection the initial render or
+ * the cheap path already tokenized is never tokenized again. `visited` is scoped
+ * to the fallback and holds the canonical block-identifier set key of every
+ * selection it has considered — it is exactly what `maxSelections` bounds.
+ */
+interface SearchState {
+  readonly measured: Map<string, RenderMeasurement>;
+  readonly visited: Set<string>;
+  readonly maxSelections: number;
+}
+
 /** The settled outcome of the render-aware correction. */
 interface Settlement {
   readonly measurement: RenderMeasurement;
   readonly correctionApplied: boolean;
   readonly evictedBlockIds: readonly ContextBlockId[];
-  readonly search: CompilationTraceHardMinimumSearch;
+  readonly search: CompilationTraceFallbackSearch;
   /** The final inclusion reason of every block in the settled selection. */
   readonly inclusionReasons: ReadonlyMap<string, CompilationTraceFinalIncludedReason>;
   /** True once the fallback rebuilt the selection from `filtered.eligible`. */
@@ -464,7 +501,10 @@ interface Settlement {
 }
 
 type CompilationTraceFinalIncludedReason =
-  'INCLUDED_REQUIRED' | 'INCLUDED_CATEGORY_MINIMUM' | 'INCLUDED_SCORE_ORDER';
+  | 'INCLUDED_REQUIRED'
+  | 'INCLUDED_CATEGORY_MINIMUM'
+  | 'INCLUDED_SCORE_ORDER'
+  | 'INCLUDED_RENDER_AWARE_CORRECTION';
 
 /* -------------------------------------------------------------------------- */
 /* Compiler                                                                    */
@@ -647,8 +687,8 @@ export class ContextCompiler {
    *
    * The correction strategy and its version participate because a different
    * correction can settle a different selection from identical stage evidence,
-   * and `maxHardMinimumCombinations` participates because it can change whether
-   * the search proves a result at all (DEC-038).
+   * and `maxCorrectionSelections` participates because it can change whether the
+   * search proves a result at all (DEC-038).
    */
   #compilationIdOf(request: CompilationRequest): CompilationId {
     return calculateCompilationId(fingerprintCompilationRequest(request), {
@@ -660,7 +700,7 @@ export class ContextCompiler {
       rendererVersion: CONTEXT_RENDERER_VERSION,
       correctionStrategy: RENDER_AWARE_CORRECTION_STRATEGY,
       correctionVersion: RENDER_AWARE_CORRECTION_VERSION,
-      maxHardMinimumCombinations: this.#config.maxHardMinimumCombinations,
+      maxCorrectionSelections: this.#config.maxCorrectionSelections,
     });
   }
 
@@ -698,20 +738,23 @@ export class ContextCompiler {
   #settle(run: CompilationRun): Settlement {
     const { allocated, rendered, filtered } = run;
     const available = run.availableTokens;
-    const maxCombinations = this.#config.maxHardMinimumCombinations;
-    const noSearch: CompilationTraceHardMinimumSearch = {
+    const maxSelections = this.#config.maxCorrectionSelections;
+    const noSearch: CompilationTraceFallbackSearch = {
       used: false,
-      combinationsVisited: 0,
-      maxCombinations,
+      selectionsVisited: 0,
+      maxSelections,
     };
 
     const eligible = filtered.eligible.candidates.map(correctionCandidateOf);
     const eligibleById = new Map<string, CorrectionCandidate>();
     for (const candidate of eligible) eligibleById.set(candidate.id, candidate);
 
-    const measured = new Map<string, RenderMeasurement>();
+    // One measurement cache for the whole compilation, so a selection the cheap
+    // path already tokenized is never tokenized again if the fallback reaches
+    // it. `visited` is scoped to the fallback: it is what the bound counts.
+    const state: SearchState = { measured: new Map(), visited: new Set(), maxSelections };
     const measure = (blocks: readonly ContextBlock[]): RenderMeasurement =>
-      this.#measure(blocks, measured, run);
+      this.#measure(blocks, state.measured, run);
 
     // Render attempt 0 is the existing `ContextRenderer` attempt, reused rather
     // than repeated: the renderer already tokenized this exact selection with
@@ -724,7 +767,7 @@ export class ContextCompiler {
       renderedContext: rendered.renderedContext,
       renderedTokens: rendered.renderedTokens,
     };
-    measured.set(selectionKey(initial.blocks), initial);
+    state.measured.set(selectionKey(initial.blocks), initial);
 
     const allocatorReasons = new Map<string, CompilationTraceFinalIncludedReason>();
     for (const decision of allocated.included) {
@@ -771,139 +814,222 @@ export class ContextCompiler {
       }
     }
 
-    return this.#searchHardBase(run, {
-      eligible,
-      measure,
-      evictedBlockIds: evicted,
-      maxCombinations,
-    });
+    return this.#searchFallback(run, { eligible, evictedBlockIds: evicted, state });
   }
 
   /**
-   * Proves, or fails to prove, that some policy-valid hard base renders within
-   * the budget.
+   * Searches for a policy-valid selection that renders within the budget, or
+   * proves that none does (DEC-038).
    *
    * Exhausting `optionalEvictionOrder` is **not** a feasibility proof. It shows
-   * only that no more currently selected optional surplus can be given back under
-   * the current hard constraints; the allocator minimized canonical block
+   * only that no more *currently selected* optional surplus can be given back
+   * under the current hard constraints; the allocator minimized canonical block
    * *content* cost when it chose which candidates satisfy each category minimum,
-   * and rendering overhead varies per block, so a protected cheaper-by-content
-   * block may render more expensively than an unselected candidate of the same
-   * category that satisfies the same minimum (DEC-033).
+   * and rendering overhead varies per block (DEC-033).
    *
-   * The required-only selection is measured first, because its failure is
-   * definitive: required blocks may never be removed, so no other selection can
-   * be smaller (INV-BUDGET-003, INV-BUDGET-004).
+   * The search runs in three phases, all sharing one bound and one visited set:
+   *
+   * 1. the **required-only probe**, measured exactly and cached. It is a
+   *    measurement, never a verdict: a required-only overrun proves nothing,
+   *    because adding an optional block can lower the count of the complete
+   *    rendered string;
+   * 2. the **hard bases** — minimal policy-valid selections — in the allocator's
+   *    own preference order, so the first one visited is the choice
+   *    `BudgetAllocator` preferred. A fitting hard base settles immediately and
+   *    is never re-augmented;
+   * 3. the **rescue**, which runs only once every hard base has failed and walks
+   *    the remaining policy-valid selections, surplus included, because a strict
+   *    superset of an over-budget base may fit.
+   *
+   * Only after phase 3 completes may infeasibility be claimed.
    */
-  #searchHardBase(
+  #searchFallback(
     run: CompilationRun,
     context: {
       readonly eligible: readonly CorrectionCandidate[];
-      readonly measure: (blocks: readonly ContextBlock[]) => RenderMeasurement;
       readonly evictedBlockIds: readonly ContextBlockId[];
-      readonly maxCombinations: number;
+      readonly state: SearchState;
     },
   ): Settlement {
     const available = run.availableTokens;
-    const { eligible, measure, maxCombinations } = context;
+    const { eligible, state } = context;
     const required = eligible.filter((candidate) => candidate.required);
     const optional = eligible.filter((candidate) => !candidate.required);
+    const constraints = run.allocationPolicy.categoryConstraints ?? [];
 
-    const requiredOnly = measure(required.map((candidate) => candidate.block));
-    if (requiredOnly.renderedTokens > available) {
-      throw this.#correctionFailure(
-        run,
-        'required_content_exceeds_budget',
-        ['requiredBlocks'],
-        `REQUIRED_CONTENT_EXCEEDS_BUDGET: the ${String(required.length)} required block(s) alone render to ${String(requiredOnly.renderedTokens)} token(s) with ${String(available)} available; required blocks are never removed to repair a budget overrun`,
+    const settle = (
+      selection: readonly CorrectionCandidate[],
+      measurement: RenderMeasurement,
+      phase: CompilationTraceFallbackPhase,
+      reasonOf: (candidate: CorrectionCandidate) => CompilationTraceFinalIncludedReason,
+    ): Settlement => ({
+      measurement,
+      correctionApplied: true,
+      evictedBlockIds: context.evictedBlockIds,
+      search: {
+        used: true,
+        selectionsVisited: state.visited.size,
+        maxSelections: state.maxSelections,
+        phase,
+        chosenBlockIds: selection.map((candidate) => candidate.id).sort(compareCodeUnits),
+      },
+      inclusionReasons: new Map(
+        selection.map((candidate) => [candidate.id, reasonOf(candidate)] as const),
+      ),
+      rebuilt: true,
+    });
+
+    /* 1. The required-only probe: measured and cached, never a verdict. */
+    this.#visit(required, run, state);
+
+    /* 2. The minimal hard bases, in the allocator's own preference order. */
+    const deficits = this.#categoryDeficits(run, required, optional);
+    for (const picks of cartesian(deficits.map((deficit) => deficit.combinations))) {
+      const selection = [...required, ...picks.flat()];
+      const measurement = this.#visit(selection, run, state);
+      if (measurement === undefined || measurement.renderedTokens > available) continue;
+
+      // A fitting hard base settles as it stands. Version 1 adds no optional
+      // surplus back to a base that already fits: the cheap path preserved the
+      // greedy allocation, this phase exists because the protected minima
+      // rendered poorly, and filling the remaining budget again under
+      // non-additive tokenization would need a render-aware optimization policy
+      // the current `CompilationPolicy` does not have. That is a deliberate
+      // limit on ambition, not on correctness — the rescue below still runs when
+      // no hard base fits at all (DEC-038).
+      const minimumIds = new Set(picks.flat().map((candidate) => candidate.id));
+      return settle(selection, measurement, 'hard-base', (candidate) =>
+        minimumIds.has(candidate.id) ? 'INCLUDED_CATEGORY_MINIMUM' : 'INCLUDED_REQUIRED',
       );
     }
 
-    const groups = this.#minimumGroups(run, required, optional);
-    let visited = 0;
+    /* 3. The rescue: every remaining policy-valid selection, surplus included. */
+    const pool = [...optional].sort(compareRescueOrder);
+    for (let size = 0; size <= pool.length; size += 1) {
+      for (const picks of combinations(pool, size)) {
+        const selection = [...required, ...picks];
+        // A selection that breaks a category bound is not a policy-valid
+        // selection at all, so it is neither visited nor counted.
+        if (!satisfiesCategoryBounds(selection, constraints)) continue;
 
-    for (const picks of cartesian(groups.map((group) => group.combinations))) {
-      // The bound counts **visited** combinations, including those skipped for
-      // content cost below. Stopping is not a feasibility claim, so it is
-      // reported under its own code (DEC-038).
-      if (visited === maxCombinations) {
-        throw this.#correctionFailure(
-          run,
-          'correction_search_limit_exceeded',
-          ['hardMinimumSearch'],
-          `the hard-minimum replacement search reached its configured maximum of ${String(maxCombinations)} combination(s) after visiting ${String(visited)}; this is a search limit, not a proof that no hard base fits`,
+        const measurement = this.#visit(selection, run, state);
+        if (measurement === undefined || measurement.renderedTokens > available) continue;
+
+        // Which member of a rescue selection "is" the category minimum has no
+        // non-arbitrary answer once surplus is present, so the correction claims
+        // every non-required inclusion as its own rather than attributing one to
+        // a rule it did not apply (DEC-038).
+        return settle(selection, measurement, 'policy-selection-rescue', (candidate) =>
+          candidate.required ? 'INCLUDED_REQUIRED' : 'INCLUDED_RENDER_AWARE_CORRECTION',
         );
       }
-      visited += 1;
-
-      const selection = [...required, ...picks.flat()];
-      // The allocation policy's exact content-budget contract still holds: a
-      // rendered measurement is not a licence to exceed the ceiling the
-      // allocator enforces on canonical block content (DEC-033).
-      const contentTokens = sumTokens(selection.map((candidate) => candidate.contentTokens));
-      if (contentTokens > available) continue;
-
-      const attempt = measure(selection.map((candidate) => candidate.block));
-      if (attempt.renderedTokens > available) continue;
-
-      const inclusionReasons = new Map<string, CompilationTraceFinalIncludedReason>();
-      for (const candidate of required) inclusionReasons.set(candidate.id, 'INCLUDED_REQUIRED');
-      for (const candidate of picks.flat()) {
-        inclusionReasons.set(candidate.id, 'INCLUDED_CATEGORY_MINIMUM');
-      }
-
-      // No optional re-augmentation in v1. The settled hard base is returned as
-      // it stands: the common path already preserves the greedy allocation and
-      // removes only the minimum safe prefix, this fallback exists because the
-      // protected minima rendered poorly, and filling the remaining budget again
-      // under non-additive tokenization would need a render-aware optimization
-      // policy the current `CompilationPolicy` does not have (DEC-038).
-      return {
-        measurement: attempt,
-        correctionApplied: true,
-        evictedBlockIds: context.evictedBlockIds,
-        search: {
-          used: true,
-          combinationsVisited: visited,
-          maxCombinations,
-          chosenHardBaseBlockIds: [...selection]
-            .map((candidate) => candidate.id)
-            .sort(compareCodeUnits),
-        },
-        inclusionReasons,
-        rebuilt: true,
-      };
     }
 
-    throw this.#correctionFailure(
+    /* Exhausted: every policy-valid selection was visited, and none fits. */
+    throw this.#exhaustedFailure(run, deficits.length > 0, state, available);
+  }
+
+  /**
+   * Classifies a genuinely exhaustive failure by what actually blocks it.
+   *
+   * Neither code is a claim about a lower bound. Both say the same measured
+   * thing — every policy-valid selection was ordered, rendered, tokenized, and
+   * found over budget — and differ only in which constraint made the surviving
+   * selections mandatory, because that is what tells the caller which
+   * configuration to change (DEC-038).
+   */
+  #exhaustedFailure(
+    run: CompilationRun,
+    hasActiveDeficit: boolean,
+    state: SearchState,
+    available: number,
+  ): ContextCompilationError {
+    const visited = String(state.visited.size);
+    const budget = String(available);
+    if (hasActiveDeficit) {
+      return this.#correctionFailure(
+        run,
+        'rendered_hard_constraints_exceed_budget',
+        ['fallbackSearch'],
+        `RENDERED_HARD_CONSTRAINTS_EXCEED_BUDGET: none of the ${visited} policy-valid selection(s) satisfying every required block and every category block-count constraint renders within the ${budget} available token(s)`,
+      );
+    }
+    return this.#correctionFailure(
       run,
-      'rendered_hard_constraints_exceed_budget',
-      ['hardMinimumSearch'],
-      `RENDERED_HARD_CONSTRAINTS_EXCEED_BUDGET: the required blocks render within the ${String(available)} available token(s), but none of the ${String(visited)} policy-valid category-minimum base(s) does`,
+      'required_content_exceeds_budget',
+      ['fallbackSearch'],
+      `REQUIRED_CONTENT_EXCEEDS_BUDGET: none of the ${visited} policy-valid selection(s) containing every required block renders within the ${budget} available token(s)`,
     );
   }
 
   /**
-   * The per-category candidate lists and index combinations the search walks.
+   * Visits one candidate selection exactly once, under the configured bound.
+   *
+   * A selection is identified by its exact canonical block-identifier set, so
+   * the same set reached twice — a hard base the rescue enumeration also
+   * produces, for instance — is counted once and tokenized once.
+   *
+   * The bound is checked **before** a new selection is admitted, so the search
+   * stops at the configured number of unique selections rather than after
+   * generating an exponential universe. A selection whose canonical content sum
+   * exceeds the ceiling still counts: it was considered, and considering it is
+   * the work the bound limits. It is never rendered, because the allocation
+   * policy's exact content contract still binds a corrected selection (DEC-033).
+   *
+   * @returns the measurement, or `undefined` when the content ceiling rules the
+   * selection out.
+   * @throws {ContextCompilationError} when the bound is reached.
+   */
+  #visit(
+    selection: readonly CorrectionCandidate[],
+    run: CompilationRun,
+    state: SearchState,
+  ): RenderMeasurement | undefined {
+    const key = selectionKey(selection.map((candidate) => candidate.block));
+    if (!state.visited.has(key)) {
+      if (state.visited.size === state.maxSelections) {
+        throw this.#correctionFailure(
+          run,
+          'correction_search_limit_exceeded',
+          ['fallbackSearch'],
+          `the render-aware correction search reached its configured maximum of ${String(state.maxSelections)} selection(s); this is a search limit, not a proof that no policy-valid selection fits`,
+        );
+      }
+      state.visited.add(key);
+    }
+
+    if (sumTokens(selection.map((candidate) => candidate.contentTokens)) > run.availableTokens) {
+      return undefined;
+    }
+    return this.#measure(
+      selection.map((candidate) => candidate.block),
+      state.measured,
+      run,
+    );
+  }
+
+  /**
+   * The per-category deficit generators the hard-base phase walks.
    *
    * Constrained categories are traversed in project-owned code-unit order, never
    * by locale and never by policy array position. Inside a category the optional
    * candidates are sorted by the allocator's own hard-minimum preference, and the
-   * combinations of size `deficit` are enumerated in lexicographic **index**
-   * order over that sorted list. The Cartesian product then varies the last
-   * category fastest, so the very first combination is exactly the choice
-   * `BudgetAllocator` preferred (INV-DET-002, INV-DET-005).
+   * combinations of size `deficit` are generated lazily in lexicographic
+   * **index** order. The Cartesian product varies the last category fastest, so
+   * the very first combination is exactly the choice `BudgetAllocator` preferred
+   * (INV-DET-002, INV-DET-005).
    *
-   * A category is disjoint from every other, because a canonical block declares
-   * at most one exact category.
+   * Each entry is a **factory**, not an array: the Cartesian product restarts the
+   * inner sequences many times, and materializing them would build the
+   * exponential universe the bound exists to avoid.
    */
-  #minimumGroups(
+  #categoryDeficits(
     run: CompilationRun,
     required: readonly CorrectionCandidate[],
     optional: readonly CorrectionCandidate[],
   ): readonly {
     readonly category: string;
-    readonly combinations: readonly (readonly CorrectionCandidate[])[];
+    readonly combinations: () => Generator<readonly CorrectionCandidate[], void, undefined>;
   }[] {
     const constraints = run.allocationPolicy.categoryConstraints ?? [];
     const categories = [...constraints]
@@ -934,7 +1060,13 @@ export class ContextCompiler {
           `category ${quote(category)} needs ${String(deficit)} more eligible optional candidate(s) to satisfy its minimum and the eligible set supplies ${String(pool.length)}`,
         );
       }
-      return [{ category, combinations: combinations(pool, deficit) }];
+      return [
+        {
+          category,
+          combinations: (): Generator<readonly CorrectionCandidate[], void, undefined> =>
+            combinations(pool, deficit),
+        },
+      ];
     });
   }
 
@@ -1031,7 +1163,7 @@ export class ContextCompiler {
       correctionApplied: settlement.correctionApplied,
       initialRenderedTokens: run.rendered.renderedTokens,
       evictedBlockIds: [...settlement.evictedBlockIds],
-      hardMinimumSearch: settlement.search,
+      fallbackSearch: settlement.search,
       decisions: finalDecisions(run, settlement, includedBlocks),
       ordering: { orderedBlockIds: includedBlocks.map((block) => block.id) },
       rendering: {
@@ -1119,23 +1251,35 @@ function sumTokens(values: readonly number[]): number {
 }
 
 /**
- * Every combination of exactly `size` items, in lexicographic index order.
+ * Every combination of exactly `size` items, in lexicographic index order,
+ * **lazily**.
  *
  * The enumeration walks index tuples, never values, so the order depends only on
  * the position of a candidate in the already-sorted pool and never on its
  * content, score, or identifier spelling beyond that sort (INV-DET-002).
+ *
+ * It is a generator, and that is a correctness property rather than an
+ * optimization. `C(60, 30)` exceeds 10^17: a version that collected its results
+ * into an array would exhaust memory building the universe **before** the
+ * configured search bound could stop it, which would make the bound's promise —
+ * that pathological input cannot hang the compiler — false (DEC-038).
  */
-function combinations<TItem>(pool: readonly TItem[], size: number): readonly (readonly TItem[])[] {
-  if (size === 0) return [[]];
-  if (size > pool.length) return [];
+function* combinations<TItem>(
+  pool: readonly TItem[],
+  size: number,
+): Generator<readonly TItem[], void, undefined> {
+  if (size === 0) {
+    yield [];
+    return;
+  }
+  if (size > pool.length) return;
 
-  const result: TItem[][] = [];
   const indices: number[] = Array.from({ length: size }, (_, offset) => offset);
   for (;;) {
-    result.push(indices.map((index) => pool[index] as TItem));
+    yield indices.map((index) => pool[index] as TItem);
     let cursor = size - 1;
     while (cursor >= 0 && (indices[cursor] as number) === pool.length - size + cursor) cursor -= 1;
-    if (cursor < 0) return result;
+    if (cursor < 0) return;
     indices[cursor] = (indices[cursor] as number) + 1;
     for (let next = cursor + 1; next < size; next += 1) {
       indices[next] = (indices[next - 1] as number) + 1;
@@ -1144,27 +1288,75 @@ function combinations<TItem>(pool: readonly TItem[], size: number): readonly (re
 }
 
 /**
- * The Cartesian product of the per-category combination lists.
+ * The Cartesian product of the per-category combination sequences, lazily.
  *
- * The first list varies slowest, so the first tuple takes each category's first
- * combination — the allocator's own preference — and the search then walks away
- * from it in one fixed direction (INV-DET-002).
+ * The first sequence varies slowest, so the first tuple takes each category's
+ * first combination — the allocator's own preference — and the search then walks
+ * away from it in one fixed direction (INV-DET-002).
  *
- * It is a generator so that a bounded search visits only what it needs: a
- * pathological policy must not build every tuple in memory before the bound can
- * stop it.
+ * The inputs are **factories** rather than sequences, because the product
+ * restarts every inner sequence once per item of the outer one and a generator
+ * cannot be replayed. Passing arrays instead would materialize each category's
+ * combinations up front, which is exactly the eager construction the bound
+ * exists to prevent.
  */
 function* cartesian<TItem>(
-  lists: readonly (readonly TItem[])[],
-): Generator<readonly TItem[], void, undefined> {
-  if (lists.length === 0) {
+  factories: readonly (() => Generator<readonly TItem[], void, undefined>)[],
+): Generator<readonly (readonly TItem[])[], void, undefined> {
+  const [first, ...rest] = factories;
+  if (first === undefined) {
     yield [];
     return;
   }
-  const [first, ...rest] = lists;
-  for (const item of first ?? []) {
+  for (const item of first()) {
     for (const tail of cartesian(rest)) yield [item, ...tail];
   }
+}
+
+/**
+ * The rescue enumeration's order over eligible non-required candidates.
+ *
+ * A declared category sorts before an absent one, then by category and block
+ * identifier, all by the project-owned code-unit comparison — never by locale
+ * (INV-DET-002). Ranking presence explicitly keeps a block that declares no
+ * category distinct from one that declares the empty string, which
+ * `ContextBlockSchema` allows.
+ *
+ * The rescue walks subsets of this pool by ascending cardinality, then in
+ * lexicographic index order inside one cardinality. It does not reproduce the
+ * allocator's preference and does not need to: the hard-base phase already ran,
+ * so everything the allocator preferred has been visited.
+ */
+function compareRescueOrder(a: CorrectionCandidate, b: CorrectionCandidate): number {
+  const presence = compareNumbers(
+    a.category === undefined ? 1 : 0,
+    b.category === undefined ? 1 : 0,
+  );
+  if (presence !== 0) return presence;
+  return compareCodeUnits(a.category ?? '', b.category ?? '') || compareCodeUnits(a.id, b.id);
+}
+
+/**
+ * Whether one candidate selection satisfies every configured category bound.
+ *
+ * A selection that breaks a minimum or a maximum is not a policy-valid final
+ * selection at all, so the search skips it without visiting or counting it: it
+ * was never a candidate result (INV-ALLOC-003).
+ */
+function satisfiesCategoryBounds(
+  selection: readonly CorrectionCandidate[],
+  constraints: readonly CategoryAllocationConstraint[],
+): boolean {
+  const counts = new Map<string, number>();
+  for (const candidate of selection) {
+    if (candidate.category === undefined) continue;
+    counts.set(candidate.category, (counts.get(candidate.category) ?? 0) + 1);
+  }
+  return constraints.every((constraint) => {
+    const selected = counts.get(constraint.category) ?? 0;
+    if (constraint.minBlocks !== undefined && selected < constraint.minBlocks) return false;
+    return constraint.maxBlocks === undefined || selected <= constraint.maxBlocks;
+  });
 }
 
 /* -------------------------------------------------------------------------- */

@@ -1308,12 +1308,17 @@ for (const member of [
   'readonly correctionApplied: boolean;',
   'readonly initialRenderedTokens: number;',
   'readonly evictedBlockIds: readonly ContextBlockId[];',
-  'readonly hardMinimumSearch: CompilationTraceHardMinimumSearch;',
+  'readonly fallbackSearch: CompilationTraceFallbackSearch;',
   'readonly decisions: readonly CompilationTraceFinalDecision[];',
-  'interface CompilationTraceHardMinimumSearch',
-  'readonly combinationsVisited: number;',
-  'readonly maxCombinations: number;',
-  'readonly chosenHardBaseBlockIds?: readonly ContextBlockId[];',
+  'interface CompilationTraceFallbackSearch',
+  'readonly selectionsVisited: number;',
+  'readonly maxSelections: number;',
+  'readonly phase?: CompilationTraceFallbackPhase;',
+  'readonly chosenBlockIds?: readonly ContextBlockId[];',
+  "type CompilationTraceFallbackPhase = 'hard-base' | 'policy-selection-rescue'",
+  // The rescue claims its own inclusions rather than attributing them to a rule
+  // it did not apply (DEC-038).
+  "'INCLUDED_RENDER_AWARE_CORRECTION'",
   'interface CompilationTraceSettlementRendering',
   'readonly renderedContextHash: string;',
   'readonly compiledTokens: number;',
@@ -1381,7 +1386,7 @@ for (const member of [
   'readonly rendererVersion: string;',
   'readonly correctionStrategy: string;',
   'readonly correctionVersion: number;',
-  'readonly maxHardMinimumCombinations: number;',
+  'readonly maxCorrectionSelections: number;',
 ]) {
   requireContains('packages/compiler/dist/compilation-id.d.ts', member);
 }
@@ -1408,7 +1413,7 @@ requireContains(
 );
 requireContains(
   'packages/compiler/dist/context-compiler.d.ts',
-  'readonly maxHardMinimumCombinations: number;',
+  'readonly maxCorrectionSelections: number;',
 );
 requireContains('packages/compiler/dist/index.d.ts', "} from './context-compiler.js'");
 
@@ -1484,6 +1489,9 @@ for (const member of [
       'combinations(',
       'cartesian',
       'selectionKey',
+      'compareRescueOrder',
+      'satisfiesCategoryBounds',
+      'SearchState',
     ]) {
       if (declarations.includes(forbidden)) {
         fail(
@@ -1619,6 +1627,9 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './request-fingerpr
       'CorrectionCandidate',
       'RenderMeasurement',
       'CompilationRun',
+      'compareRescueOrder',
+      'satisfiesCategoryBounds',
+      'SearchState',
     ]) {
       if (declarations.includes(internal)) {
         fail(`packages/compiler/dist/index.d.ts re-exports the internal helper "${internal}"`);

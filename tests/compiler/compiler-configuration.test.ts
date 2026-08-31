@@ -69,8 +69,8 @@ describe('ContextCompiler configuration', () => {
     });
   });
 
-  it('rejects maxHardMinimumCombinations of 0', () => {
-    expect(issueCodesOf(construct(compilerConfig({ maxHardMinimumCombinations: 0 })))).toContain(
+  it('rejects maxCorrectionSelections of 0', () => {
+    expect(issueCodesOf(construct(compilerConfig({ maxCorrectionSelections: 0 })))).toContain(
       'invalid_config',
     );
   });
@@ -88,13 +88,13 @@ describe('ContextCompiler configuration', () => {
       null,
     ]) {
       expect(
-        issueCodesOf(construct(compilerConfig({ maxHardMinimumCombinations: value }))),
+        issueCodesOf(construct(compilerConfig({ maxCorrectionSelections: value }))),
         `bound = ${String(value)}`,
       ).toContain('invalid_config');
     }
-    expect(construct(compilerConfig({ maxHardMinimumCombinations: 1 }))).not.toThrow();
+    expect(construct(compilerConfig({ maxCorrectionSelections: 1 }))).not.toThrow();
     expect(
-      construct(compilerConfig({ maxHardMinimumCombinations: Number.MAX_SAFE_INTEGER })),
+      construct(compilerConfig({ maxCorrectionSelections: Number.MAX_SAFE_INTEGER })),
     ).not.toThrow();
   });
 

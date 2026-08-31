@@ -18,15 +18,21 @@ import {
  *
  * ```text
  * correction_search_limit_exceeded        stopped at the bound; feasibility unknown
- * rendered_hard_constraints_exceed_budget every base was visited and none fits
- * required_content_exceeds_budget         required blocks alone do not render
+ * rendered_hard_constraints_exceed_budget every policy-valid selection satisfying
+ *                                         the category minimums was visited; none fits
+ * required_content_exceeds_budget         every policy-valid selection containing
+ *                                         every required block was visited; none fits
  * ```
+ *
+ * The bound counts **unique** selections across the whole fallback — the
+ * required-only probe, every hard base, and every rescue selection — so a
+ * selection reached twice is counted once.
  *
  * The bound keeps pathological input from hanging the compiler. It is never an
  * approximation presented as a proof.
  */
 
-function withBound(maxHardMinimumCombinations: number): () => ReturnType<typeof compile> {
+function withBound(maxCorrectionSelections: number): () => ReturnType<typeof compile> {
   return () =>
     compile(
       {
@@ -35,17 +41,17 @@ function withBound(maxHardMinimumCombinations: number): () => ReturnType<typeof 
         policy: FACTS_MINIMUM_POLICY,
       },
       COUNTEREXAMPLE_TOKENIZER,
-      compilerConfig({ maxHardMinimumCombinations }),
+      compilerConfig({ maxCorrectionSelections }),
     );
 }
 
-describe('DEC-038: the bounded hard-minimum search', () => {
-  it('stops before visiting a second combination when the bound is one', () => {
+describe('DEC-038: the bounded fallback search', () => {
+  it('stops before admitting a second unique selection when the bound is one', () => {
     const failure = failureOf(withBound(1));
 
     expect(failure.stage).toBe('correction');
     expect(failure.issues.map((issue) => issue.code)).toEqual(['correction_search_limit_exceeded']);
-    expect(failure.issues[0]?.pointer).toBe('correction.hardMinimumSearch');
+    expect(failure.issues[0]?.pointer).toBe('correction.fallbackSearch');
   });
 
   it('reports the configured maximum and the combinations actually visited', () => {
@@ -55,9 +61,8 @@ describe('DEC-038: the bounded hard-minimum search', () => {
     } catch (error) {
       message = (error as Error).message;
     }
-    expect(message).toContain('configured maximum of 1 combination(s)');
-    expect(message).toContain('after visiting 1');
-    expect(message).toContain('not a proof');
+    expect(message).toContain('configured maximum of 1 selection(s)');
+    expect(message).toContain('not a proof that no policy-valid selection fits');
   });
 
   it('never claims the hard constraints are infeasible', () => {
@@ -93,25 +98,31 @@ describe('DEC-038: the bounded hard-minimum search', () => {
 
   it('changes the compilation identifier when the bound changes', () => {
     const bounded = failureOf(withBound(1)).compilationId;
-    const larger = withBound(2)().compilationId;
+    const larger = withBound(3)().compilationId;
     expect(bounded).not.toBe(larger);
   });
 
   it('finds the later fitting base once the bound allows it', () => {
-    const result = withBound(2)();
+    // Three unique selections: the required-only probe, the allocator-preferred
+    // base {req, a}, and {req, b}, which fits.
+    expect(failureOf(withBound(2)).issues.map((issue) => issue.code)).toEqual([
+      'correction_search_limit_exceeded',
+    ]);
+    const result = withBound(3)();
 
     expect([...includedIds(result)].sort()).toEqual(['b', 'req']);
-    expect(result.trace.settlement.hardMinimumSearch).toEqual({
+    expect(result.trace.settlement.fallbackSearch).toEqual({
       used: true,
-      combinationsVisited: 2,
-      maxCombinations: 2,
-      chosenHardBaseBlockIds: ['b', 'req'],
+      selectionsVisited: 3,
+      maxSelections: 3,
+      phase: 'hard-base',
+      chosenBlockIds: ['b', 'req'],
     });
   });
 
   it('INV-DET-001: repeats identically at every bound', () => {
     expect(failureOf(withBound(1)).issues).toEqual(failureOf(withBound(1)).issues);
-    expect(withBound(5)()).toEqual(withBound(5)());
+    expect(withBound(6)()).toEqual(withBound(6)());
   });
 });
 
@@ -128,25 +139,29 @@ describe('DEC-038: exhaustive hard-constraint infeasibility', () => {
       );
   }
 
-  it('proves the required blocks fit before blaming the category minimums', () => {
+  it('blames the category minimums, not the required blocks', () => {
     let message = '';
     try {
       infeasible()();
     } catch (error) {
       message = (error as Error).message;
     }
-    expect(message).toContain('the required blocks render within the 8 available token(s)');
+    expect(message).toContain('every category block-count constraint');
+    // No claim that required-only is a floor: the failure is an exhaustion.
+    expect(message).not.toContain('lower bound');
+    expect(message).not.toContain('alone');
   });
 
-  it('visits every content-valid base within the configured bound', () => {
+  it('visits every policy-valid selection within the configured bound', () => {
     let message = '';
     try {
       infeasible()();
     } catch (error) {
       message = (error as Error).message;
     }
-    // {req, a} and {req, b}: both content-valid, both rendered, neither fits.
-    expect(message).toContain('none of the 2 policy-valid category-minimum base(s) does');
+    // The probe, {req, a}, {req, b}, and the rescue's {req, a, b}: every
+    // policy-valid selection was ordered, rendered, and tokenized.
+    expect(message).toContain('none of the 4 policy-valid selection(s)');
   });
 
   it('raises RENDERED_HARD_CONSTRAINTS_EXCEED_BUDGET', () => {

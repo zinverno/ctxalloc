@@ -523,7 +523,7 @@ const compiler = new ContextCompiler(
     schemaVersion: 1,
     compilerId: 'ctxalloc-compiler',
     compilerVersion: '0.15.0',
-    maxHardMinimumCombinations: 64,
+    maxCorrectionSelections: 64,
   },
   tokenizer,
 );
@@ -543,22 +543,34 @@ re-ordering, re-rendering, and re-tokenizing after every removal. The first
 fitting prefix wins. Required blocks are never evicted and category minimums are
 never dropped.
 
-**A bounded hard-minimum fallback.** Exhausting the eviction order proves
-nothing: the allocator minimized canonical _content_ cost when it picked which
-candidates satisfy each category minimum, so a protected cheaper-by-content block
-can render far more expensively than an unselected candidate that satisfies the
-same minimum. The compiler therefore measures the exact required-only selection
-first — a required-only overrun is definitive — and then searches the
-policy-valid category-minimum bases in a fixed deterministic order for one that
-renders within the budget. The search is explicitly bounded by
-`maxHardMinimumCombinations`; reaching the bound is reported as a search limit,
-never as infeasibility. Version 1 settles the hard base as it stands and claims
-no maximum of score, block count, or token utilization.
+**A bounded fallback search, in three phases.** Exhausting the eviction order
+proves nothing: the allocator minimized canonical _content_ cost when it picked
+which candidates satisfy each category minimum, so a protected
+cheaper-by-content block can render far more expensively than an unselected
+candidate that satisfies the same minimum.
 
-**Every decision measures one exact complete string.** No per-block rendered cost
-is computed, cached, or subtracted, because tokenization is neither additive nor
+So the compiler measures the exact **required-only** selection, then walks the
+**hard bases** — minimal policy-valid selections — in the allocator's own
+preference order, and finally, only if every one of those failed, walks the
+remaining policy-valid selections in a **rescue** phase. A fitting hard base
+settles immediately and is never re-augmented; the rescue exists because a strict
+policy-valid superset of an over-budget selection may fit.
+
+**Nothing is concluded from a subset.** Tokenization is neither additive nor
 monotonic: `tokenizer(a + b)` need not equal `tokenizer(a) + tokenizer(b)`, and
-an over-budget selection does not make every superset of it over budget.
+an over-budget selection does not make every superset of it over budget. So a
+required-only overrun is a measurement rather than a verdict, exhausting the
+minimal bases is not a global proof, and no per-block rendered cost is ever
+computed, cached, or subtracted. Every feasibility decision measures one exact
+complete rendered string.
+
+**The bound stops work, not just results.** `maxCorrectionSelections` counts
+unique selections across all three phases, and every combinatorial enumeration is
+lazy, so a pathological policy stops after roughly that many selections instead
+of after building an exponential universe. Reaching the bound is reported as a
+search limit, never as infeasibility — and infeasibility itself is claimed only
+after every policy-valid selection has been visited. The compiler claims no
+maximum of score, block count, or token utilization.
 
 **Same-tokenizer composition.** The compiler owns exactly one configured
 `Tokenizer` and injects that same object into candidate block-count validation

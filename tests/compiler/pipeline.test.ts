@@ -67,7 +67,7 @@ function compilerConfig(overrides: Record<string, unknown> = {}): Record<string,
     schemaVersion: 1,
     compilerId: 'ctxalloc-compiler',
     compilerVersion: '0.15.0',
-    maxHardMinimumCombinations: 64,
+    maxCorrectionSelections: 64,
     ...overrides,
   };
 }
