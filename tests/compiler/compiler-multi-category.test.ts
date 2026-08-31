@@ -101,10 +101,13 @@ describe('DEC-038: multi-category hard-base enumeration', () => {
     } catch (error) {
       message = (error as Error).message;
     }
-    // The probe plus four hard bases plus the rescue selections that are not
-    // duplicates of them: every policy-valid selection was visited.
-    expect(message).toContain('policy-valid selection(s) satisfying every required block');
-    expect(message).toContain('category block-count constraint');
+    // The exhaustion and the work are stated separately: the visit count is
+    // work, not a count of policy-valid final selections.
+    expect(message).toContain('fallback search exhausted after visiting');
+    expect(message).toContain(
+      'no policy-valid final selection satisfying every required block and every category block-count constraint',
+    );
+    expect(message).not.toMatch(/\d+ policy-valid selection\(s\)/);
   });
 
   it('counts a content-over-budget base as visited but never renders it', () => {

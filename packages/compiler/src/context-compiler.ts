@@ -282,18 +282,22 @@ export type ContextCompilationStage =
  *
  * `required_content_exceeds_budget` is the **rendered** form of INV-BUDGET-004
  * and is documented under the category `REQUIRED_CONTENT_EXCEEDS_BUDGET`. It is
- * deliberately the same code `BudgetAllocator` raises for the block-content form
- * of the same impossibility: one product-level failure category, reported at
- * whichever boundary can prove it.
+ * raised only after the fallback has exhausted every policy-valid selection, and
+ * it means exactly that: *no policy-valid final selection containing every
+ * required block renders within the budget*. It is deliberately the same code
+ * `BudgetAllocator` raises for the block-content form of the same impossibility:
+ * one product-level failure category, reported at whichever boundary can prove
+ * it.
  *
- * `rendered_hard_constraints_exceed_budget` is a **different** failure: the
- * required blocks fit on their own, and no policy-valid category-minimum base
- * renders within the budget. Category minima are policy constraints, not
- * required-block attributes, so calling that a required-content failure would
- * misdirect the caller to the wrong fix.
+ * `rendered_hard_constraints_exceed_budget` reports the same exhaustion where a
+ * non-required category minimum is still active and made the surviving
+ * selections mandatory. Neither code claims that required-only is a floor, and
+ * neither is reached by inspecting only the minimal bases. They differ solely in
+ * which constraint the caller would have to change, which is why calling the
+ * second a required-content failure would misdirect them.
  *
  * `correction_search_limit_exceeded` claims nothing about feasibility. The
- * search stopped at its configured bound; a feasible hard base may well exist
+ * search stopped at its configured bound; a fitting selection may well exist
  * beyond it.
  */
 export type ContextCompilationIssueCode =
@@ -718,9 +722,9 @@ export class ContextCompiler {
    *    entry at a time, re-rendering and re-measuring after every removal. The
    *    first prefix that fits wins.
    * 2. **Fallback.** When the protected hard-constraint base is itself the
-   *    problem, prove the required blocks fit on their own, then search the
-   *    policy-valid category-minimum bases in a fixed deterministic order for one
-   *    that renders within the budget.
+   *    problem, measure the required-only selection, then the minimal
+   *    policy-valid bases in the allocator's preference order, then — only if
+   *    every one of those failed — the remaining policy-valid selections.
    *
    * It is not an optimizer. There is no knapsack, no score-per-token ratio, no
    * beam search, and no claim of maximum utility, token utilization, block count,
@@ -729,11 +733,13 @@ export class ContextCompiler {
    *
    * Every feasibility decision measures one exact complete rendered string. No
    * per-block rendered cost is computed, cached, or subtracted, because
-   * tokenization is neither additive nor monotonic.
+   * tokenization is neither additive nor monotonic — and nothing is concluded
+   * from a subset either: the required-only measurement is not a lower bound, and
+   * exhausting the minimal bases is not a global proof.
    *
-   * @throws {ContextCompilationError} at stage `correction` when the required
-   * blocks alone do not render within the budget, when no policy-valid hard base
-   * does, or when the configured search bound is reached first.
+   * @throws {ContextCompilationError} at stage `correction` when the fallback
+   * exhausts every policy-valid selection without finding one that renders within
+   * the budget, or when the configured search bound is reached first.
    */
   #settle(run: CompilationRun): Settlement {
     const { allocated, rendered, filtered } = run;
@@ -905,24 +911,18 @@ export class ContextCompiler {
 
     /* 3. The rescue: every remaining policy-valid selection, surplus included. */
     const pool = [...optional].sort(compareRescueOrder);
-    for (let size = 0; size <= pool.length; size += 1) {
-      for (const picks of combinations(pool, size)) {
-        const selection = [...required, ...picks];
-        // A selection that breaks a category bound is not a policy-valid
-        // selection at all, so it is neither visited nor counted.
-        if (!satisfiesCategoryBounds(selection, constraints)) continue;
+    for (const picks of policyValidOptionalSelections(pool, required, constraints)) {
+      const selection = [...required, ...picks];
+      const measurement = this.#visit(selection, run, state);
+      if (measurement === undefined || measurement.renderedTokens > available) continue;
 
-        const measurement = this.#visit(selection, run, state);
-        if (measurement === undefined || measurement.renderedTokens > available) continue;
-
-        // Which member of a rescue selection "is" the category minimum has no
-        // non-arbitrary answer once surplus is present, so the correction claims
-        // every non-required inclusion as its own rather than attributing one to
-        // a rule it did not apply (DEC-038).
-        return settle(selection, measurement, 'policy-selection-rescue', (candidate) =>
-          candidate.required ? 'INCLUDED_REQUIRED' : 'INCLUDED_RENDER_AWARE_CORRECTION',
-        );
-      }
+      // Which member of a rescue selection "is" the category minimum has no
+      // non-arbitrary answer once surplus is present, so the correction claims
+      // every non-required inclusion as its own rather than attributing one to
+      // a rule it did not apply (DEC-038).
+      return settle(selection, measurement, 'policy-selection-rescue', (candidate) =>
+        candidate.required ? 'INCLUDED_REQUIRED' : 'INCLUDED_RENDER_AWARE_CORRECTION',
+      );
     }
 
     /* Exhausted: every policy-valid selection was visited, and none fits. */
@@ -944,21 +944,27 @@ export class ContextCompiler {
     state: SearchState,
     available: number,
   ): ContextCompilationError {
-    const visited = String(state.visited.size);
-    const budget = String(available);
+    // The visit count is **work**, not a count of policy-valid final selections:
+    // it includes the required-only probe even when an active category minimum
+    // makes required-only invalid as a final selection, and it includes
+    // category-valid selections the canonical content ceiling ruled out before
+    // rendering. Reporting it as "N policy-valid selections" would be false audit
+    // text, so the exhaustion and the work are stated separately (DEC-038).
+    const exhausted = `fallback search exhausted after visiting ${String(state.visited.size)} unique selection(s)`;
+    const budget = `renders within the ${String(available)} available token(s)`;
     if (hasActiveDeficit) {
       return this.#correctionFailure(
         run,
         'rendered_hard_constraints_exceed_budget',
         ['fallbackSearch'],
-        `RENDERED_HARD_CONSTRAINTS_EXCEED_BUDGET: none of the ${visited} policy-valid selection(s) satisfying every required block and every category block-count constraint renders within the ${budget} available token(s)`,
+        `RENDERED_HARD_CONSTRAINTS_EXCEED_BUDGET: ${exhausted}; no policy-valid final selection satisfying every required block and every category block-count constraint ${budget}`,
       );
     }
     return this.#correctionFailure(
       run,
       'required_content_exceeds_budget',
       ['fallbackSearch'],
-      `REQUIRED_CONTENT_EXCEEDS_BUDGET: none of the ${visited} policy-valid selection(s) containing every required block renders within the ${budget} available token(s)`,
+      `REQUIRED_CONTENT_EXCEEDS_BUDGET: ${exhausted}; no policy-valid final selection containing every required block ${budget}`,
     );
   }
 
@@ -1337,26 +1343,184 @@ function compareRescueOrder(a: CorrectionCandidate, b: CorrectionCandidate): num
 }
 
 /**
- * Whether one candidate selection satisfies every configured category bound.
+ * The category bounds one selection must satisfy, resolved once per compilation.
  *
- * A selection that breaks a minimum or a maximum is not a policy-valid final
- * selection at all, so the search skips it without visiting or counting it: it
- * was never a candidate result (INV-ALLOC-003).
+ * `deficit` is what the non-required members must still supply; `capacity` is
+ * how many non-required members the category may take. Both already account for
+ * the required blocks, which are in every candidate selection.
+ *
+ * `capacity` of a category the policy gives no maximum is the number of eligible
+ * candidates it has: unbounded in policy terms, bounded in practice by the pool.
  */
-function satisfiesCategoryBounds(
-  selection: readonly CorrectionCandidate[],
+interface CategoryBudget {
+  readonly category: string;
+  readonly deficit: number;
+  readonly capacity: number;
+  /** The pool is grouped by category, so membership is one contiguous range. */
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * Every optional subset that can complete a **policy-valid** final selection,
+ * lazily and in the documented rescue order (DEC-038).
+ *
+ * The order over valid subsets is unchanged: optional cardinality ascending,
+ * then lexicographic index order over the `compareRescueOrder` pool. What changes
+ * is that category-invalid subsets are never constructed.
+ *
+ * That distinction is the whole point. Generating the power set and filtering it
+ * afterwards leaves the search bound unable to stop the work: a rejected subset
+ * never reaches `#visit`, so it never counts, so the bound never fires. With 30
+ * eligible candidates in a category whose `maxBlocks` is `0`, the only valid
+ * optional subset is the empty one — and a filter-afterwards rescue would still
+ * walk `2^30 - 1` invalid subsets under a configured bound of 1. Pruning during
+ * construction is what makes the bound's promise true (INV-ALLOC-003).
+ *
+ * Three prunes do that work:
+ *
+ * 1. **cardinality bounds** — a target size below the total deficit cannot meet
+ *    the minimums, and one above the total capacity cannot respect the maximums,
+ *    so neither is enumerated at all;
+ * 2. **capacity** — a candidate whose category is already full is skipped, and
+ *    every subset containing it with it;
+ * 3. **reachability** — a branch is abandoned as soon as the remaining slots, or
+ *    the remaining candidates of a category still owing a deficit, cannot satisfy
+ *    what is left.
+ *
+ * None of them removes a valid subset: each rejects only subsets that provably
+ * violate a bound the final selection must satisfy.
+ */
+function* policyValidOptionalSelections(
+  pool: readonly CorrectionCandidate[],
+  required: readonly CorrectionCandidate[],
   constraints: readonly CategoryAllocationConstraint[],
-): boolean {
-  const counts = new Map<string, number>();
-  for (const candidate of selection) {
-    if (candidate.category === undefined) continue;
-    counts.set(candidate.category, (counts.get(candidate.category) ?? 0) + 1);
+): Generator<readonly CorrectionCandidate[], void, undefined> {
+  const budgets = categoryBudgets(pool, required, constraints);
+  if (budgets === undefined) return;
+
+  const constrained = new Map(budgets.map((budget) => [budget.category, budget]));
+  const unconstrained = pool.filter(
+    (candidate) => candidate.category === undefined || !constrained.has(candidate.category),
+  ).length;
+
+  const minCardinality = budgets.reduce((total, budget) => total + budget.deficit, 0);
+  const maxCardinality =
+    unconstrained +
+    budgets.reduce(
+      (total, budget) => total + Math.min(budget.end - budget.start, budget.capacity),
+      0,
+    );
+
+  for (let size = minCardinality; size <= maxCardinality; size += 1) {
+    yield* subsetsOfSize(pool, size, budgets, constrained);
   }
-  return constraints.every((constraint) => {
-    const selected = counts.get(constraint.category) ?? 0;
-    if (constraint.minBlocks !== undefined && selected < constraint.minBlocks) return false;
-    return constraint.maxBlocks === undefined || selected <= constraint.maxBlocks;
-  });
+}
+
+/**
+ * Resolves each constrained category's remaining deficit, capacity, and pool
+ * range, or `undefined` when no selection can satisfy the policy at all.
+ *
+ * A required set that already exceeds a maximum, or a minimum the eligible pool
+ * cannot reach, is an internal contradiction: `BudgetAllocator` rejects both
+ * before any budget is spent (INV-ALLOC-003). Yielding nothing here lets the
+ * caller reach its exhaustive failure rather than inventing a repair.
+ */
+function categoryBudgets(
+  pool: readonly CorrectionCandidate[],
+  required: readonly CorrectionCandidate[],
+  constraints: readonly CategoryAllocationConstraint[],
+): readonly CategoryBudget[] | undefined {
+  const budgets: CategoryBudget[] = [];
+  for (const constraint of constraints) {
+    const requiredCount = required.filter(
+      (candidate) => candidate.category === constraint.category,
+    ).length;
+    const capacity =
+      constraint.maxBlocks === undefined ? pool.length : constraint.maxBlocks - requiredCount;
+    if (capacity < 0) return undefined;
+
+    const deficit = Math.max(0, (constraint.minBlocks ?? 0) - requiredCount);
+    const start = pool.findIndex((candidate) => candidate.category === constraint.category);
+    const members = pool.filter((candidate) => candidate.category === constraint.category).length;
+    if (deficit > members || deficit > capacity) return undefined;
+
+    budgets.push({
+      category: constraint.category,
+      deficit,
+      capacity,
+      start: start === -1 ? pool.length : start,
+      end: start === -1 ? pool.length : start + members,
+    });
+  }
+  return budgets;
+}
+
+/**
+ * Every valid subset of exactly `size`, in lexicographic index order.
+ *
+ * The traversal walks indices in increasing order and yields a subset the moment
+ * it is complete, so the sequence is exactly the lexicographic one — the same
+ * order a filtered power set would produce over the same valid subsets, reached
+ * without constructing the invalid ones.
+ */
+function* subsetsOfSize(
+  pool: readonly CorrectionCandidate[],
+  size: number,
+  budgets: readonly CategoryBudget[],
+  constrained: ReadonlyMap<string, CategoryBudget>,
+): Generator<readonly CorrectionCandidate[], void, undefined> {
+  const chosen: CorrectionCandidate[] = [];
+  const counts = new Map<string, number>();
+
+  function* walk(from: number): Generator<readonly CorrectionCandidate[], void, undefined> {
+    const remaining = size - chosen.length;
+    if (remaining === 0) {
+      // A complete subset still has to satisfy every minimum. The reachability
+      // prune below only runs while slots remain, so without this check a subset
+      // that filled its last slot from an unrelated category would be yielded
+      // with a deficit still open.
+      const satisfied = budgets.every(
+        (budget) => (counts.get(budget.category) ?? 0) >= budget.deficit,
+      );
+      if (satisfied) yield [...chosen];
+      return;
+    }
+    // Not enough candidates left to fill the remaining slots.
+    if (pool.length - from < remaining) return;
+
+    // Not enough slots left to cover every unmet minimum, or not enough
+    // candidates of some category still ahead to cover its own.
+    let owed = 0;
+    for (const budget of budgets) {
+      const unmet = budget.deficit - (counts.get(budget.category) ?? 0);
+      if (unmet <= 0) continue;
+      owed += unmet;
+      if (Math.max(0, budget.end - Math.max(from, budget.start)) < unmet) return;
+    }
+    if (owed > remaining) return;
+
+    for (let index = from; index < pool.length; index += 1) {
+      const candidate = pool[index] as CorrectionCandidate;
+      const budget =
+        candidate.category === undefined ? undefined : constrained.get(candidate.category);
+      // The category is already full: every subset holding this candidate would
+      // exceed its maximum, so none of them is constructed.
+      if (budget !== undefined && (counts.get(budget.category) ?? 0) >= budget.capacity) continue;
+
+      chosen.push(candidate);
+      if (budget !== undefined) {
+        counts.set(budget.category, (counts.get(budget.category) ?? 0) + 1);
+      }
+      yield* walk(index + 1);
+      if (budget !== undefined) {
+        counts.set(budget.category, (counts.get(budget.category) ?? 0) - 1);
+      }
+      chosen.pop();
+    }
+  }
+
+  yield* walk(0);
 }
 
 /* -------------------------------------------------------------------------- */

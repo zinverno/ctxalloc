@@ -565,12 +565,15 @@ computed, cached, or subtracted. Every feasibility decision measures one exact
 complete rendered string.
 
 **The bound stops work, not just results.** `maxCorrectionSelections` counts
-unique selections across all three phases, and every combinatorial enumeration is
-lazy, so a pathological policy stops after roughly that many selections instead
-of after building an exponential universe. Reaching the bound is reported as a
-search limit, never as infeasibility — and infeasibility itself is claimed only
-after every policy-valid selection has been visited. The compiler claims no
-maximum of score, block count, or token utilization.
+unique selections across all three phases. Every combinatorial enumeration is
+lazy, and the rescue enumerator prunes category-invalid subsets while
+constructing them rather than filtering them afterwards — an invalid subset never
+reaches the visit step, so it would never count and the bound would never fire.
+A pathological policy therefore stops after roughly that many selections instead
+of walking an exponential universe. Reaching the bound is reported as a search
+limit, never as infeasibility — and infeasibility itself is claimed only after
+every policy-valid selection has been visited. The compiler claims no maximum of
+score, block count, or token utilization.
 
 **Same-tokenizer composition.** The compiler owns exactly one configured
 `Tokenizer` and injects that same object into candidate block-count validation

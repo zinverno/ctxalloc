@@ -641,9 +641,14 @@ is neither additive nor monotonic.
 
 The search is explicitly bounded by `maxCorrectionSelections`, a required
 configuration value with no default, counting **unique** selections across all
-three phases. Every combinatorial enumeration is lazy, so the bound stops the
-work rather than firing after an exponential universe has been built. Reaching
-the bound is reported as a search limit and never as infeasibility.
+three phases. Every combinatorial enumeration is lazy and the rescue enumerator
+is category-constraint-aware, so the bound stops the work rather than firing
+after an exponential universe of subsets — valid or invalid — has been walked.
+Reaching the bound is reported as a search limit and never as infeasibility.
+
+The visit count is work rather than a census of valid selections, so an
+exhaustive failure states the two separately: how many unique selections were
+visited, and that no policy-valid final selection renders within the budget.
 
 The compiler claims no maximum of score, block count, token utilization, or
 information retained.

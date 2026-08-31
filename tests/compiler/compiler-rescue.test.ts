@@ -237,9 +237,15 @@ describe('DEC-038: infeasibility is claimed only after true exhaustion', () => {
 
     expect(failure.stage).toBe('correction');
     expect(failure.issues.map((issue) => issue.code)).toEqual(['required_content_exceeds_budget']);
-    // {R} and {R, X}: every policy-valid selection, visited and measured.
-    expect(failure.issues[0]?.message).toContain('none of the 2 policy-valid selection(s)');
-    expect(failure.issues[0]?.message).toContain('containing every required block');
+    // {R} and {R, X}: both visited and measured. With no active deficit both are
+    // policy-valid too, but the message still separates the work from the claim.
+    expect(failure.issues[0]?.message).toContain(
+      'fallback search exhausted after visiting 2 unique selection(s)',
+    );
+    expect(failure.issues[0]?.message).toContain(
+      'no policy-valid final selection containing every required block',
+    );
+    expect(failure.issues[0]?.message).not.toMatch(/\d+ policy-valid selection\(s\)/);
   });
 
   it('D: with an active category minimum, reports the hard constraints instead', () => {

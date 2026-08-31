@@ -118,7 +118,7 @@ describe('INV-BUDGET-004: required content exceeds the rendered budget', () => {
     }
     // The truthful claim: every policy-valid selection containing every required
     // block was measured and none fits. Not "required-only is the smallest".
-    expect(message).toContain('policy-valid selection(s) containing every required block');
+    expect(message).toContain('no policy-valid final selection containing every required block');
     expect(message).not.toContain('alone');
     expect(message).not.toContain('smaller');
     expect(message).not.toContain('lower bound');

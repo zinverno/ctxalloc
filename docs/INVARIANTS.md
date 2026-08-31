@@ -90,10 +90,10 @@ The complete rendered string must be tokenized before success is returned.
 
 **Discharged by `ContextCompiler` (DEC-038).** Every selection whose rendered
 feasibility is decided — the initial attempt, every eviction prefix, the
-required-only probe, and every hard-minimum base — is ordered, rendered, and
-tokenized as **one complete string**. No per-block rendered cost is computed,
-cached, or subtracted, because tokenization is neither additive nor monotonic
-(METRICS 8.6).
+required-only probe, every hard base, and every rescue selection — is ordered,
+rendered, and tokenized as **one complete string**. No per-block rendered cost is
+computed, cached, or subtracted, because tokenization is neither additive nor
+monotonic (METRICS 8.6).
 
 ---
 
@@ -133,10 +133,17 @@ REQUIRED_CONTENT_EXCEEDS_BUDGET
 The compiler must not return a partial result as a successful compilation.
 
 **Both forms are now reported (DEC-038).** `BudgetAllocator` raises the
-block-content form, where required `tokenCount` alone exceeds the ceiling; adding
-rendering overhead can only make that worse, so it is definitive before anything
-is rendered. `ContextCompiler` raises the **rendered** form under the same issue
-code and category.
+block-content form, where required `tokenCount` alone exceeds the ceiling. That
+one is definitive before anything is rendered, and for a reason that owes nothing
+to rendering: the canonical block-content ceiling is an **independent allocation
+constraint**, so required content exceeding it is an allocation impossibility
+under the active policy. It is *not* the claim that adding rendering overhead can
+only make it worse — a complete rendering may tokenize to fewer tokens than the
+block counts sum to, and render compression is still not permission to violate
+the content-budget contract.
+
+`ContextCompiler` raises the **rendered** form under the same issue code and
+category.
 
 **The rendered form is an exhaustion, not a lower bound.** Tokenization is not
 monotonic, so a required-only selection over the budget does **not** prove that

@@ -2196,10 +2196,12 @@ containing every required block renders within the budget*. That is the rendered
 form of INV-BUDGET-004 (INV-BUDGET-003).
 
 `BudgetAllocator` already reports the block-content form of this failure, and
-that one is definitive without any search, because it compares canonical content
-against the ceiling and adding rendering overhead can only make it worse. The
-converse still does not hold: a required set that fits the content ceiling is not
-proof of rendered feasibility.
+that one is definitive without any search — because the canonical block-content
+ceiling is an independent allocation constraint, not a prediction of rendered
+size. Required content exceeding it is an allocation impossibility under the
+active policy, and render compression is not permission to violate that contract.
+The converse still does not hold: a required set that fits the content ceiling is
+not proof of rendered feasibility.
 
 #### B. The fallback: bounded hard-minimum replacement search
 
@@ -2257,6 +2259,17 @@ then category, then block ID by code unit; then subset cardinality ascending;
 then lexicographic index order inside one cardinality. It does not reproduce the
 allocator's preference and need not — the hard-base phase already ran.
 
+The enumerator is **category-constraint-aware**, not a filtered power set, and
+that is a property of the bound rather than a performance note: a
+category-invalid subset never reaches the visit step, so it never counts and
+never consumes the bound. Generating every subset and rejecting the invalid ones
+afterwards would therefore do unbounded work — with 30 candidates in a category
+whose `maxBlocks` is `0`, `2^30 - 1` invalid subsets under a bound of 1. Instead
+three prunes apply during construction: cardinality bounds derived from the total
+deficit and total capacity, capacity per category, and reachability of the
+remaining minimums. None removes a valid subset, and the order over valid subsets
+is unchanged.
+
 The first fitting rescue selection wins. This is **correctness rescue, not
 optimization**: it claims no maximum of anything.
 
@@ -2279,6 +2292,14 @@ Before admitting unique selection `N + 1`, if `N` already equals the configured
 maximum, the search stops with `correction_search_limit_exceeded`, reporting the
 configured maximum, with no partial success. It never claims that no policy-valid
 selection fits.
+
+The count is **work**, not a census of valid selections: it includes the
+required-only probe even when an active category minimum makes required-only
+invalid as a final selection, and it includes selections the content ceiling
+ruled out before rendering. `selectionsVisited` keeps those semantics — it is
+what the bound bounds — and the exhaustive failure messages state the work and
+the conclusion separately rather than calling the count a number of policy-valid
+selections.
 
 #### The bound stops work, not just results
 

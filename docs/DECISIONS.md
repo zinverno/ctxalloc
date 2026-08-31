@@ -3419,7 +3419,9 @@ no policy-valid final selection containing every required block
 renders within the available input budget
 ```
 
-That is the rendered form of INV-BUDGET-004 and the documented category `REQUIRED_CONTENT_EXCEEDS_BUDGET`. It is the same issue code `BudgetAllocator` raises for the block-content form of the same impossibility: one product-level failure category, reported at whichever boundary can prove it. `BudgetAllocator`'s form remains definitive without any search, because it compares canonical content against the ceiling and adding rendering overhead can only make that worse.
+That is the rendered form of INV-BUDGET-004 and the documented category `REQUIRED_CONTENT_EXCEEDS_BUDGET`. It is the same issue code `BudgetAllocator` raises for the block-content form of the same impossibility: one product-level failure category, reported at whichever boundary can prove it.
+
+`BudgetAllocator`'s form remains definitive without any search, and for a reason that owes nothing to rendering: the canonical block-content ceiling is an **independent allocation constraint**, so required content exceeding it is an allocation impossibility under the active policy. The old justification — that adding rendering overhead can only make it worse — was itself a monotonicity claim and is withdrawn. A complete rendering may tokenize to fewer tokens than the block counts sum to; render compression is simply not permission to violate the content-budget contract (DEC-033).
 
 ### The Hard Base, and the Deterministic Enumeration
 
@@ -3462,7 +3464,28 @@ Its order is a simple project-owned total order, deliberately different from the
 2. optional subset cardinality ascending;
 3. lexicographic index-combination order inside one cardinality.
 
-It does not reproduce the allocator's preference and does not need to: the hard-base phase already ran, so everything the allocator preferred has been visited. A selection that breaks a category bound is not policy-valid at all and is skipped without being visited or counted.
+It does not reproduce the allocator's preference and does not need to: the hard-base phase already ran, so everything the allocator preferred has been visited.
+
+**The enumerator is category-constraint-aware, not a filtered power set.** This is a correctness property of the bound, not a performance note. A category-invalid subset never reaches the visit step, so it never counts and never consumes `maxCorrectionSelections` — which means a rescue that generated every subset and rejected the invalid ones afterwards would do *unbounded* work under any bound at all. With 30 eligible candidates in a category whose `maxBlocks` is `0`, the only valid optional subset is the empty one, and such a rescue would still walk `2^30 - 1` invalid subsets under a configured bound of 1.
+
+So invalid subsets are pruned while being constructed, by three rules that together remove no valid subset:
+
+```text id="m9prune"
+cardinality   a target size below the total deficit cannot meet the minimums,
+              and one above the total capacity cannot respect the maximums,
+              so neither size is enumerated
+
+capacity      a candidate whose category is already full is skipped, and with
+              it every subset that would have contained it
+
+reachability  a branch is abandoned once the remaining slots — or the remaining
+              candidates of a category still owing a deficit — cannot satisfy
+              what is left
+```
+
+A completed subset is checked against every minimum before it is yielded, because the reachability rule only runs while slots remain.
+
+The **order over valid subsets is unchanged** by pruning: the traversal walks indices in increasing order and yields each subset as it completes, so it produces exactly the sequence a filtered power set would produce over the same valid subsets — without constructing the invalid ones.
 
 The first fitting rescue selection wins. **This is correctness rescue, not optimization**: it claims no maximum of score, blocks, utilization, or information retained.
 
@@ -3482,6 +3505,15 @@ This is a limit on ambition, not on correctness. The rescue phase still runs whe
 ### The Search Limit Is a Stopping Point, Never a Proof
 
 `maxCorrectionSelections` counts **unique** selections the fallback visits, across all three phases: the required-only probe, every hard base, and every rescue selection. A selection is identified by its exact canonical block-identifier set, so a hard base the rescue enumeration also produces is counted once and tokenized once. A selection whose canonical content sum exceeds the ceiling is counted and never rendered: considering it is the work the bound limits.
+
+**The count is work, not a census of valid selections.** It includes the required-only probe even when an active category minimum makes required-only invalid as a *final* selection, and it includes category-valid selections the content ceiling ruled out before rendering. So `selectionsVisited` keeps those work semantics — it is what the bound bounds — and the exhaustive failure messages state the work and the conclusion separately rather than calling the count a number of policy-valid selections:
+
+```text id="m9honest"
+fallback search exhausted after visiting N unique selection(s);
+no policy-valid final selection <containing every required block |
+satisfying every required block and every category block-count constraint>
+renders within the B available token(s)
+```
 
 Before admitting unique selection `N + 1`, if `N` already equals the configured maximum, the search stops and the compilation fails with:
 

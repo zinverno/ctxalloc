@@ -152,16 +152,20 @@ describe('DEC-038: exhaustive hard-constraint infeasibility', () => {
     expect(message).not.toContain('alone');
   });
 
-  it('visits every policy-valid selection within the configured bound', () => {
+  it('reports the work it did without calling all of it policy-valid', () => {
     let message = '';
     try {
       infeasible()();
     } catch (error) {
       message = (error as Error).message;
     }
-    // The probe, {req, a}, {req, b}, and the rescue's {req, a, b}: every
-    // policy-valid selection was ordered, rendered, and tokenized.
-    expect(message).toContain('none of the 4 policy-valid selection(s)');
+    // Four unique selections were visited: the required-only probe, {req, a},
+    // {req, b}, and the rescue's {req, a, b}. Only the last three are
+    // policy-valid final selections — {req} violates the `facts` minimum — so
+    // the count is reported as work and the exhaustion is stated separately.
+    expect(message).toContain('fallback search exhausted after visiting 4 unique selection(s)');
+    expect(message).toContain('no policy-valid final selection');
+    expect(message).not.toContain('4 policy-valid selection(s)');
   });
 
   it('raises RENDERED_HARD_CONSTRAINTS_EXCEED_BUDGET', () => {
