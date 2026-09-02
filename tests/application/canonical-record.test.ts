@@ -3,6 +3,8 @@ import {
   cloneRecord,
   tryCanonicalRecordJson,
   tryCloneJsonRecord,
+  tryReadArrayItems,
+  tryReadOwnDataProperty,
 } from '../../packages/application/src/canonical-record.js';
 
 /**
@@ -270,5 +272,303 @@ describe('cloneRecord', () => {
     source.metadata.tags.push('b');
     source.metadata.nested.n = 2;
     expect(copy.metadata).toEqual({ tags: ['a'], nested: { n: 1 } });
+  });
+});
+
+describe('arbitrary JSON object keys', () => {
+  /**
+   * `__proto__` is an ordinary own key of a `JSON.parse` result, and the domain
+   * models JSON object keys as arbitrary strings — `JsonObject` reserves no
+   * names. Copying such a record with `result[key] = value` does not reproduce
+   * it: the assignment invokes the inherited `Object.prototype.__proto__`
+   * setter, so the copy loses the key and gains a different prototype. That is
+   * a silently wrong copy of valid data, not a hostile-input edge case.
+   */
+  const withProtoKey = (): Record<string, unknown> =>
+    JSON.parse('{"__proto__":{"x":1},"safe":1}') as Record<string, unknown>;
+
+  it('reads an own __proto__ key as ordinary data', () => {
+    const source = withProtoKey();
+    expect(Object.getOwnPropertyNames(source)).toEqual(['__proto__', 'safe']);
+    expect(tryCanonicalRecordJson(source)).toEqual({
+      ok: true,
+      json: '{"__proto__":{"x":1},"safe":1}',
+    });
+  });
+
+  it('copies an own __proto__ key as an own data property', () => {
+    const source = withProtoKey();
+    const attempt = tryCloneJsonRecord(source);
+    expect(attempt.ok).toBe(true);
+    if (!attempt.ok) return;
+
+    const copy = attempt.value;
+    expect(Object.prototype.hasOwnProperty.call(copy, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyNames(copy)).toEqual(['__proto__', 'safe']);
+    expect(Object.getOwnPropertyDescriptor(copy, '__proto__')).toEqual({
+      value: { x: 1 },
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+
+    // The prototype is untouched: the key stayed data, it did not become one.
+    expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+    expect(tryCanonicalRecordJson(copy)).toEqual(tryCanonicalRecordJson(source));
+  });
+
+  it('copies a nested own __proto__ key', () => {
+    const source = JSON.parse('{"metadata":{"__proto__":{"x":1}}}') as Record<string, unknown>;
+    const attempt = tryCloneJsonRecord(source);
+    expect(attempt.ok).toBe(true);
+    if (!attempt.ok) return;
+
+    const nested = (attempt.value as { metadata: object }).metadata;
+    expect(Object.prototype.hasOwnProperty.call(nested, '__proto__')).toBe(true);
+    expect(Object.getPrototypeOf(nested)).toBe(Object.prototype);
+    expect(tryCanonicalRecordJson(attempt.value)).toEqual(tryCanonicalRecordJson(source));
+  });
+
+  it('copies constructor and prototype keys', () => {
+    const source = JSON.parse('{"constructor":"c","prototype":"p","toString":"t"}') as Record<
+      string,
+      unknown
+    >;
+    const attempt = tryCloneJsonRecord(source);
+    expect(attempt.ok).toBe(true);
+    if (!attempt.ok) return;
+
+    expect(Object.getOwnPropertyNames(attempt.value)).toEqual([
+      'constructor',
+      'prototype',
+      'toString',
+    ]);
+    expect(attempt.value).toEqual(source);
+    expect(tryCanonicalRecordJson(attempt.value)).toEqual(tryCanonicalRecordJson(source));
+  });
+
+  it('copies a null-prototype record without giving it Object.prototype', () => {
+    const source: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(source, '__proto__', {
+      value: { x: 1 },
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+
+    const attempt = tryCloneJsonRecord(source);
+    expect(attempt.ok).toBe(true);
+    if (!attempt.ok) return;
+    expect(Object.getPrototypeOf(attempt.value)).toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(attempt.value, '__proto__')).toBe(true);
+  });
+
+  it('gives cloneRecord the same guarantees for a validated record', () => {
+    const source = withProtoKey();
+    const copy = cloneRecord(source);
+
+    expect(Object.prototype.hasOwnProperty.call(copy, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyNames(copy)).toEqual(['__proto__', 'safe']);
+    expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+    expect(tryCanonicalRecordJson(copy)).toEqual(tryCanonicalRecordJson(source));
+
+    const nested = JSON.parse('{"metadata":{"__proto__":{"x":1}}}') as Record<string, unknown>;
+    const nestedCopy = cloneRecord(nested) as { metadata: object };
+    expect(Object.prototype.hasOwnProperty.call(nestedCopy.metadata, '__proto__')).toBe(true);
+    expect(Object.getPrototypeOf(nestedCopy.metadata)).toBe(Object.prototype);
+  });
+});
+
+describe('total over active object graphs', () => {
+  /**
+   * Reflection is the one operation these helpers perform that the *input* can
+   * control. An enumerable accessor is enough: `Object.entries` would invoke it,
+   * and a throwing getter would escape this boundary as a raw `Error` before
+   * `CandidateValidator` ever saw the candidate.
+   *
+   * Two guarantees are asserted together. The helpers never invoke an accessor —
+   * a getter is free to return a different value on each read, and this module
+   * reads the same untrusted record twice, so an accessor-bearing record is not
+   * the fixed JSON data the comparison assumes. And no reflective failure
+   * escapes: a `Proxy` trap that throws produces `ok: false`, not an exception.
+   */
+  const withThrowingGetter = (): object => {
+    const host: Record<string, unknown> = { id: 'block-1' };
+    Object.defineProperty(host, 'metadata', {
+      enumerable: true,
+      configurable: true,
+      get(): never {
+        throw new Error('accessor invoked');
+      },
+    });
+    return host;
+  };
+
+  it('reports a record carrying a throwing enumerable getter, without invoking it', () => {
+    expect(() => tryCanonicalRecordJson(withThrowingGetter())).not.toThrow();
+    expect(tryCanonicalRecordJson(withThrowingGetter()).ok).toBe(false);
+    expect(() => tryCloneJsonRecord(withThrowingGetter())).not.toThrow();
+    expect(tryCloneJsonRecord(withThrowingGetter()).ok).toBe(false);
+
+    // Nested, where the accessor is not the value handed in directly.
+    expect(tryCanonicalRecordJson({ block: withThrowingGetter() }).ok).toBe(false);
+    expect(tryCloneJsonRecord({ block: withThrowingGetter() }).ok).toBe(false);
+  });
+
+  it('reports a record carrying a non-throwing accessor rather than reading it twice', () => {
+    let reads = 0;
+    const host: Record<string, unknown> = {};
+    Object.defineProperty(host, 'drifting', {
+      enumerable: true,
+      configurable: true,
+      get(): number {
+        reads += 1;
+        return reads;
+      },
+    });
+
+    expect(tryCanonicalRecordJson(host).ok).toBe(false);
+    expect(tryCloneJsonRecord(host).ok).toBe(false);
+    expect(reads).toBe(0);
+  });
+
+  it.each([
+    [
+      'getPrototypeOf',
+      {
+        getPrototypeOf: (): never => {
+          throw new Error('trap');
+        },
+      },
+    ],
+    [
+      'ownKeys',
+      {
+        ownKeys: (): never => {
+          throw new Error('trap');
+        },
+      },
+    ],
+    [
+      'getOwnPropertyDescriptor',
+      {
+        getOwnPropertyDescriptor: (): never => {
+          throw new Error('trap');
+        },
+      },
+    ],
+  ] as const)('reports a Proxy whose %s trap throws', (_name, handler) => {
+    const make = (): unknown => new Proxy({ a: 1 }, handler as ProxyHandler<object>);
+
+    expect(() => tryCanonicalRecordJson(make())).not.toThrow();
+    expect(tryCanonicalRecordJson(make()).ok).toBe(false);
+    expect(() => tryCloneJsonRecord(make())).not.toThrow();
+    expect(tryCloneJsonRecord(make()).ok).toBe(false);
+
+    expect(() => tryCanonicalRecordJson({ block: make() })).not.toThrow();
+    expect(tryCanonicalRecordJson({ block: make() }).ok).toBe(false);
+    expect(() => tryCloneJsonRecord({ block: make() })).not.toThrow();
+    expect(tryCloneJsonRecord({ block: make() }).ok).toBe(false);
+  });
+
+  it('reads through a Proxy whose get trap throws, because it never uses get', () => {
+    // Not an oversight: reading own *descriptors* rather than properties is what
+    // makes an accessor unreachable, and it makes this trap unreachable too. The
+    // values seen are the target's own data, which is the record being proposed.
+    const make = (): unknown =>
+      new Proxy(
+        { a: 1 },
+        {
+          get: (): never => {
+            throw new Error('trap');
+          },
+        },
+      );
+
+    expect(() => tryCanonicalRecordJson(make())).not.toThrow();
+    expect(tryCanonicalRecordJson(make())).toEqual({ ok: true, json: '{"a":1}' });
+    expect(() => tryCloneJsonRecord(make())).not.toThrow();
+    expect(tryCloneJsonRecord(make())).toEqual({ ok: true, value: { a: 1 } });
+  });
+
+  it('reports an array whose element is an accessor', () => {
+    const list: unknown[] = [];
+    Object.defineProperty(list, '0', {
+      enumerable: true,
+      configurable: true,
+      get(): never {
+        throw new Error('accessor invoked');
+      },
+    });
+    Object.defineProperty(list, 'length', { value: 1, writable: true });
+
+    expect(() => tryCanonicalRecordJson(list)).not.toThrow();
+    expect(tryCanonicalRecordJson(list).ok).toBe(false);
+    expect(() => tryCloneJsonRecord(list)).not.toThrow();
+    expect(tryCloneJsonRecord(list).ok).toBe(false);
+  });
+});
+
+describe('tryReadOwnDataProperty', () => {
+  it('reads an own data property, including an own __proto__ key', () => {
+    const host = JSON.parse('{"block":{"id":"b1"},"__proto__":{"x":1}}') as Record<string, unknown>;
+    expect(tryReadOwnDataProperty(host, 'block')).toEqual({ id: 'b1' });
+    expect(tryReadOwnDataProperty(host, '__proto__')).toEqual({ x: 1 });
+  });
+
+  it('returns undefined for a missing, inherited, or non-object host', () => {
+    expect(tryReadOwnDataProperty({}, 'block')).toBeUndefined();
+    // `toString` lives on the prototype, and an inherited value is not the
+    // record's own data.
+    expect(tryReadOwnDataProperty({}, 'toString')).toBeUndefined();
+    expect(tryReadOwnDataProperty(null, 'block')).toBeUndefined();
+    expect(tryReadOwnDataProperty('text', 'length')).toBeUndefined();
+  });
+
+  it('returns undefined for an accessor instead of invoking it', () => {
+    const host: Record<string, unknown> = {};
+    Object.defineProperty(host, 'block', {
+      enumerable: true,
+      get(): never {
+        throw new Error('accessor invoked');
+      },
+    });
+    expect(() => tryReadOwnDataProperty(host, 'block')).not.toThrow();
+    expect(tryReadOwnDataProperty(host, 'block')).toBeUndefined();
+  });
+
+  it('returns undefined when a Proxy trap throws', () => {
+    const host = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor: (): never => {
+          throw new Error('trap');
+        },
+      },
+    );
+    expect(() => tryReadOwnDataProperty(host, 'block')).not.toThrow();
+    expect(tryReadOwnDataProperty(host, 'block')).toBeUndefined();
+  });
+});
+
+describe('tryReadArrayItems', () => {
+  it('reads an ordinary array in order', () => {
+    expect(tryReadArrayItems([1, 'a', { b: 2 }])).toEqual([1, 'a', { b: 2 }]);
+    expect(tryReadArrayItems([])).toEqual([]);
+  });
+
+  it('reads a hole as undefined', () => {
+    // eslint-disable-next-line no-sparse-arrays
+    expect(tryReadArrayItems([1, , 3])).toEqual([1, undefined, 3]);
+  });
+
+  it('returns null when reading the spine throws', () => {
+    const host = new Proxy([1, 2], {
+      get: (): never => {
+        throw new Error('trap');
+      },
+    });
+    expect(() => tryReadArrayItems(host)).not.toThrow();
+    expect(tryReadArrayItems(host)).toBeNull();
   });
 });

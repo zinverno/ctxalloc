@@ -33,6 +33,8 @@ import {
   cloneRecord,
   tryCanonicalRecordJson,
   tryCloneJsonRecord,
+  tryReadArrayItems,
+  tryReadOwnDataProperty,
   type CanonicalRecordAttempt,
 } from './canonical-record.js';
 import { issue } from './chunking-primitives.js';
@@ -837,9 +839,24 @@ export class CompileLocalContextService {
       ]);
     }
 
+    // `Array.isArray` is also true of a `Proxy` around an array, whose element
+    // reads run provider code. Taking the spine defensively keeps ordinary
+    // iteration — the very first thing done with the result — from throwing a
+    // raw provider error out of this boundary.
+    const items = tryReadArrayItems(candidates);
+    if (items === null) {
+      throw new LocalSourcePipelineError('candidate-provider', [
+        issue(
+          ['candidateProvider'],
+          'getCandidates must resolve to a readable array',
+          'invalid_type',
+        ),
+      ]);
+    }
+
     // Snapshot first, then verify and compile the snapshot. Everything after
     // this line is application-owned.
-    const owned = snapshotCandidates(candidates);
+    const owned = snapshotCandidates(items);
     verifyPreparedCorpusMembership(owned, blocks);
     return owned as readonly CandidateBlock[];
   }
@@ -874,7 +891,9 @@ export class CompileLocalContextService {
  * result anyway, because no compilation containing it succeeds (INV-DEP-003).
  *
  * Array order, repeated wrappers, retrieval evidence, and every block value are
- * reproduced exactly.
+ * reproduced exactly — including own JSON keys such as `__proto__`, which plain
+ * assignment would silently move onto the copy's prototype and drop from its own
+ * keys. `JsonObject` reserves no key names, so that is valid data.
  */
 function snapshotCandidates(candidates: readonly unknown[]): readonly unknown[] {
   return candidates.map((candidate) => {
@@ -937,12 +956,20 @@ function snapshotCandidates(candidates: readonly unknown[]): readonly unknown[] 
  * come from the prepared corpus?*
  *
  * Inspection is **total**. The values examined here have not been validated yet,
- * so a block may carry a `bigint`, a `Date`, or a reference cycle — each of which
- * makes a naive `JSON.stringify` throw, or worse, makes a `Date` serialize as
- * `{}` and compare equal to an empty object. A value that cannot be canonicalized
- * is neither compared nor accused: the candidate travels on to
+ * so a block may carry a `bigint`, a `Date`, a reference cycle, a throwing
+ * accessor, or a `Proxy` — each of which makes a naive `JSON.stringify` or a
+ * naive property read throw, or worse, makes a `Date` serialize as `{}` and
+ * compare equal to an empty object. A value that cannot be canonicalized is
+ * neither compared nor accused: the candidate travels on to
  * `CandidateValidator`, which is the component that owns rejecting a malformed
  * `CandidateBlock` (INV-DEP-003). No runtime exception escapes this check.
+ *
+ * Totality here is a property of **this** boundary, not of the pipeline behind
+ * it. A candidate this check declines to inspect still reaches the kernel, whose
+ * recursive `JsonValueSchema` has no cycle guard and no accessor guard; a cyclic
+ * or accessor-bearing block can therefore still fail inside `CandidateValidator`
+ * as a raw runtime error. That is a pre-existing kernel limitation recorded in
+ * DEC-039, and Phase 16 does not change compiler behavior to hide it.
  *
  * Array order is preserved exactly.
  */
@@ -1003,12 +1030,16 @@ function verifyPreparedCorpusMembership(
  * Only enough structure is read to look the block up. Everything else about the
  * wrapper — its schema version, its retrieval evidence, its block's own fields —
  * belongs to `CandidateValidator`.
+ *
+ * Both reads go through own data properties only. `candidate.block` would follow
+ * the prototype chain and invoke an accessor, and an accessor on an untrusted
+ * wrapper can throw — which would make this boundary, rather than the kernel,
+ * the thing that failed on a malformed candidate.
  */
 function blockOf(candidate: unknown): { readonly id: string; readonly value: unknown } | null {
-  if (typeof candidate !== 'object' || candidate === null) return null;
-  const value: unknown = (candidate as { block?: unknown }).block;
+  const value = tryReadOwnDataProperty(candidate, 'block');
   if (typeof value !== 'object' || value === null) return null;
-  const id: unknown = (value as { id?: unknown }).id;
+  const id = tryReadOwnDataProperty(value, 'id');
   if (typeof id !== 'string' || id.length === 0) return null;
   return { id, value };
 }

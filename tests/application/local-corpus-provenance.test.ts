@@ -443,6 +443,76 @@ describe('prepared-corpus provenance: inspection is total over untrusted output'
    * pull request must not touch.
    */
 
+  /**
+   * Accessors and `Proxy` traps are the same class of case as the values above,
+   * reached through reflection rather than through serialization. An enumerable
+   * getter on an untrusted block would be invoked by `Object.entries`, and a
+   * throwing one would leave this boundary as a raw `Error` — with the provider
+   * choosing the message. The boundary reads own *descriptors* instead, so no
+   * accessor is invoked and no trap failure escapes.
+   *
+   * As with a cycle, the kernel behind it has no such guard: `CandidateValidator`
+   * parses the wrapper with zod, which does read properties, so an
+   * accessor-bearing candidate still fails there as a raw runtime error. That is
+   * the same pre-existing kernel limitation recorded for cycles in DEC-039, and
+   * fixing it means changing Phase 7 domain validation, which this pull request
+   * must not touch. What is asserted here is the part Phase 16 owns: the failure
+   * does not come from the provenance boundary.
+   */
+  const ACTIVE: readonly (readonly [string, (block: ContextBlock) => unknown])[] = [
+    [
+      'a throwing enumerable getter',
+      (block): unknown => {
+        const host: Record<string, unknown> = { ...block };
+        Object.defineProperty(host, 'metadata', {
+          enumerable: true,
+          configurable: true,
+          get: (): never => {
+            throw new Error('accessor invoked');
+          },
+        });
+        return host;
+      },
+    ],
+    [
+      'a Proxy whose ownKeys trap throws',
+      (block): unknown =>
+        new Proxy(
+          { ...block },
+          {
+            ownKeys: (): never => {
+              throw new Error('trap invoked');
+            },
+          },
+        ),
+    ],
+  ];
+
+  it.each(ACTIVE)(
+    'never itself throws on a candidate whose block is %s',
+    async (_name, makeBlock) => {
+      let raised: unknown = null;
+      try {
+        await build(
+          providerOf((request) => {
+            const real = request.blocks[0];
+            if (real === undefined) throw new Error('no prepared block');
+            return Promise.resolve(wrap([makeBlock(real) as ContextBlock]));
+          }),
+        ).execute(localRequest());
+      } catch (cause) {
+        raised = cause;
+      }
+
+      // Whatever happens downstream, the provenance boundary did not decide it:
+      // it reported no finding it could not support, and produced no runtime
+      // error of its own.
+      expect(raised).not.toBeInstanceOf(LocalSourcePipelineError);
+      expect(raised).not.toBeInstanceOf(TypeError);
+      expect(raised).not.toBeInstanceOf(RangeError);
+    },
+  );
+
   it('still rejects an out-of-corpus block whose metadata is uncanonicalizable', async () => {
     // Membership is decided by identifier, so it is reachable even when the
     // block itself cannot be compared field by field.
@@ -585,5 +655,101 @@ describe('prepared-corpus provenance: successful output is application-owned', (
       metadata: { shard: 'a', nested: { deep: [1, 2, 3] } },
     });
     expect(result.candidates[0]?.retrieval).toBeUndefined();
+  });
+});
+
+describe('prepared-corpus provenance: arbitrary JSON object keys', () => {
+  /**
+   * `JsonObject` reserves no key names, so `__proto__` is ordinary valid data
+   * wherever provider-supplied metadata is allowed. Copying such a record with
+   * plain assignment does not reproduce it — the assignment invokes the
+   * inherited `Object.prototype.__proto__` setter, dropping the key and
+   * changing the copy's prototype — which broke both halves of this boundary at
+   * once: the snapshot published a record the provider did not return, and the
+   * altered prototype made the copy un-canonicalizable, so a rewritten block
+   * carrying the key skipped the equality comparison entirely.
+   */
+  const protoMetadata = (): Record<string, unknown> =>
+    JSON.parse('{"__proto__":{"polluted":true},"shard":"a"}') as Record<string, unknown>;
+
+  it('carries an own __proto__ key through the snapshot into the returned candidates', async () => {
+    const result = await build(
+      providerOf((request) => {
+        const real = request.blocks[0];
+        if (real === undefined) throw new Error('no prepared block');
+        return Promise.resolve([
+          {
+            schemaVersion: 1 as const,
+            block: real,
+            retrieval: {
+              providerId: 'test-provider',
+              providerVersion: '1',
+              rank: 0,
+              metadata: protoMetadata() as never,
+            },
+          },
+        ]);
+      }),
+    ).execute(localRequest());
+
+    const metadata = result.candidates[0]?.retrieval?.metadata;
+    expect(metadata).toBeDefined();
+    expect(Object.getOwnPropertyNames(metadata)).toEqual(['__proto__', 'shard']);
+    expect(Object.getOwnPropertyDescriptor(metadata, '__proto__')?.value).toEqual({
+      polluted: true,
+    });
+    expect(Object.getPrototypeOf(metadata as object)).toBe(Object.prototype);
+    // The block itself is untouched by the key, so membership still holds.
+    expect(result.compilation.includedBlocks.length).toBeGreaterThan(0);
+  });
+
+  it('detects rewritten content hidden behind an own __proto__ metadata key', async () => {
+    // The evasion an inexact copy opened. The provider rewrites the content of a
+    // real block and recomputes its hash and token count, so every kernel rule
+    // still holds — this is the forgery the boundary exists to stop. Adding one
+    // `__proto__` key to the metadata used to be enough to walk past it: the
+    // assignment moved the key onto the snapshot's prototype, which made the
+    // snapshot a non-plain object, which made it un-canonicalizable, which
+    // skipped the comparison. The forged content then compiled (INV-PROV-001).
+    const content = 'Rewritten content smuggled past the comparison.';
+    const codes = await rejectionCodes(
+      providerOf((request) => {
+        const real = request.blocks[0];
+        if (real === undefined) throw new Error('no prepared block');
+        const injected = JSON.parse('{"__proto__":{"polluted":true}}') as Record<string, unknown>;
+        return Promise.resolve(
+          wrap([
+            {
+              ...real,
+              content,
+              normalizedContentHash: calculateNormalizedContentHash(content),
+              tokenCount: countWords(content),
+              metadata: { ...real.metadata, ...injected } as never,
+            },
+          ]),
+        );
+      }),
+    );
+    expect(codes).toEqual(['candidate_block_mismatch']);
+  });
+
+  it('accepts a block whose metadata was rebuilt key by key in reverse order', async () => {
+    // The mirror image: an exact rebuild in a different insertion order is the
+    // same record, and canonical comparison must not call it a mismatch.
+    const result = await build(
+      providerOf((request) => {
+        const real = request.blocks[0];
+        if (real === undefined) throw new Error('no prepared block');
+        const rebuilt: Record<string, unknown> = {};
+        for (const key of Object.keys(real.metadata).reverse()) {
+          rebuilt[key] = JSON.parse(
+            JSON.stringify((real.metadata as Record<string, unknown>)[key]),
+          ) as unknown;
+        }
+        return Promise.resolve(wrap([{ ...real, metadata: rebuilt as never }]));
+      }),
+    ).execute(localRequest());
+
+    expect(result.compilation.includedBlocks.length).toBeGreaterThan(0);
   });
 });

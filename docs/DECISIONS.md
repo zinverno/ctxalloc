@@ -4081,17 +4081,51 @@ failure for `bigint`, `symbol`, functions, non-finite numbers, non-plain objects
 (`Date`, `Map`, `Set`, class instances), symbol-keyed records, `undefined` in an
 array, and cycles.
 
+Serialization is not the only thing an untrusted value controls: **reflection is
+too**. `Object.entries` invokes an enumerable getter, and a `Proxy` trap can
+throw on a prototype or key lookup, so a naive read escapes this boundary as a
+raw error with a provider-chosen message. Every read here therefore goes through
+own property *descriptors* and is additionally guarded. Nothing invokes an
+accessor, and no reflective failure propagates — an accessor-bearing or
+trap-throwing value is simply reported as un-inspectable.
+
+Refusing accessors is a correctness rule as well as a safety one. A getter may
+return a different value on each read, and this boundary reads the same untrusted
+record twice — once to canonicalize it for the comparison, once to copy it into
+the snapshot. A record whose fields change between those reads is not the fixed
+JSON data the comparison assumes, and accepting it would let a provider pass the
+comparison with one value and compile another (INV-DET-002).
+
 A value that cannot be canonicalized is **neither compared nor accused**. Calling
 it a provenance mismatch would claim a finding this check did not make, and
 throwing would take the malformed-candidate decision away from
 `CandidateValidator`. The candidate travels on, and the kernel rejects it. For
 values that are JSON data the canonical bytes are unchanged.
 
-One case is out of reach here. A cyclic record is reported correctly by this
-boundary, but the compilation still fails with a `RangeError` raised inside
-`CandidateValidator`: the domain's recursive `JsonValueSchema` has no cycle
-guard. That is a pre-existing Phase 7 limitation, not one this phase introduces,
-and fixing it means changing domain validation.
+Two cases are out of reach here, and they are the same case. A cyclic record, and
+an accessor-bearing or `Proxy`-bearing one, are both reported correctly by this
+boundary; the compilation still fails with a raw runtime error raised inside
+`CandidateValidator`, because the domain's recursive `JsonValueSchema` has no
+cycle guard and no accessor guard and does read properties. That is a pre-existing
+Phase 7 limitation, not one this phase introduces, and fixing it means changing
+domain validation. Phase 16's guarantee is scoped accordingly: the provenance
+boundary is never the source of such an error, and the valid-data contract is
+unaffected.
+
+**Copying preserves every legal JSON key.** `JsonObject` models keys as arbitrary
+strings and reserves no names, so `__proto__` is ordinary valid data — it is an
+own enumerable key of `JSON.parse('{"__proto__":{}}')`. Building a copy with
+`result[key] = value` does not reproduce such a record: the assignment invokes the
+inherited `Object.prototype.__proto__` setter, so the key vanishes from the copy's
+own keys and the copy's prototype changes instead. Both halves of this boundary
+broke on that. The snapshot published a record the provider never returned, and
+the altered prototype made the copy a non-plain object, hence un-canonicalizable,
+hence exempt from the equality comparison — so a block with rewritten content plus
+one `__proto__` metadata key walked past the provenance check entirely
+(INV-PROV-001). Copies are therefore built with `Object.defineProperty` on an
+object carrying the source's own plain-object prototype (`Object.prototype` or
+`null`), which invokes no setter and reproduces `__proto__`, `constructor`, and
+`prototype` as ordinary own data properties.
 
 ### The Provider Receives an Isolated Corpus
 
