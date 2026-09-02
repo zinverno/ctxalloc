@@ -480,6 +480,14 @@ requireContains(
 );
 requireContains(
   'packages/application/dist/compile-local-context-service.d.ts',
+  'readonly policy: CompilationPolicy;',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'readonly compiler: ContextCompilerConfig;',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
   'declare class LocalSourcePipelineError extends Error',
 );
 requireContains(

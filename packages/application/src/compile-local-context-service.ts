@@ -1,5 +1,6 @@
 import {
   ContextCompiler,
+  type CompilationPolicy,
   type CompilationResult,
   type ContextCompilerConfig,
 } from '@ctxalloc/compiler';
@@ -112,8 +113,14 @@ export interface LocalCompilationRequest {
   readonly query: string;
   readonly referenceTime: Timestamp;
   readonly budget: TokenBudget;
-  /** The kernel's five-slice compilation policy, validated by the compiler that owns it. */
-  readonly policy: unknown;
+  /**
+   * The kernel's five-slice compilation policy.
+   *
+   * It is passed through untouched and validated at runtime by
+   * `CompilationPolicyValidator`, which owns its rules. Restating them here would
+   * create a second place for one truth to drift (INV-DEP-003).
+   */
+  readonly policy: CompilationPolicy;
 }
 
 /**
