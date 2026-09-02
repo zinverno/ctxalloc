@@ -20,13 +20,25 @@ const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DECLARATIONS = [
   'packages/ports/dist/index.d.ts',
   'packages/ports/dist/tokenizer.d.ts',
+  'packages/ports/dist/source-reader.d.ts',
+  'packages/ports/dist/control-store.d.ts',
+  'packages/ports/dist/candidate-provider.d.ts',
   'packages/testing/dist/index.d.ts',
   'packages/testing/dist/fake-tokenizer.d.ts',
+  'packages/testing/dist/in-memory-source-reader.d.ts',
+  'packages/testing/dist/in-memory-control-store.d.ts',
+  'packages/testing/dist/fake-candidate-provider.d.ts',
   'packages/tokenization/dist/index.d.ts',
   'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
   'packages/application/dist/index.d.ts',
   'packages/application/dist/source-ingestion.d.ts',
   'packages/application/dist/markdown-chunker.d.ts',
+  'packages/application/dist/text-chunker.d.ts',
+  'packages/application/dist/conversation-source.d.ts',
+  'packages/application/dist/conversation-chunker.d.ts',
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'packages/adapters/dist/index.d.ts',
+  'packages/adapters/dist/node-file-source-reader.d.ts',
   'packages/domain/dist/index.d.ts',
   'packages/domain/dist/candidate-block.d.ts',
   'packages/domain/dist/block-content-hash.d.ts',
@@ -93,6 +105,111 @@ requireContains(
   'packages/ports/dist/index.d.ts',
   "export type { Tokenizer } from './tokenizer.js'",
 );
+
+// The three ports added by the local vertical slice keep their documented shapes
+// (DEC-039). A port is a type-only contract, so the entry point must re-export
+// them as types and declare no runtime value of its own.
+requireContains('packages/ports/dist/source-reader.d.ts', 'interface SourceReadRequest');
+requireContains('packages/ports/dist/source-reader.d.ts', 'readonly locator: string;');
+requireContains('packages/ports/dist/source-reader.d.ts', 'interface SourceReadResult');
+requireContains('packages/ports/dist/source-reader.d.ts', 'readonly content: string;');
+requireContains('packages/ports/dist/source-reader.d.ts', 'interface SourceReader');
+requireContains(
+  'packages/ports/dist/source-reader.d.ts',
+  'read(request: SourceReadRequest): Promise<SourceReadResult>;',
+);
+
+requireContains('packages/ports/dist/control-store.d.ts', 'interface SourceRegistration');
+requireContains('packages/ports/dist/control-store.d.ts', 'readonly schemaVersion: 1;');
+requireContains('packages/ports/dist/control-store.d.ts', 'readonly identity: {');
+requireContains('packages/ports/dist/control-store.d.ts', 'readonly namespace: string;');
+requireContains('packages/ports/dist/control-store.d.ts', 'readonly key: string;');
+requireContains('packages/ports/dist/control-store.d.ts', 'readonly locator: string;');
+requireContains('packages/ports/dist/control-store.d.ts', 'interface ControlStore');
+requireContains(
+  'packages/ports/dist/control-store.d.ts',
+  'listSources(scope: Scope): Promise<readonly SourceRegistration[]>;',
+);
+
+requireContains(
+  'packages/ports/dist/candidate-provider.d.ts',
+  'interface CandidateProviderRequest',
+);
+requireContains(
+  'packages/ports/dist/candidate-provider.d.ts',
+  'readonly sourceDocuments: readonly SourceDocument[];',
+);
+requireContains(
+  'packages/ports/dist/candidate-provider.d.ts',
+  'readonly blocks: readonly ContextBlock[];',
+);
+requireContains(
+  'packages/ports/dist/candidate-provider.d.ts',
+  'getCandidates(request: CandidateProviderRequest): Promise<readonly CandidateBlock[]>;',
+);
+
+requireContains(
+  'packages/ports/dist/index.d.ts',
+  "export type { CandidateProvider, CandidateProviderRequest } from './candidate-provider.js'",
+);
+requireContains(
+  'packages/ports/dist/index.d.ts',
+  "export type { ControlStore, SourceRegistration } from './control-store.js'",
+);
+requireContains(
+  'packages/ports/dist/index.d.ts',
+  "export type { SourceReadRequest, SourceReadResult, SourceReader } from './source-reader.js'",
+);
+
+// The control store stays read-only in this phase, and no port may name an
+// external system, a Node type, or a compiler policy type (INV-ADAPTER-001).
+const PORT_DECLARATIONS = [
+  'packages/ports/dist/index.d.ts',
+  'packages/ports/dist/tokenizer.d.ts',
+  'packages/ports/dist/source-reader.d.ts',
+  'packages/ports/dist/control-store.d.ts',
+  'packages/ports/dist/candidate-provider.d.ts',
+];
+
+const PORT_FORBIDDEN_TYPES = [
+  'Buffer',
+  'Stats',
+  'Dirent',
+  'PathLike',
+  'node:',
+  'Tiktoken',
+  'ZodType',
+  'CompilationPolicy',
+  'CompilationRequest',
+  'TokenBudget',
+];
+
+for (const relativePath of PORT_DECLARATIONS) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const type of PORT_FORBIDDEN_TYPES) {
+    if (declarations.includes(type)) {
+      fail(`${relativePath} exposes the forbidden type "${type}"`);
+    }
+  }
+  // A port carries no behavior, so no runtime declaration may appear.
+  if (/declare (const|function|class|enum|let|var) /.test(declarations)) {
+    fail(`${relativePath} declares a runtime value`);
+  }
+}
+
+{
+  const content = contents.get('packages/ports/dist/control-store.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const write of ['registerSource', 'updateSource', 'removeSource', 'deleteSource']) {
+      if (declarations.includes(write)) {
+        fail(`packages/ports/dist/control-store.d.ts declares the write method "${write}"`);
+      }
+    }
+  }
+}
 
 // The fake still implements the port it stands in for.
 requireContains(
@@ -231,6 +348,302 @@ const CHUNKER_INTERNAL_TYPES = [
   }
 }
 
+// The plain-text chunker keeps its documented constructor, its own token policy,
+// and its own project-owned error types (DEC-039).
+requireContains('packages/application/dist/text-chunker.d.ts', 'interface TextChunkingOptions');
+requireContains('packages/application/dist/text-chunker.d.ts', 'readonly targetTokens: number;');
+requireContains('packages/application/dist/text-chunker.d.ts', 'readonly maxTokens: number;');
+requireContains(
+  'packages/application/dist/text-chunker.d.ts',
+  'declare class TextChunkingValidationError extends Error',
+);
+requireContains(
+  'packages/application/dist/text-chunker.d.ts',
+  'readonly code = "TEXT_CHUNKING_INVALID_INPUT"',
+);
+requireContains(
+  'packages/application/dist/text-chunker.d.ts',
+  'declare class TextChunkingError extends Error',
+);
+requireContains('packages/application/dist/text-chunker.d.ts', 'declare class TextChunker');
+requireContains(
+  'packages/application/dist/text-chunker.d.ts',
+  'constructor(tokenizer: Tokenizer, options: TextChunkingOptions);',
+);
+requireContains(
+  'packages/application/dist/text-chunker.d.ts',
+  'chunk(source: IngestedSource): readonly ContextBlock[];',
+);
+requireContains('packages/application/dist/index.d.ts', "} from './text-chunker.js'");
+
+// The conversation format publishes its schema version, its message and payload
+// contracts, its ingestion use case, and its project-owned error (DEC-039).
+requireContains(
+  'packages/application/dist/conversation-source.d.ts',
+  'CONVERSATION_SOURCE_SCHEMA_VERSION = 1',
+);
+requireContains(
+  'packages/application/dist/conversation-source.d.ts',
+  'interface ConversationSourceMessage',
+);
+requireContains(
+  'packages/application/dist/conversation-source.d.ts',
+  'interface ConversationSourcePayload',
+);
+requireContains(
+  'packages/application/dist/conversation-source.d.ts',
+  'interface IngestedConversationSource',
+);
+requireContains(
+  'packages/application/dist/conversation-source.d.ts',
+  'declare class ConversationSourceValidationError extends Error',
+);
+requireContains(
+  'packages/application/dist/conversation-source.d.ts',
+  'readonly code = "CONVERSATION_SOURCE_INVALID_INPUT"',
+);
+requireContains(
+  'packages/application/dist/conversation-source.d.ts',
+  'declare function ingestConversationSource(input: unknown): IngestedConversationSource;',
+);
+requireContains(
+  'packages/application/dist/conversation-source.d.ts',
+  'declare function parseConversationSourceJson(text: unknown): ConversationSourcePayload;',
+);
+requireContains('packages/application/dist/index.d.ts', "} from './conversation-source.js'");
+
+// The conversation format of version 1 declares no role, tool call, attachment,
+// multimodal part, or thread field: the renderer serializes block content and
+// nothing else, so a field the pipeline does not render must not be published.
+{
+  const content = contents.get('packages/application/dist/conversation-source.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const field of ['role', 'toolCall', 'attachment', 'threadId', 'multimodal']) {
+      if (declarations.includes(field)) {
+        fail(`packages/application/dist/conversation-source.d.ts declares "${field}"`);
+      }
+    }
+  }
+}
+
+// The conversation chunker keeps its documented constructor and error types. It
+// takes no token policy: one message is one block, so there is no size decision
+// for a policy to configure (DEC-039).
+requireContains(
+  'packages/application/dist/conversation-chunker.d.ts',
+  'declare class ConversationChunker',
+);
+requireContains(
+  'packages/application/dist/conversation-chunker.d.ts',
+  'constructor(tokenizer: Tokenizer);',
+);
+requireContains(
+  'packages/application/dist/conversation-chunker.d.ts',
+  'chunk(source: IngestedConversationSource): readonly ContextBlock[];',
+);
+requireContains(
+  'packages/application/dist/conversation-chunker.d.ts',
+  'declare class ConversationChunkingValidationError extends Error',
+);
+requireContains(
+  'packages/application/dist/conversation-chunker.d.ts',
+  'declare class ConversationChunkingError extends Error',
+);
+requireContains('packages/application/dist/index.d.ts', "} from './conversation-chunker.js'");
+
+// The local application service keeps its documented runtime-boundary
+// constructor and its documented asynchronous result (DEC-039).
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'LOCAL_COMPILE_SERVICE_CONFIG_SCHEMA_VERSION = 1',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'LOCAL_COMPILATION_REQUEST_SCHEMA_VERSION = 1',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'interface LocalCompileServiceConfig',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'interface LocalCompilationRequest',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'interface LocalCompilationResult',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'readonly compilation: CompilationResult;',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'declare class LocalSourcePipelineError extends Error',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'readonly code = "LOCAL_SOURCE_PIPELINE_FAILED"',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'declare class CompileLocalContextService',
+);
+requireContains(
+  'packages/application/dist/compile-local-context-service.d.ts',
+  'execute(input: unknown): Promise<LocalCompilationResult>;',
+);
+requireContains(
+  'packages/application/dist/index.d.ts',
+  "} from './compile-local-context-service.js'",
+);
+
+// The service takes one tokenizer and three ports, and constructs the compiler
+// itself: it must not accept a pre-built ContextCompiler beside a second
+// tokenizer, which is what makes validation-and-rendering coverage provable.
+{
+  const content = contents.get('packages/application/dist/compile-local-context-service.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    const constructorSignature =
+      /constructor\(config: unknown, tokenizer: Tokenizer, sourceReader: SourceReader, controlStore: ControlStore, candidateProvider: CandidateProvider\);/;
+    if (!constructorSignature.test(declarations.replace(/\s+/g, ' '))) {
+      fail(
+        'packages/application/dist/compile-local-context-service.d.ts does not declare the documented constructor',
+      );
+    }
+    if (/constructor\([^)]*compiler: ContextCompiler/.test(declarations.replace(/\s+/g, ' '))) {
+      fail(
+        'packages/application/dist/compile-local-context-service.d.ts accepts a pre-built ContextCompiler',
+      );
+    }
+  }
+}
+
+// Internal chunking primitives stay private to the package (DEC-029, DEC-039).
+const CHUNKING_PRIMITIVE_TYPES = [
+  'SourceLine',
+  'SourceRange',
+  'AtomicSourceRange',
+  'RangeGroup',
+  'CountSlice',
+  'ChunkingOptions',
+  'TokenizerFailure',
+];
+
+for (const relativePath of [
+  'packages/application/dist/index.d.ts',
+  'packages/application/dist/text-chunker.d.ts',
+  'packages/application/dist/conversation-chunker.d.ts',
+  'packages/application/dist/compile-local-context-service.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const type of CHUNKING_PRIMITIVE_TYPES) {
+    // Matched on a word boundary: `TextChunkingOptions` legitimately contains
+    // `ChunkingOptions`, and a substring match would flag the public name.
+    if (new RegExp(`\\b${type}\\b`).test(declarations)) {
+      fail(`${relativePath} exposes the internal type "${type}"`);
+    }
+  }
+}
+
+// The local file reader keeps its documented configuration and its
+// project-owned error, and leaks no Node type (INV-ADAPTER-001).
+requireContains(
+  'packages/adapters/dist/node-file-source-reader.d.ts',
+  'class NodeFileSourceReader implements SourceReader',
+);
+requireContains(
+  'packages/adapters/dist/node-file-source-reader.d.ts',
+  'interface NodeFileSourceReaderConfig',
+);
+requireContains(
+  'packages/adapters/dist/node-file-source-reader.d.ts',
+  'readonly rootDirectory: string;',
+);
+requireContains(
+  'packages/adapters/dist/node-file-source-reader.d.ts',
+  'readonly maxBytes: number;',
+);
+requireContains(
+  'packages/adapters/dist/node-file-source-reader.d.ts',
+  'declare class NodeFileSourceReaderError extends Error',
+);
+requireContains(
+  'packages/adapters/dist/node-file-source-reader.d.ts',
+  'read(request: SourceReadRequest): Promise<SourceReadResult>;',
+);
+requireContains(
+  'packages/adapters/dist/node-file-source-reader.d.ts',
+  'NODE_FILE_SOURCE_READER_ID = "ctxalloc-node-file"',
+);
+requireContains('packages/adapters/dist/index.d.ts', "} from './node-file-source-reader.js'");
+
+const ADAPTER_LEAKED_TYPES = [
+  'Buffer',
+  'Stats',
+  'BigIntStats',
+  'Dirent',
+  'PathLike',
+  'FileHandle',
+  'ErrnoException',
+  'TextDecoder',
+  'node:fs',
+  'node:path',
+];
+
+for (const relativePath of [
+  'packages/adapters/dist/index.d.ts',
+  'packages/adapters/dist/node-file-source-reader.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const type of ADAPTER_LEAKED_TYPES) {
+    if (declarations.includes(type)) {
+      fail(`${relativePath} exposes the implementation type "${type}"`);
+    }
+  }
+  if (declarations.includes('@ctxalloc/compiler')) {
+    fail(`${relativePath} depends on the compiler kernel`);
+  }
+}
+
+// The three new test doubles still implement the ports they stand in for.
+requireContains(
+  'packages/testing/dist/in-memory-source-reader.d.ts',
+  'class InMemorySourceReader implements SourceReader',
+);
+requireContains(
+  'packages/testing/dist/in-memory-control-store.d.ts',
+  'class InMemoryControlStore implements ControlStore',
+);
+requireContains(
+  'packages/testing/dist/fake-candidate-provider.d.ts',
+  'class FakeCandidateProvider implements CandidateProvider',
+);
+requireContains('packages/testing/dist/index.d.ts', "} from './in-memory-source-reader.js'");
+requireContains('packages/testing/dist/index.d.ts', "} from './in-memory-control-store.js'");
+requireContains('packages/testing/dist/index.d.ts', "} from './fake-candidate-provider.js'");
+
+// No test double may declare a model provider or a trace store: neither port
+// exists yet, and publishing a fake for one would invite a test to depend on a
+// contract nothing implements.
+{
+  const content = contents.get('packages/testing/dist/index.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const absent of ['FakeModelProvider', 'InMemoryTraceStore', 'ModelProvider']) {
+      if (declarations.includes(absent)) {
+        fail(`packages/testing/dist/index.d.ts declares "${absent}"`);
+      }
+    }
+  }
+}
+
 // The validation library and the Node standard library stay implementation
 // details of the use case: neither may appear in its published surface
 // (INV-ADAPTER-001).
@@ -247,11 +660,15 @@ const APPLICATION_LEAKED_TYPES = [
 for (const relativePath of [
   'packages/application/dist/index.d.ts',
   'packages/application/dist/source-ingestion.d.ts',
+  'packages/application/dist/text-chunker.d.ts',
+  'packages/application/dist/conversation-source.d.ts',
+  'packages/application/dist/conversation-chunker.d.ts',
+  'packages/application/dist/compile-local-context-service.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
   const declarations = stripComments(content);
-  for (const type of APPLICATION_LEAKED_TYPES) {
+  for (const type of [...APPLICATION_LEAKED_TYPES, 'node:fs', 'node:path', 'PathLike']) {
     if (declarations.includes(type)) {
       fail(`${relativePath} exposes the implementation type "${type}"`);
     }

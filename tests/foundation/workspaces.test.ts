@@ -8,6 +8,7 @@ const WORKSPACES = [
   'packages/ports',
   'packages/compiler',
   'packages/application',
+  'packages/adapters',
   'packages/tokenization',
   'packages/evaluation',
   'packages/testing',

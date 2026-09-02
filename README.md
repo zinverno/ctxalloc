@@ -9,25 +9,39 @@ or agent framework.
 
 ## Status
 
-Phase 15 — **the compiler kernel is complete**. `ContextCompiler` composes the
-stages, settles the rendered budget, and returns a `CompilationResult`. The
-repository contains the TypeScript monorepo scaffolding from Phase 1 (workspace
-structure, strict compiler and linting configuration, test infrastructure,
-package boundaries, boundary checker), the runtime-validated domain model in
-`@ctxalloc/domain` (scope, identifiers, content hash values, JSON-safe metadata,
-source types, source locations, `SourceDocument`, `ContextBlock`, `TokenBudget`,
-and a structured validation API), the project-owned `Tokenizer` port in
-`@ctxalloc/ports`, the deterministic `FakeTokenizer` test double in
-`@ctxalloc/testing` with a reusable tokenizer contract test suite, a real offline
-tokenizer adapter in `@ctxalloc/tokenization`, the first two application use
-cases in `@ctxalloc/application`, and the compiler kernel in
-`@ctxalloc/compiler`: structural request and policy validation plus nine
-components — `CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`,
-`CandidateFilter`, `BudgetAllocator`, `ContextOrderer`, `ContextRenderer`, the
-observational `TraceBuilder`, and `ContextCompiler`.
+Phase 16 — **the compiler kernel is complete, and so is the first local
+source-to-compilation slice**.
 
-**The product is not complete.** Retrieval integration, persistence, the CLI, the
-HTTP API, model execution, and the evaluation harness remain later phases.
+`ContextCompiler` composes the kernel stages, settles the rendered budget, and
+returns a `CompilationResult` (Phase 15). `CompileLocalContextService` now
+carries registered local sources into it: the control plane lists them, a source
+reader reads exact text, ingestion and chunking prepare a corpus of Markdown,
+plain-text, and conversation blocks, a candidate provider proposes wrappers, and
+the existing compiler compiles them. Phase 16 adds **no** compiler selection
+behavior.
+
+The repository contains the TypeScript monorepo scaffolding from Phase 1
+(workspace structure, strict compiler and linting configuration, test
+infrastructure, package boundaries, boundary checker), the runtime-validated
+domain model in `@ctxalloc/domain` (scope, identifiers, content hash values,
+JSON-safe metadata, source types, source locations, `SourceDocument`,
+`ContextBlock`, `TokenBudget`, and a structured validation API), four
+project-owned type-only ports in `@ctxalloc/ports` (`Tokenizer`, `SourceReader`,
+`ControlStore`, `CandidateProvider`), four deterministic test doubles in
+`@ctxalloc/testing` (`FakeTokenizer`, `InMemorySourceReader`,
+`InMemoryControlStore`, `FakeCandidateProvider`) with a reusable tokenizer
+contract test suite, a real offline tokenizer adapter in
+`@ctxalloc/tokenization`, the real local file reader in `@ctxalloc/adapters`, the
+application use cases in `@ctxalloc/application` (source ingestion, Markdown,
+plain-text, and conversation chunking, and the local compilation service), and
+the compiler kernel in `@ctxalloc/compiler`: structural request and policy
+validation plus nine components — `CandidateValidator`, `CandidateDeduplicator`,
+`CandidateScorer`, `CandidateFilter`, `BudgetAllocator`, `ContextOrderer`,
+`ContextRenderer`, the observational `TraceBuilder`, and `ContextCompiler`.
+
+**The product is not complete.** Real retrieval, persistence and SQLite,
+control-plane writing, trace persistence, the CLI, the HTTP API, model execution,
+and the evaluation harness remain later phases.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
 `js-tiktoken` (pinned to 1.0.21, see [DEC-027](./docs/DECISIONS.md)). It runs
@@ -603,8 +617,18 @@ never mutated, and the final string still appears only on the result.
 against a baseline input, no baseline exists in a `CompilationRequest`, and
 baselines are evaluation work.
 
-**What remains after the kernel.** Retrieval and `CandidateProvider` execution,
-`SourceReader`, persistence and SQLite, the CLI, the HTTP API, model execution,
+**The local slice.** `CompileLocalContextService` owns one `Tokenizer` object and
+constructs `MarkdownChunker`, `TextChunker`, `ConversationChunker`, and
+`ContextCompiler` with it, so block token counts and compiler validation are
+composed consistently. Logical source identity is separate from the adapter
+locator: moving a file changes where its bytes are, not what the source is.
+`NodeFileSourceReader` confines every locator to a configured root by real path,
+so a symlink pointing outside it is rejected, and decodes UTF-8 strictly rather
+than substituting U+FFFD. Registrations are ordered by identity, never by
+locator; the provider's candidate order is preserved exactly.
+
+**What remains after the slice.** Real retrieval, persistence and SQLite,
+control-plane writing, trace persistence, the CLI, the HTTP API, model execution,
 the evaluation harness and its baselines, and telemetry. CtxAlloc supports no
 Obsidian integration.
 
@@ -653,6 +677,7 @@ apps/
   api/          @ctxalloc/api
   cli/          @ctxalloc/cli
 packages/
+  adapters/     @ctxalloc/adapters
   application/  @ctxalloc/application
   compiler/     @ctxalloc/compiler
   domain/       @ctxalloc/domain
@@ -666,7 +691,12 @@ Allowed internal dependency direction (enforced by `pnpm check:boundaries`):
 
 ```text
 apps -> application -> compiler -> ports -> domain
+                 adapters -> ports -> domain
 ```
+
+`@ctxalloc/adapters` is the only workspace in the local slice that touches a
+filesystem, and it depends on `@ctxalloc/ports` alone: an adapter never sees the
+compiler kernel.
 
 ## Documentation
 

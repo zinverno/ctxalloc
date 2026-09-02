@@ -5,6 +5,7 @@
     { "path": "packages/ports" },
     { "path": "packages/compiler" },
     { "path": "packages/application" },
+    { "path": "packages/adapters" },
     { "path": "packages/tokenization" },
     { "path": "packages/evaluation" },
     { "path": "packages/testing" },

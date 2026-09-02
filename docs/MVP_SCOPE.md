@@ -679,12 +679,15 @@ version, tokenizer identity and version, renderer identity and version, the
 correction strategy and version, and the search bound. Nothing random, discovered,
 or environmental takes part.
 
-**Not implemented and deliberately absent:** retrieval, `CandidateProvider`
-execution, `SourceReader`, persistence, SQLite, the CLI, the HTTP API, model
-execution, the evaluation harness, baseline measurement, telemetry, and
-generative compression.
+**Not implemented and deliberately absent from the kernel:** retrieval,
+persistence, SQLite, the CLI, the HTTP API, model execution, the evaluation
+harness, baseline measurement, telemetry, and generative compression.
 
-See DEC-038.
+`CandidateProvider` execution and `SourceReader` are no longer absent: they are
+application and adapter concerns, and both are implemented outside the kernel
+(DEC-039).
+
+See DEC-038 and DEC-039.
 
 ---
 
@@ -785,26 +788,81 @@ See DEC-037 and DEC-038.
 
 ---
 
+### 3.8.1 Local Source-to-Compilation Slice
+
+**The local vertical slice is implemented** (DEC-039).
+`CompileLocalContextService` in `@ctxalloc/application` joins the control plane,
+the source reader, ingestion, chunking, the candidate provider, and
+`ContextCompiler` into one path from registered local sources to a
+`CompilationResult`:
+
+```text
+ControlStore.listSources(scope)
+  -> SourceRegistration validation
+  -> canonical registration order
+  -> SourceReader.read({ locator })
+  -> ingestSource / ingestConversationSource
+  -> MarkdownChunker / TextChunker / ConversationChunker
+  -> canonical corpus order
+  -> CandidateProvider.getCandidates(...)
+  -> ContextCompiler.compile(...)
+```
+
+**No compiler selection behavior is added.** Scoring, filtering, allocation,
+ordering, rendering, correction, and trace settlement all stay inside the kernel.
+
+**One tokenizer.** The service takes one `Tokenizer` object and constructs every
+chunker and the compiler with it, which is what makes the kernel's
+`tokenizerCoverage: 'validation-and-rendering'` claim true of this slice too.
+
+**Identity is not location.** A registration carries a logical `identity` and a
+physical `locator`. Moving a source changes its locator, not its
+`SourceDocument.id`; renaming its identity creates a different logical source.
+Two registrations of one logical source are rejected before anything is read.
+
+**Order is project-owned.** Registrations are sorted by source type, identity
+namespace, and identity key, never by locator; the corpus is sorted by source
+document, position, and block identifier. Provider candidate order is preserved
+exactly.
+
+**Not implemented and deliberately absent:** real retrieval, model execution and
+evaluation, control-plane writing, trace persistence, SQLite and every other
+persistence, the CLI, the HTTP API, and file watching.
+
+See DEC-039.
+
+---
+
 ### 3.9 Core Test Providers
 
-The MVP includes:
+Implemented:
 
-* FakeCandidateProvider;
-* FakeTokenizer;
-* FakeModelProvider;
-* InMemoryControlStore.
+* `FakeTokenizer` (DEC-027);
+* `FakeCandidateProvider` (DEC-039), which performs no retrieval at all: it reads
+  no query, computes no similarity, and invents no relevance score;
+* `InMemoryControlStore` (DEC-039), which filters by exact scope and has no write
+  API;
+* `InMemorySourceReader` (DEC-039), which maps an exact locator to exact content
+  and resolves no path.
 
-These implementations allow the complete compiler and evaluation suite to run without external infrastructure.
+Future:
+
+* `FakeModelProvider`, which arrives with the `ModelProvider` port it stands in
+  for.
+
+These implementations allow the complete compiler and local application suite to run without external infrastructure. A test double must never contain product logic: a fake that scored candidates would be retrieval logic living in the test package.
 
 ---
 
 ### 3.10 First Supported Sources
 
-The MVP supports:
+All three source kinds are implemented (DEC-029, DEC-039):
 
 * Markdown documents;
 * plain text documents;
-* conversation messages.
+* conversation messages, in one strict local JSON format whose logical content
+  hash is unaffected by JSON formatting and changed by message identity,
+  content, or order.
 
 Obsidian is treated as a Markdown source with additional metadata.
 
@@ -850,9 +908,13 @@ The compiler core must initially work without a real retrieval backend.
 The first implementation sequence is:
 
 1. static benchmark fixtures;
-2. FakeCandidateProvider;
-3. technical spike for real retrieval;
-4. one selected real retrieval provider.
+2. `FakeCandidateProvider` — **implemented** (DEC-039), behind the implemented
+   `CandidateProvider` port;
+3. technical spike for real retrieval — future;
+4. one selected real retrieval provider — future.
+
+The port is in place, so a real provider replaces the fake without changing the
+application service or the compiler.
 
 Candidate real providers include:
 

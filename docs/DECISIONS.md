@@ -84,6 +84,7 @@ A newer decision has replaced the previous one.
 | DEC-036 | Compose explicit compilation contracts and filter scored candidates before allocation | Accepted |
 | DEC-037 | Record deterministic privacy-minimized trace snapshots without changing decisions | Accepted |
 | DEC-038 | Settle the compiler by exact render measurement, safe eviction, and a bounded exhaustive selection search | Accepted |
+| DEC-039 | Complete the first local source-to-compilation vertical slice through explicit ports | Accepted |
 
 ---
 
@@ -3764,6 +3765,330 @@ METRICS changes: 8.4, 8.5, 8.6, 8.10, and 8.11 gain an implemented producer; 8.4
 ARCHITECTURE changes: 4.1 records `ContextCompiler` as the composition root and drops "nothing composes these components"; 5.7 publishes the implemented result without reduction fields; 6.8 documents the component; 7.2 becomes the implemented settlement algorithm.
 
 **The compiler kernel is complete. The product is not.** Retrieval, `CandidateProvider` execution, `SourceReader`, persistence, SQLite, the CLI, the HTTP API, model execution, the evaluation harness, baseline measurement, telemetry, and generative compression all remain later phases.
+
+---
+
+## DEC-039: Complete the First Local Source-to-Compilation Vertical Slice Through Explicit Ports
+
+### Status
+
+Accepted
+
+### Decision
+
+Phase 15 completed the compiler kernel (DEC-038). Phase 16 completes the first **application** path into it: registered local sources become a prepared corpus, a provider proposes candidates from that corpus, and the existing `ContextCompiler` compiles them.
+
+```text id="ma16f"
+ControlStore.listSources(scope)
+  -> SourceRegistration validation
+  -> canonical registration order
+  -> SourceReader.read({ locator })
+  -> ingestSource / ingestConversationSource
+  -> MarkdownChunker / TextChunker / ConversationChunker
+  -> canonical corpus order
+  -> CandidateProvider.getCandidates(...)
+  -> ContextCompiler.compile(...)
+  -> LocalCompilationResult
+```
+
+**No compiler selection behavior is added or changed.** Scoring, filtering, allocation, ordering, rendering, render-aware correction, and trace settlement all stay exactly where DEC-038 put them. Every kernel component, every issue code, every message, and every published contract is unchanged, and the Phase 15 rescue and settlement tests pass untouched. This phase decides what the corpus *is*; the kernel still decides what is selected (INV-DEP-003).
+
+No new external dependency is added.
+
+### Three Ports Gain Real Consumers
+
+`@ctxalloc/ports` now declares `SourceReader`, `ControlStore` with `SourceRegistration`, and `CandidateProvider` beside `Tokenizer`. Each is added because a component in this phase consumes it, not because the architecture sketch lists it: `TraceStore`, `ModelProvider`, and a `Clock` port stay absent.
+
+The package may now reference `@ctxalloc/domain` with **type-only** imports. A port that described a scope, a source document, or a candidate in its own private vocabulary would force every adapter to translate between two spellings of one concept, which is how a second source of truth starts. It gains no runtime export: every contract is a type, so importing a port still cannot pull infrastructure into a layer (INV-ADAPTER-001).
+
+```ts
+interface SourceReadRequest { readonly locator: string; }
+interface SourceReadResult { readonly content: string; }
+
+interface SourceReader {
+  readonly id: string;
+  readonly version: string;
+  read(request: SourceReadRequest): Promise<SourceReadResult>;
+}
+
+interface SourceRegistration {
+  readonly schemaVersion: 1;
+  readonly scope: Scope;
+  readonly sourceType: SourceType;
+  readonly identity: { readonly namespace: string; readonly key: string };
+  readonly locator: string;
+  readonly title?: string;
+  readonly createdAt?: Timestamp;
+  readonly updatedAt?: Timestamp;
+  readonly metadata: JsonObject;
+}
+
+interface ControlStore {
+  readonly id: string;
+  readonly version: string;
+  listSources(scope: Scope): Promise<readonly SourceRegistration[]>;
+}
+
+interface CandidateProviderRequest {
+  readonly scope: Scope;
+  readonly query: string;
+  readonly referenceTime: Timestamp;
+  readonly sourceDocuments: readonly SourceDocument[];
+  readonly blocks: readonly ContextBlock[];
+}
+
+interface CandidateProvider {
+  readonly id: string;
+  readonly version: string;
+  getCandidates(request: CandidateProviderRequest): Promise<readonly CandidateBlock[]>;
+}
+```
+
+`CandidateProviderRequest` carries the prepared corpus **explicitly** because this phase has no persistent retrieval index. A provider that owned an index would query it; a provider that does not is handed exactly the corpus the application prepared, and the contract has the same shape for both.
+
+### Logical Identity Is Not a Locator
+
+This is the load-bearing distinction of the phase.
+
+* `identity` — namespace plus key — is **logical**. With `scope` and `sourceType` it determines the derived `SourceDocument.id` (DEC-028).
+* `locator` is **physical**: the string one adapter uses to find bytes today.
+
+Moving a file therefore moves a source; it does not create a second one. Renaming an identity component creates a different logical source, which is the visible consequence an operator should get for changing what a source *is* (INV-BLOCK-001, INV-ADAPTER-002).
+
+Logical uniqueness inside one listing is exact scope, plus source type, plus identity namespace, plus identity key. The locator takes no part: two registrations of one logical source pointing at two paths are a contradiction the control plane must resolve, not a pair of sources that happen to look alike. The application rejects the pair **before reading anything**, so a self-contradicting control plane never causes half a corpus to load (INV-ADAPTER-004).
+
+The `ControlStore` contract is **read-only** in this phase. Registering, updating, and removing sources is control-plane writing, which needs its own persistence decision and its own failure semantics; declaring those methods before anything can honor them would publish a contract with no implementation (INV-ADAPTER-003).
+
+### NodeFileSourceReader: Rooted Confinement and Strict UTF-8
+
+`@ctxalloc/adapters` is created as a new workspace holding `NodeFileSourceReader`. It depends on `@ctxalloc/ports` **only**, and deliberately not on `@ctxalloc/compiler`: an adapter that could see the kernel would be able to make a selection decision, and the whole point of the seam is that it cannot.
+
+```ts
+interface NodeFileSourceReaderConfig {
+  readonly rootDirectory: string;
+  readonly maxBytes: number;
+}
+```
+
+Nothing is defaulted and nothing is discovered: no root from the working directory or an environment variable, no invented size limit.
+
+**Confinement is proved twice.** A locator is a relative path inside the configured root. The lexical check rejects `../` traversal without touching the disk; the **real-path** check then rejects a symlink whose target escapes the root, which the lexical check cannot see. A lexical check alone accepts `notes/link.md` when `link.md` points at `/etc/passwd`, because nothing in the spelling of that path leaves the root. Reading source content is precisely where such an escape matters, so the real path decides (INV-SEC-001).
+
+Rejected, each with its own machine-readable code: an absolute path, a blank locator, a locator containing NUL, lexical traversal, symlink escape, a missing path, a directory, a file above `maxBytes`, and invalid UTF-8.
+
+**Decoding is strict.** Bytes are decoded as UTF-8 in fatal mode: a malformed sequence fails rather than becoming U+FFFD, because a replacement character produces a `contentHash` describing text the file never contained (INV-BLOCK-007, INV-PROV-005). LF and CRLF, indentation, trailing spaces, a trailing newline or its absence, astral-plane characters, and an initial U+FEFF all survive exactly; the byte-order mark is kept as ordinary text, because removing it would silently change the content that is about to be hashed. `maxBytes` is checked before the read and again on the bytes actually obtained, so a file that grew in between cannot enter the pipeline above the limit.
+
+The reader **infers nothing**. It does not derive a source type from an extension, does not derive `createdAt` or `updatedAt` from `mtime`, does not walk directories, does not glob, and does not watch. Filesystem metadata is not source meaning, and a reader that guessed one would make a source's identity depend on where its bytes happened to live (INV-DEP-003).
+
+Every failure is a project-owned `NodeFileSourceReaderError` carrying a stable code and the exact locator. It carries no underlying `Error`, no `errno`, no resolved absolute path, and no part of the file's content (INV-ADAPTER-001).
+
+### TextChunker: Paragraphs, and Nothing Inferred
+
+`TextChunker` takes the same two-field policy shape as `MarkdownChunker` — `targetTokens` and `maxTokens`, both required positive safe integers with `target <= max`, no defaults, no coercion — and applies the weakest structural rule that is always true of plain text:
+
+1. a paragraph is a maximal run of non-blank lines;
+2. a run of blank lines separates paragraphs and belongs to neither;
+3. adjacent paragraphs may be grouped toward `targetTokens`, and a group is the exact contiguous slice between its first and last paragraph, so the blank lines that separated them stay inside the content;
+4. a paragraph above `maxTokens` is split at a sentence boundary, else at a whitespace boundary, else at a whole code-point boundary.
+
+There is no heading detection, no list or table recognition, no Markdown interpretation, no semantic segmentation, and no overlap. Plain text carries no promise of structure, and a chunker that guessed one would place block boundaries on a structure the source does not have. Every candidate boundary is measured with the exact tokenizer over the exact substring it would produce, and no candidate is inferred away from an earlier overflow: a subword tokenizer may count a longer substring as fewer tokens than a shorter one.
+
+Every emitted block carries `sourceType: "text"`, a `text-range` location with exact offsets and one-based line bounds, content that is an exact source slice, the canonical `normalizedContentHash`, an exact `tokenCount`, empty `attributes`, deep-copied source metadata, and the chunker and tokenizer identities. Nothing is trimmed, collapsed, Unicode-normalized, or line-ending-rewritten.
+
+Text block identity reuses the existing generic algorithm with `sourceDocumentId`, a **null** heading path, the normalized content hash, and the source-order occurrence. Plain text has no heading structure, and the document title is deliberately not substituted: a title is a label on the source, not a heading the source contains.
+
+**The generic mechanics are extracted, not copied.** Line scanning, boundary finding, splitting, grouping, JSON cloning, hashing, and block-identity derivation move into one package-internal module that both chunkers share, so two implementations of one correctness rule cannot drift. `MarkdownChunker` keeps its own scanner, frontmatter, heading, section, and atomic-span rules, its own option and error types, and its own block construction. The extraction is behavior-preserving and regression-tested: Markdown output, Markdown block identifiers, and Markdown error codes and messages are what Phase 6 produced.
+
+### Conversation Sources: One Strict Local Format
+
+```ts
+const CONVERSATION_SOURCE_SCHEMA_VERSION = 1;
+
+interface ConversationSourceMessage {
+  readonly id: string;
+  readonly content: string;
+  readonly createdAt?: Timestamp;
+  readonly updatedAt?: Timestamp;
+  readonly metadata?: JsonObject;
+}
+
+interface ConversationSourcePayload {
+  readonly schemaVersion: 1;
+  readonly messages: readonly ConversationSourceMessage[];
+}
+```
+
+There is no `role`, no tool call, no attachment, no multimodal part, no thread, and no provider-specific envelope. The renderer serializes block content and nothing else (DEC-035), so declaring a `role` field would publish a promise the pipeline does not keep. A speaker label that matters belongs inside the exact message content, where it is rendered.
+
+Validation is strict: exact schema version, unknown fields rejected, exact message order preserved, non-blank well-formed identifiers and content, exact timestamps, JSON-safe metadata, no defaults, no coercion. An empty `messages` array is valid. Whitespace-only content is **rejected** rather than dropped, because silently discarding a message would make the conversation's message count depend on content the caller still believes is there. Duplicate message identifiers are rejected: a conversation block is identified by its message identifier, so two messages sharing one would produce two blocks claiming one identity (INV-BLOCK-002). Invalid JSON becomes a project-owned `ConversationSourceValidationError`, never an escaping `SyntaxError` (INV-ADAPTER-001).
+
+### Canonical Logical Conversation Content
+
+Raw JSON formatting is a storage representation, not conversation content. Indentation, key order, and inter-token whitespace are free variables of a serializer, so hashing the raw file would make a reformatted export look like an edited conversation.
+
+`ingestConversationSource` therefore builds one canonical logical representation and hands **that** to `ingestSource` with `sourceType: "conversation"`:
+
+```text id="ma16c"
+["ctxalloc-conversation-content", 1, [[messageId, exactMessageContent], ...]]
+```
+
+A fixed-order array is serialized rather than an object, so no property insertion order can affect the result (INV-DET-002). Message content is never normalized.
+
+**Message order participates.** Reordering a conversation changes what it says, and the hash must reflect that. **Message timestamps and metadata do not participate**: they describe when a message was recorded and what a provider annotated it with, not what the conversation contains, and letting a re-exported timestamp change the content hash would report an edit that never happened.
+
+The two consequences are exactly the ones the format needs:
+
+* reformatting the file — indentation, key order, trailing newline — changes neither `SourceDocument.id` nor `contentHash`;
+* changing a message identifier, a message's content, or the order of the messages changes `contentHash`.
+
+Existing Markdown and plain-text `ingestSource` semantics are untouched: this use case adds a canonical representation step in front of `ingestSource`, it does not change what `ingestSource` does (DEC-028).
+
+### ConversationChunker: One Message Is One Block
+
+```text id="ma16b"
+one validated message = one ContextBlock
+```
+
+A message is never split, and that is a provenance constraint rather than a simplification. `SourceLocation` can name a message — `kind: "conversation-message"` with a message identifier — but it has no way to name a range *inside* one. Splitting a long message would emit two blocks whose locations are indistinguishable, so neither could be traced back to the text it came from (INV-PROV-002, INV-BLOCK-006). A message above any configured maximum is emitted whole.
+
+Block identity uses **message identity, not position**:
+
+```text id="ma16i"
+["ctxalloc-conversation-context-block-id", 1, sourceDocumentId, messageId, normalizedContentHash]
+```
+
+SHA-256 of that payload, in the existing `context-block:sha256:<hex>` format. A conversation grows by insertion, so identifying a block by position would give every later message a new identity the moment an earlier one arrived — and a changed block identity invalidates candidate caches, deduplication groups, and every trace that referred to it (INV-BLOCK-001). The properties that follow are tested directly: inserting an unrelated earlier message leaves a block identifier unchanged; moving an unchanged message changes its `messageIndex` but not its identifier; changing its content changes its identifier. No occurrence counter is needed, because message identifiers are already unique within a conversation.
+
+Each block records `messageIndex` as the message's position for a reader, the exact message content, the canonical hash, an exact token count, empty `attributes`, deep-copied source and message metadata, and the chunker and tokenizer identities. Timestamps fall back from the message to the document and are otherwise **absent**: no current time is ever substituted (INV-DET-004).
+
+### CompileLocalContextService, and the Same-Tokenizer Rule
+
+```ts
+const LOCAL_COMPILE_SERVICE_CONFIG_SCHEMA_VERSION = 1;
+const LOCAL_COMPILATION_REQUEST_SCHEMA_VERSION = 1;
+
+class CompileLocalContextService {
+  constructor(
+    config: unknown,
+    tokenizer: Tokenizer,
+    sourceReader: SourceReader,
+    controlStore: ControlStore,
+    candidateProvider: CandidateProvider,
+  );
+  execute(input: unknown): Promise<LocalCompilationResult>;
+}
+```
+
+The service is the **application composition root**; `ContextCompiler` remains the compiler composition root.
+
+**It owns exactly one `Tokenizer` object** and injects that same object into `MarkdownChunker`, `TextChunker`, `ConversationChunker`, and `ContextCompiler`. It deliberately does not accept a pre-built compiler plus a second tokenizer: block token counts would then be produced by one tokenizer and validated by another, and `CandidateValidator` would reject a corpus that is in fact correct — or, worse, accept one that is not. Owning the composition is what makes the kernel's `tokenizerCoverage: "validation-and-rendering"` claim true of this slice as well (DEC-038, INV-BLOCK-003).
+
+Configuration and request are strict, closed, and defaulted nowhere. The compiler configuration and the two chunking policies are validated by the components that own them, and their issues are re-addressed under the configuration field that carried them. There is no conversation chunking policy, because that chunker has no size decision to make.
+
+Execution order:
+
+1. validate the configuration and the injected ports;
+2. validate the `LocalCompilationRequest`;
+3. `controlStore.listSources(scope)`;
+4. validate every registration, reject scope mismatches, reject logical duplicates — all before any read;
+5. sort registrations canonically by source type, identity namespace, identity key, each compared by UTF-16 code unit;
+6. read, ingest, and chunk each source in that order;
+7. sort source documents by identifier code units, and the corpus by source document, then position inside it, then block identifier;
+8. `candidateProvider.getCandidates(...)`;
+9. build the exact `CompilationRequest` and call `ContextCompiler.compile(...)`.
+
+**Registrations are never ordered by locator.** Ordering by it would make the prepared corpus depend on where files live, so moving one source could change another source's position — and identity, not location, is what a registration means.
+
+**Provider order is preserved exactly.** It is the provider's own ranking, and re-sorting it here would overwrite retrieval's answer with one this layer has no basis to give (INV-ALLOC-002). Provider retrieval data is passed through unread; the wrappers are not re-validated here, because `CandidateValidator` is the kernel's trust boundary and validates the batch strictly, all or nothing.
+
+`localeCompare` appears nowhere: its result depends on the machine's locale data, which would make one corpus order on a laptop and another in a container (INV-DET-001).
+
+```ts
+interface LocalCompilationResult {
+  readonly sourceDocuments: readonly SourceDocument[];
+  readonly blocks: readonly ContextBlock[];
+  readonly candidates: readonly CandidateBlock[];
+  readonly compilation: CompilationResult;
+}
+```
+
+The prepared corpus is published beside the compilation because this slice is where a local operator inspects what was actually read from disk. It is **not** a relaxation of trace privacy: the settled `CompilationTrace` still carries no raw query, no source or block content, no compiled context, and no arbitrary source, block, or retrieval metadata (DEC-037). No trace is persisted.
+
+### One Application Error, and One Preserved Compiler Error
+
+Pre-compiler failures raise a project-owned `LocalSourcePipelineError` naming the stage that failed: `configuration`, `request-validation`, `control-store`, `source-registration`, `source-read`, `source-ingestion`, `source-chunking`, or `candidate-provider`. Its issues are JSON-safe, deterministically ordered, and carry no raw file content, no conversation content, no filesystem error object, no `SyntaxError`, and no validation-library error. Adapter-specific errors are translated at this boundary.
+
+A failure **inside** the compiler is not wrapped. `ContextCompilationError` already names its stage, its issues, and its compilation identifier, and replacing it with a weaker application error would discard exactly the detail a caller needs (INV-DEP-003). A provider that forges a stale token count is rejected by `CandidateValidator`, unchanged, and an invalid policy is rejected by `CompilationRequestValidator`, unchanged.
+
+### Test Doubles Contain No Product Logic
+
+`@ctxalloc/testing` gains `InMemorySourceReader`, `InMemoryControlStore`, and `FakeCandidateProvider`. `FakeModelProvider` is deliberately absent: no `ModelProvider` port exists yet.
+
+`InMemorySourceReader` maps an exact locator to exact content, resolves no path, normalizes nothing, copies its configuration, and fails explicitly on an unknown locator. `InMemoryControlStore` filters by exact scope, copies its input and its output, preserves the configured listing order — imposing none, so a consumer that depends on an order must impose its own — and has no write API.
+
+`FakeCandidateProvider` performs **no retrieval**. It does not read the query, compare text, compute a similarity, rank, or invent a relevance score: it wraps every corpus block by default, or exactly the identifiers a test names in exactly that order, optionally repeating wrappers for deduplication tests, and attaching only retrieval evidence the test supplied verbatim. A fake that scored candidates would be product retrieval logic living in the test package, and every test built on it would be measuring an implementation nothing ships.
+
+### Alternatives Considered
+
+**Let the application read files directly.** Rejected: filesystem access in the application layer would make the whole slice untestable without a disk and would put infrastructure inside a layer the architecture keeps free of it (INV-DEP-001, INV-DEP-002).
+
+**Give `SourceReader` a `sourceType` or a `modifiedAt` in its result.** Rejected: a reader that inferred a source type from an extension, or a timestamp from `mtime`, would make source meaning depend on filesystem accidents. Both are explicit registration data.
+
+**Use `SourceDocument.id` or the identity as the reader's locator.** Rejected: it would bind logical identity to one adapter's addressing scheme, so moving a vault would rewrite every document identifier.
+
+**Confine paths with `resolve()` alone.** Rejected: a symlink inside the root whose target is outside it passes every lexical check. Containment is proved on the real path.
+
+**Decode with `fatal: false`, or strip the byte-order mark.** Rejected: both silently change the bytes that are about to be hashed, so the `contentHash` would describe text the file never held.
+
+**Give the text chunker Markdown-like heading detection.** Rejected: plain text makes no promise of structure. A guessed heading places a block boundary on a structure the source does not have.
+
+**Copy the Markdown split and group helpers into the text chunker.** Rejected: two implementations of one splitting rule are free to drift. They are extracted into one shared internal module instead, with Markdown regression-tested unchanged.
+
+**Hash the raw conversation JSON file.** Rejected: pretty-printing a file would report an edit that never happened.
+
+**Include message timestamps or metadata in the logical content.** Rejected for the same reason: re-exporting a conversation with refreshed annotations is not a change to what it says.
+
+**Split long conversation messages.** Rejected: `SourceLocation` cannot name an intra-message range, so the two halves would be indistinguishable in provenance.
+
+**Identify a conversation block by `messageIndex`.** Rejected: inserting one earlier message would change the identity of every later block.
+
+**Add a `role` field to conversation messages.** Rejected: the renderer does not render it, so publishing it would promise behavior the pipeline does not have.
+
+**Accept a pre-built `ContextCompiler` plus a tokenizer.** Rejected: two tokenizers would make block counts and compiler validation incomparable, and no component could then honestly claim validation-and-rendering coverage.
+
+**Sort registrations by locator.** Rejected: the prepared corpus would depend on where files live rather than on what the sources are.
+
+**Re-sort the provider's candidates.** Rejected: candidate order is provider-owned, and re-sorting would overwrite retrieval's answer with one the application has no basis to give.
+
+**Re-validate provider candidates in the application.** Rejected: `CandidateValidator` is the kernel's trust boundary, and a second implementation of its rules is a second place for one truth to drift.
+
+**Wrap `ContextCompilationError` in an application error.** Rejected: the compiler error already carries the stage, the issues, and the compilation identifier; a wrapper would be strictly less useful than what it replaced.
+
+**Add control-plane write methods now.** Rejected: writing needs its own persistence decision and its own failure semantics. A declared method nothing implements is a contract with no honor behind it.
+
+**Make the fake candidate provider do lexical matching.** Rejected: it would be product retrieval logic in the test package, and tests built on it would measure something nothing ships.
+
+### Consequences
+
+`@ctxalloc/ports` gains `SourceReader`, `SourceReadRequest`, `SourceReadResult`, `ControlStore`, `SourceRegistration`, `CandidateProvider`, and `CandidateProviderRequest`, plus a type-only `@ctxalloc/domain` dependency. It still has **no runtime export**.
+
+`@ctxalloc/adapters` is created with `NodeFileSourceReader`, its configuration, its project-owned error and error-code union, and its stable identity constants. It depends on `@ctxalloc/ports` only.
+
+`@ctxalloc/application` gains `TextChunker` with its options and two error types, the conversation format with its schema version, message and payload contracts, `parseConversationSourceJson`, `validateConversationSourcePayload`, `ingestConversationSource`, `ConversationChunker` with its two error types, and `CompileLocalContextService` with its configuration, request, result, error, and stage union. It adds `@ctxalloc/compiler` as a dependency.
+
+`@ctxalloc/testing` gains `InMemorySourceReader`, `InMemoryControlStore`, and `FakeCandidateProvider` with their configuration errors, and adds a `@ctxalloc/domain` dependency.
+
+**No new external dependency is added**, and no `zod`, `node:crypto`, `node:fs`, `node:path`, `Buffer`, or `TextDecoder` type reaches any public declaration.
+
+`ContextCompiler`, `CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`, `CandidateFilter`, `BudgetAllocator`, `ContextOrderer`, `ContextRenderer`, `TraceBuilder`, `CompilationRequestValidator`, `CompilationPolicyValidator`, `Tokenizer`, `ingestSource`, and `MarkdownChunker` are **unchanged in behavior**. The request fingerprint, the compilation identifier, trace privacy, and Markdown block identifiers are unchanged.
+
+INVARIANTS changes: implementation status only, no guarantee is weakened. INV-BLOCK-001, INV-BLOCK-006, INV-BLOCK-007, INV-PROV-001, INV-PROV-002, INV-PROV-005, INV-ADAPTER-001 through INV-ADAPTER-005, INV-DEP-001, INV-DEP-002, INV-SCOPE-004, and INV-SCOPE-005 gain producers and consumers outside the kernel.
+
+ARCHITECTURE changes: section 3.3 marks the four implemented ports; 3.4 marks the implemented adapters; section 8 records the implemented retrieval boundary with a fake provider; section 9 records the implemented source flow with `SourceReader` in place.
+
+MVP_SCOPE changes: 3.9 marks `FakeCandidateProvider` and `InMemoryControlStore` implemented and adds `InMemorySourceReader`; 3.10 marks Markdown, plain text, and conversation implemented; 3.12 marks the fake provider implemented and keeps real retrieval future.
+
+**The local vertical slice is complete. The product is not.** Real retrieval, model execution and evaluation, SQLite and every other persistence, control-plane writes, trace persistence, the CLI, the HTTP API, file watching, and document conversion all remain later phases.
 
 ---
 

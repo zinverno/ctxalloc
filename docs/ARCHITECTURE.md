@@ -126,28 +126,35 @@ They must not contain core budget or selection logic.
 
 Example:
 
+The implemented service is `CompileLocalContextService` in
+`@ctxalloc/application` (DEC-039):
+
 ```ts
-class CompileContextService {
+class CompileLocalContextService {
   constructor(
-    private readonly compiler: ContextCompiler,
-    private readonly candidateProvider: CandidateProvider,
-    private readonly traceStore: TraceStore,
-  ) {}
+    config: unknown,
+    tokenizer: Tokenizer,
+    sourceReader: SourceReader,
+    controlStore: ControlStore,
+    candidateProvider: CandidateProvider,
+  );
 
-  async execute(request: CompileApplicationRequest) {
-    const candidates = await this.candidateProvider.getCandidates(request);
-    const result = this.compiler.compile({
-      ...request,
-      candidates,
-    });
-
-    await this.traceStore.save(result.trace);
-    return result;
-  }
+  execute(input: unknown): Promise<LocalCompilationResult>;
 }
 ```
 
-The compiler itself remains synchronous or deterministically asynchronous unless a real domain requirement demands otherwise.
+It takes one `Tokenizer` object and constructs `MarkdownChunker`, `TextChunker`,
+`ConversationChunker`, and `ContextCompiler` with that same object. It does not
+accept a pre-built compiler plus a second tokenizer: block token counts would
+then be produced by one tokenizer and validated by another.
+
+Trace persistence is deliberately absent from the flow: no `TraceStore` port
+exists yet.
+
+The compiler itself remains synchronous. The application service is
+asynchronous, because reading sources and asking a provider for candidates are
+genuinely asynchronous operations; every decision inside the service is still a
+pure function of its validated inputs.
 
 ---
 
@@ -159,13 +166,24 @@ The MVP should define only ports that represent real boundaries.
 
 Initial ports:
 
-* Tokenizer;
-* CandidateProvider;
-* SourceReader;
-* TraceStore;
-* ControlStore;
-* ModelProvider;
-* Clock, only when deterministic time behavior requires it.
+* Tokenizer, implemented (DEC-027);
+* CandidateProvider, implemented (DEC-039);
+* SourceReader, implemented (DEC-039);
+* TraceStore, future;
+* ControlStore, implemented and read-only (DEC-039);
+* ModelProvider, future;
+* Clock, only when deterministic time behavior requires it; not required so far,
+  because every time-dependent decision takes an explicit reference instant.
+
+The four implemented ports are type-only contracts in `@ctxalloc/ports`. That
+package has no runtime export and no external dependency; it may reference
+`@ctxalloc/domain` with type-only imports so that a port and an adapter never
+describe one concept in two vocabularies.
+
+`ControlStore` declares `listSources` and nothing else. Control-plane writing
+needs its own persistence decision and its own failure semantics, so it arrives
+with the phase that implements it rather than as a declared method nothing
+honors.
 
 Potential later ports:
 
@@ -183,18 +201,26 @@ A port must not expose types from an external library.
 
 Adapters connect external systems to ports.
 
-Examples:
+Implemented:
 
-* RealTokenizerAdapter;
-* FakeTokenizer;
-* StaticFixtureCandidateProvider;
+* `O200kBaseTokenizer` in `@ctxalloc/tokenization` (DEC-027);
+* `NodeFileSourceReader` in `@ctxalloc/adapters` (DEC-039);
+* `FakeTokenizer`, `InMemorySourceReader`, `InMemoryControlStore`, and
+  `FakeCandidateProvider` in `@ctxalloc/testing`.
+
+Future:
+
 * SQLiteFtsCandidateProvider;
 * QmdCandidateProvider;
 * InMemoryTraceStore;
 * SQLiteTraceStore;
+* SQLiteControlStore;
 * AnthropicModelProvider;
-* MarkdownSourceReader;
 * ObsidianVaultSourceReader.
+
+`@ctxalloc/adapters` depends on `@ctxalloc/ports` only. It deliberately does not
+depend on `@ctxalloc/compiler`: an adapter that could see the kernel would be
+able to make a selection decision, and the point of the seam is that it cannot.
 
 Adapters may be removed without modifying the domain compiler.
 
@@ -2353,37 +2379,40 @@ persistence, the CLI, the HTTP API, model execution, and evaluation.
 
 ## 8. Retrieval Boundary
 
-The compiler receives candidates through:
+The application receives candidates through the implemented port (DEC-039):
 
 ```ts
+interface CandidateProviderRequest {
+  readonly scope: Scope;
+  readonly query: string;
+  readonly referenceTime: Timestamp;
+  readonly sourceDocuments: readonly SourceDocument[];
+  readonly blocks: readonly ContextBlock[];
+}
+
 interface CandidateProvider {
-  getCandidates(
-    request: CandidateRequest,
-  ): Promise<CandidateResult>;
+  readonly id: string;
+  readonly version: string;
+  getCandidates(request: CandidateProviderRequest): Promise<readonly CandidateBlock[]>;
 }
 ```
 
-The result may contain:
+The provider returns `CandidateBlock` wrappers rather than bare blocks, so its
+own identity, rank, and score travel as retrieval evidence beside a canonical
+block that is never rewritten (DEC-030).
 
-```ts
-interface CandidateResult {
-  blocks: ContextBlock[];
-  providerId: string;
-  providerVersion?: string;
-  retrievalTrace?: unknown;
-}
-```
+`sourceDocuments` and `blocks` carry the prepared corpus explicitly, because the
+current phase has no persistent retrieval index. A provider that owned an index
+would query it; a provider that does not is handed exactly the corpus the
+application prepared.
 
-The provider may be:
+Implemented: `FakeCandidateProvider`, a test double that performs no retrieval
+at all. It reads no query, computes no similarity, and invents no score.
 
-* static fixtures;
-* an in-memory test provider;
-* SQLite FTS5;
-* QMD;
-* Qdrant;
-* another external retrieval system.
+Future: SQLite FTS5, QMD, Qdrant, or another external retrieval system.
 
-The compiler must not know which provider produced the blocks.
+The compiler must not know which provider produced the blocks. Candidate order
+is provider-owned, and the application preserves it rather than re-sorting it.
 
 The provider is not allowed to:
 
@@ -2432,8 +2461,15 @@ This separation keeps compilation predictable and fast.
 Current stage responsibilities:
 
 ```text
-SourceReader adapter, future:
-  reads bytes/text and provider metadata
+Control plane, implemented and read-only:
+  lists the SourceRegistrations of one exact scope
+  owns logical source identity, separate from the adapter locator
+
+SourceReader adapter, implemented:
+  reads exact source text for one adapter locator
+  confines every locator to a configured root by real path
+  decodes UTF-8 strictly and normalizes nothing
+  infers no source type and no timestamp
 
 Application source ingestion, implemented:
   validates explicit input
@@ -2448,13 +2484,33 @@ Application Markdown chunker, implemented:
   derives stable ContextBlock identity
   returns blocks in source order
 
+Application text chunker, implemented:
+  splits maximal non-blank line runs into paragraphs
+  groups and splits them under one explicit token policy
+  preserves exact source text as block content
+  infers no heading, list, or table structure
+
+Application conversation ingestion and chunker, implemented:
+  validates one strict local JSON format
+  hashes canonical logical content, not the raw file
+  emits one block per message, never split
+  identifies a block by message identity, not position
+
 Compiler candidate validation, implemented:
   receives an explicit scope, a source registry, and candidate wrappers
   validates them strictly through the injected Tokenizer port
   never reads source content from files during compilation
 ```
 
-The application ingestion and chunking stages exist today, and the compiler's candidate validation stage receives their output. No SourceReader port and no source reader adapter has been implemented; ingestion receives content the caller has already read. Identity derivation and content hashing follow DEC-028, Markdown chunking follows DEC-029, and candidate validation follows DEC-030.
+The whole local path exists today: `CompileLocalContextService` joins the control store, the source reader, ingestion, chunking, the candidate provider, and `ContextCompiler` into one flow from registered local sources to a `CompilationResult` (DEC-039). Identity derivation and content hashing follow DEC-028, Markdown chunking follows DEC-029, candidate validation follows DEC-030, and text chunking, conversation ingestion, and conversation chunking follow DEC-039.
+
+Logical source identity is never a machine path. A registration carries an
+`identity` — namespace plus key — and a `locator`; only the identity, the scope,
+and the source type determine the derived `SourceDocument.id`, so moving a file
+moves a source rather than creating a second one.
+
+Real retrieval, trace persistence, control-plane writing, model execution, the
+CLI, and the HTTP API remain later phases.
 
 The canonical `ContextBlock.normalizedContentHash` rule is owned by `@ctxalloc/domain` so that the chunker which writes a hash and the validator which rechecks it cannot drift apart.
 
