@@ -12,6 +12,7 @@
     }
   },
   "dependencies": {
+    "@ctxalloc/compiler": "workspace:*",
     "@ctxalloc/domain": "workspace:*",
     "@ctxalloc/ports": "workspace:*",
     "zod": "^4.4.3"

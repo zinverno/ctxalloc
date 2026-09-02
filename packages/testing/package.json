@@ -12,6 +12,7 @@
     }
   },
   "dependencies": {
+    "@ctxalloc/domain": "workspace:*",
     "@ctxalloc/ports": "workspace:*"
   }
 }

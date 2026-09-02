@@ -37,8 +37,17 @@ importers:
 
   apps/cli: {}
 
+  packages/adapters:
+    dependencies:
+      '@ctxalloc/ports':
+        specifier: workspace:*
+        version: link:../ports
+
   packages/application:
     dependencies:
+      '@ctxalloc/compiler':
+        specifier: workspace:*
+        version: link:../compiler
       '@ctxalloc/domain':
         specifier: workspace:*
         version: link:../domain
@@ -69,10 +78,17 @@ importers:
 
   packages/evaluation: {}
 
-  packages/ports: {}
+  packages/ports:
+    dependencies:
+      '@ctxalloc/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/testing:
     dependencies:
+      '@ctxalloc/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@ctxalloc/ports':
         specifier: workspace:*
         version: link:../ports

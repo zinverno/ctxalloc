@@ -17,6 +17,7 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
+      "@ctxalloc/adapters": ["packages/adapters/src/index.ts"],
       "@ctxalloc/application": ["packages/application/src/index.ts"],
       "@ctxalloc/compiler": ["packages/compiler/src/index.ts"],
       "@ctxalloc/domain": ["packages/domain/src/index.ts"],
