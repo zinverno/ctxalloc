@@ -379,3 +379,211 @@ describe('prepared-corpus provenance: the original corpus is isolated', () => {
     }
   });
 });
+
+describe('prepared-corpus provenance: inspection is total over untrusted output', () => {
+  /**
+   * The values inspected here have not been validated yet, so provenance must
+   * neither throw on them nor claim a finding it did not make. Each case below
+   * makes a naive `JSON.stringify` misbehave: a bigint throws a `TypeError`, a
+   * cycle throws a `RangeError`, and a `Date` serializes as `{}` — which would
+   * compare *equal* to a genuinely empty object.
+   */
+  const UNCANONICALIZABLE: readonly (readonly [string, () => unknown])[] = [
+    ['bigint', (): unknown => 1n],
+    ['symbol', (): unknown => Symbol('s')],
+    ['function', (): unknown => (): void => undefined],
+    ['NaN', (): unknown => Number.NaN],
+    ['Infinity', (): unknown => Number.POSITIVE_INFINITY],
+    ['-Infinity', (): unknown => Number.NEGATIVE_INFINITY],
+    ['Date', (): unknown => new Date(0)],
+    ['Map', (): unknown => new Map([['a', 1]])],
+    ['Set', (): unknown => new Set([1])],
+    ['class instance', (): unknown => new (class Holder {})()],
+  ];
+
+  it.each(UNCANONICALIZABLE)(
+    'passes a real block id carrying %s metadata to the kernel, without throwing',
+    async (_name, make) => {
+      let raised: unknown = null;
+      try {
+        await build(
+          providerOf((request) => {
+            const real = request.blocks[0];
+            if (real === undefined) throw new Error('no prepared block');
+            return Promise.resolve(
+              wrap([{ ...real, metadata: { ...real.metadata, malformed: make() as never } }]),
+            );
+          }),
+        ).execute(localRequest());
+      } catch (cause) {
+        raised = cause;
+      }
+
+      // No raw runtime error, and no provenance verdict this check cannot support.
+      expect(raised).not.toBeInstanceOf(TypeError);
+      expect(raised).not.toBeInstanceOf(RangeError);
+      expect(raised).not.toBeInstanceOf(LocalSourcePipelineError);
+      // The kernel owns the malformed-candidate rejection.
+      expect(raised).toBeInstanceOf(ContextCompilationError);
+    },
+  );
+
+  /**
+   * Cycles are deliberately not exercised end to end.
+   *
+   * The provenance boundary itself handles one — `tryCanonicalRecordJson`
+   * returns a failure rather than the `RangeError` `JSON.stringify` would throw,
+   * which `canonical-record.test.ts` proves directly. The compilation still
+   * fails with a `RangeError`, but it comes from `CandidateValidator`: the
+   * domain's recursive `JsonValueSchema` has no cycle guard, so zod recurses
+   * until the stack is exhausted.
+   *
+   * That is a pre-existing kernel limitation, unchanged by this phase and out of
+   * scope for it: fixing it means changing Phase 7 domain validation, which this
+   * pull request must not touch.
+   */
+
+  it('still rejects an out-of-corpus block whose metadata is uncanonicalizable', async () => {
+    // Membership is decided by identifier, so it is reachable even when the
+    // block itself cannot be compared field by field.
+    const codes = await rejectionCodes(
+      providerOf((request) => {
+        const real = request.blocks[0];
+        if (real === undefined) throw new Error('no prepared block');
+        return Promise.resolve(
+          wrap([
+            {
+              ...real,
+              id: 'context-block:absent' as ContextBlock['id'],
+              metadata: { malformed: 1n as never },
+            },
+          ]),
+        );
+      }),
+    );
+    expect(codes).toEqual(['candidate_outside_prepared_corpus']);
+  });
+});
+
+describe('prepared-corpus provenance: successful output is application-owned', () => {
+  /** A provider that keeps every reference it returned, so a test can mutate them later. */
+  function retainingProvider(): {
+    readonly provider: CandidateProvider;
+    readonly retained: () => {
+      readonly array: CandidateBlock[];
+      readonly wrappers: CandidateBlock[];
+    };
+  } {
+    let array: CandidateBlock[] = [];
+    return {
+      provider: providerOf((request) => {
+        array = request.blocks.map((block, index) => ({
+          schemaVersion: 1 as const,
+          block,
+          ...(index === 0
+            ? {
+                retrieval: {
+                  providerId: 'test-provider',
+                  providerVersion: '1',
+                  rank: 0,
+                  metadata: { note: 'original' },
+                },
+              }
+            : {}),
+        }));
+        return Promise.resolve(array);
+      }),
+      retained: () => ({ array, wrappers: array }),
+    };
+  }
+
+  it('INV-ADAPTER-004: post-success provider mutation cannot change the returned result', async () => {
+    const { provider, retained } = retainingProvider();
+    const result = await build(provider).execute(localRequest());
+
+    const before = {
+      candidates: JSON.parse(JSON.stringify(result.candidates)) as unknown,
+      includedBlocks: JSON.parse(JSON.stringify(result.compilation.includedBlocks)) as unknown,
+      compiledContext: result.compilation.compiledContext,
+      usage: JSON.parse(JSON.stringify(result.compilation.usage)) as unknown,
+      trace: JSON.parse(JSON.stringify(result.compilation.trace)) as unknown,
+      compilationId: result.compilation.compilationId,
+      length: result.candidates.length,
+    };
+
+    // Everything a provider could still be holding, mutated after success.
+    const { array, wrappers } = retained();
+    const first = wrappers[0];
+    if (first === undefined) throw new Error('no retained wrapper');
+    const block = first.block as unknown as Record<string, unknown>;
+    block.content = 'MUTATED AFTER SUCCESS';
+    block.tokenCount = 9999;
+    block.attributes = { required: true, priority: 999 };
+    block.metadata = { injected: 'provider note' };
+    (first.retrieval?.metadata as Record<string, unknown>).note = 'mutated';
+    (first as unknown as Record<string, unknown>).retrieval = { providerId: 'injected' };
+    array.push(first);
+    array.reverse();
+
+    expect(result.candidates).toHaveLength(before.length);
+    expect(JSON.parse(JSON.stringify(result.candidates))).toEqual(before.candidates);
+    expect(JSON.parse(JSON.stringify(result.compilation.includedBlocks))).toEqual(
+      before.includedBlocks,
+    );
+    expect(result.compilation.compiledContext).toBe(before.compiledContext);
+    expect(JSON.parse(JSON.stringify(result.compilation.usage))).toEqual(before.usage);
+    expect(JSON.parse(JSON.stringify(result.compilation.trace))).toEqual(before.trace);
+    expect(result.compilation.compilationId).toBe(before.compilationId);
+  });
+
+  it('returns candidates equal to the provider output but sharing no object with it', async () => {
+    const { provider, retained } = retainingProvider();
+    const result = await build(provider).execute(localRequest());
+    const { wrappers } = retained();
+
+    expect(JSON.parse(JSON.stringify(result.candidates))).toEqual(
+      JSON.parse(JSON.stringify(wrappers)),
+    );
+    result.candidates.forEach((candidate, index) => {
+      expect(candidate).not.toBe(wrappers[index]);
+      expect(candidate.block).not.toBe(wrappers[index]?.block);
+      if (candidate.retrieval?.metadata !== undefined) {
+        expect(candidate.retrieval.metadata).not.toBe(wrappers[index]?.retrieval?.metadata);
+      }
+    });
+    expect(result.candidates as unknown).not.toBe(wrappers as unknown);
+  });
+
+  it('preserves provider order, repeated wrappers, and retrieval evidence through the snapshot', async () => {
+    const result = await build(
+      providerOf((request) => {
+        const [first, second] = request.blocks;
+        if (first === undefined || second === undefined) throw new Error('need two blocks');
+        return Promise.resolve([
+          { schemaVersion: 1 as const, block: second },
+          {
+            schemaVersion: 1 as const,
+            block: first,
+            retrieval: {
+              providerId: 'test-provider',
+              providerVersion: '1',
+              rank: 3,
+              metadata: { shard: 'a', nested: { deep: [1, 2, 3] } },
+            },
+          },
+          { schemaVersion: 1 as const, block: second },
+        ]);
+      }),
+    ).execute(localRequest());
+
+    expect(result.candidates).toHaveLength(3);
+    expect(result.candidates[0]?.block.id).toBe(result.candidates[2]?.block.id);
+    expect(result.candidates[1]?.retrieval).toEqual({
+      providerId: 'test-provider',
+      providerVersion: '1',
+      rank: 3,
+      metadata: { shard: 'a', nested: { deep: [1, 2, 3] } },
+    });
+    expect(result.candidates[0]?.retrieval).toBeUndefined();
+  });
+});

@@ -531,7 +531,14 @@ requireContains(
 
 // The canonical comparison and record-isolation helpers behind the
 // prepared-corpus provenance boundary are mechanics, not a contract (DEC-039).
-for (const name of ['canonicalRecordJson', 'cloneRecord']) {
+for (const name of [
+  'canonicalRecordJson',
+  'tryCanonicalRecordJson',
+  'tryCloneJsonRecord',
+  'cloneRecord',
+  'CanonicalRecordAttempt',
+  'CloneRecordAttempt',
+]) {
   const content = contents.get('packages/application/dist/index.d.ts');
   if (content === undefined) continue;
   if (stripComments(content).includes(name)) {

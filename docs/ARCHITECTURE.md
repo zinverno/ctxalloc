@@ -2436,8 +2436,15 @@ schema-valid block naming a real source whose content came from nowhere. That is
 provider-invented content, and it must not reach a compiled result
 (INV-PROV-001).
 
-The provider receives an isolated copy of the corpus, so mutating what it is
-handed cannot change what is compiled (INV-ADAPTER-004).
+Provenance inspection is total over untrusted provider output: a value it cannot
+canonicalize is neither compared nor rejected here, so no runtime error escapes
+and `CandidateValidator` keeps ownership of malformed-candidate rejection.
+
+Isolation runs in both directions (INV-ADAPTER-004). The provider receives a copy
+of the corpus, so mutating what it is handed cannot change what is compiled; and
+its valid output is deep-copied on return, so references it retains cannot mutate
+a completed `LocalCompilationResult` after the fact. The same application-owned
+snapshot is verified, compiled, and published.
 
 The provider is not allowed to:
 

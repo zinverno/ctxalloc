@@ -4071,6 +4071,28 @@ with different evidence are both legitimate. Repeated wrappers stay legitimate
 too — the duplicate belongs to `CandidateDeduplicator` (DEC-031). Array order is
 untouched.
 
+**Inspection is total.** The values compared here have not been validated yet, so
+they may hold anything: a `bigint` makes `JSON.stringify` throw a `TypeError`, a
+reference cycle makes it throw a `RangeError`, and a `Date` has no enumerable own
+properties, so a naive serializer renders it as `{}` — which would compare
+*equal* to a genuinely empty object and let a forged record through. The
+canonical helper therefore returns an attempt rather than a string, and reports
+failure for `bigint`, `symbol`, functions, non-finite numbers, non-plain objects
+(`Date`, `Map`, `Set`, class instances), symbol-keyed records, `undefined` in an
+array, and cycles.
+
+A value that cannot be canonicalized is **neither compared nor accused**. Calling
+it a provenance mismatch would claim a finding this check did not make, and
+throwing would take the malformed-candidate decision away from
+`CandidateValidator`. The candidate travels on, and the kernel rejects it. For
+values that are JSON data the canonical bytes are unchanged.
+
+One case is out of reach here. A cyclic record is reported correctly by this
+boundary, but the compilation still fails with a `RangeError` raised inside
+`CandidateValidator`: the domain's recursive `JsonValueSchema` has no cycle
+guard. That is a pre-existing Phase 7 limitation, not one this phase introduces,
+and fixing it means changing domain validation.
+
 ### The Provider Receives an Isolated Corpus
 
 The provider previously received the very `SourceDocument` and `ContextBlock`
@@ -4083,6 +4105,31 @@ The provider is now handed a deep copy. The original prepared corpus stays
 private, and returned candidates are compared against that original, so mutating
 the copy changes nothing and returning the mutated block is a
 `candidate_block_mismatch`.
+
+**Its output is snapshotted too.** Protecting only the corpus left the other
+direction open: the array and the wrapper objects the provider *returned* were
+verified, compiled, and published as `LocalCompilationResult.candidates` while
+still belonging to the provider. A provider that retained them could mutate them
+after `execute()` resolved — changing the returned `candidates`, and even its
+length — while `compiledContext`, `usage`, and the trace stayed as they were
+fixed at compile time. The result became internally contradictory *after* being
+handed over.
+
+Valid provider output is therefore deep-copied on return, and the same
+application-owned snapshot is used for all three purposes: provenance
+verification, compiler input, and the published result. Order, repeated
+wrappers, retrieval evidence — including `retrieval.metadata` — and every block
+value are reproduced exactly, and a property that is explicitly `undefined` stays
+a present key, which a `JSON.stringify` round trip would silently drop.
+
+The kernel was never exposed to this: `CandidateValidator` re-parses the batch
+and returns a fresh deep structure, so `CompilationResult.includedBlocks` has
+always been isolated. The snapshot is taken here anyway, because relying on
+another component's internal choice to protect this component's published value
+is not a guarantee this layer can make (INV-DEP-003). A wrapper that cannot be
+copied is passed through unchanged rather than dropped or rewritten: it is not
+JSON data, `CandidateValidator` owns rejecting it, and no compilation containing
+it succeeds — so it can never be aliased into a successful result.
 
 ### Untrusted Dependency Messages Are Not Republished
 

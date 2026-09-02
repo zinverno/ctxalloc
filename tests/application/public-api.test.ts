@@ -89,6 +89,8 @@ describe('@ctxalloc/application public API', () => {
       'canonicalConversationContent',
       'ChunkingOptionsSchema',
       'canonicalRecordJson',
+      'tryCanonicalRecordJson',
+      'tryCloneJsonRecord',
       'cloneRecord',
     ]) {
       expect(Object.keys(application), `exports ${name}`).not.toContain(name);

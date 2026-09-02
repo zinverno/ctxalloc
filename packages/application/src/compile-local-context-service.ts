@@ -29,7 +29,12 @@ import type {
   Tokenizer,
 } from '@ctxalloc/ports';
 import { z } from 'zod';
-import { canonicalRecordJson, cloneRecord } from './canonical-record.js';
+import {
+  cloneRecord,
+  tryCanonicalRecordJson,
+  tryCloneJsonRecord,
+  type CanonicalRecordAttempt,
+} from './canonical-record.js';
 import { issue } from './chunking-primitives.js';
 import { ConversationChunker } from './conversation-chunker.js';
 import { ingestConversationSource, parseConversationSourceJson } from './conversation-source.js';
@@ -831,8 +836,51 @@ export class CompileLocalContextService {
         issue(['candidateProvider'], 'getCandidates must resolve to an array', 'invalid_type'),
       ]);
     }
-    return verifyPreparedCorpusMembership(candidates, blocks);
+
+    // Snapshot first, then verify and compile the snapshot. Everything after
+    // this line is application-owned.
+    const owned = snapshotCandidates(candidates);
+    verifyPreparedCorpusMembership(owned, blocks);
+    return owned as readonly CandidateBlock[];
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Provider output ownership                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Copies the provider's output into application-owned values (DEC-039).
+ *
+ * The provider is handed an isolated corpus, but until now what it *returned*
+ * stayed its own: the same array and the same wrapper objects were verified,
+ * compiled, and published as `LocalCompilationResult.candidates`. A provider
+ * that retained them could mutate them after `execute()` resolved, and the
+ * returned result would change underneath its caller — while `compiledContext`,
+ * `usage`, and the trace, all fixed at compile time, stayed as they were. The
+ * result became internally contradictory *after* being handed over
+ * (INV-ADAPTER-004).
+ *
+ * The kernel was never exposed to this: `CandidateValidator` re-parses the batch
+ * and returns a fresh deep structure, so `CompilationResult.includedBlocks` has
+ * always been isolated. Relying on that would be relying on another component's
+ * implementation detail to protect this component's published value, so the
+ * snapshot is taken here and the same snapshot is used for all three purposes:
+ * provenance verification, compiler input, and the returned result.
+ *
+ * A wrapper that cannot be copied is not JSON data, so it is passed through
+ * **unchanged** rather than dropped or rewritten. `CandidateValidator` owns that
+ * rejection, and an un-copyable value cannot be aliased into a *successful*
+ * result anyway, because no compilation containing it succeeds (INV-DEP-003).
+ *
+ * Array order, repeated wrappers, retrieval evidence, and every block value are
+ * reproduced exactly.
+ */
+function snapshotCandidates(candidates: readonly unknown[]): readonly unknown[] {
+  return candidates.map((candidate) => {
+    const copied = tryCloneJsonRecord(candidate);
+    return copied.ok ? copied.value : candidate;
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -888,14 +936,22 @@ export class CompileLocalContextService {
  * schema validation. This boundary owns exactly one question: *did this block
  * come from the prepared corpus?*
  *
- * Array order is preserved exactly: the provider's own array is returned.
+ * Inspection is **total**. The values examined here have not been validated yet,
+ * so a block may carry a `bigint`, a `Date`, or a reference cycle — each of which
+ * makes a naive `JSON.stringify` throw, or worse, makes a `Date` serialize as
+ * `{}` and compare equal to an empty object. A value that cannot be canonicalized
+ * is neither compared nor accused: the candidate travels on to
+ * `CandidateValidator`, which is the component that owns rejecting a malformed
+ * `CandidateBlock` (INV-DEP-003). No runtime exception escapes this check.
+ *
+ * Array order is preserved exactly.
  */
 function verifyPreparedCorpusMembership(
   candidates: readonly unknown[],
   corpus: readonly ContextBlock[],
-): readonly CandidateBlock[] {
-  const prepared = new Map<string, string>();
-  for (const block of corpus) prepared.set(String(block.id), canonicalRecordJson(block));
+): void {
+  const prepared = new Map<string, CanonicalRecordAttempt>();
+  for (const block of corpus) prepared.set(String(block.id), tryCanonicalRecordJson(block));
 
   const issues: ValidationIssue[] = [];
   candidates.forEach((candidate, index) => {
@@ -915,7 +971,16 @@ function verifyPreparedCorpusMembership(
       return;
     }
 
-    if (canonicalRecordJson(block.value) !== expected) {
+    const actual = tryCanonicalRecordJson(block.value);
+    // Either side un-canonicalizable means this comparison cannot be made, not
+    // that it failed. The provider's block is then not JSON data at all, and
+    // `CandidateValidator` rejects it as a malformed `CandidateBlock`; calling it
+    // a provenance mismatch here would claim a finding this check did not make.
+    // A prepared block that cannot be canonicalized would be an internal defect,
+    // since every one of them is a validated domain record.
+    if (!expected.ok || !actual.ok) return;
+
+    if (actual.json !== expected.json) {
       issues.push(
         issue(
           [String(index), 'block'],
@@ -929,7 +994,6 @@ function verifyPreparedCorpusMembership(
   if (issues.length > 0) {
     throw new LocalSourcePipelineError('candidate-provider', issues);
   }
-  return candidates as readonly CandidateBlock[];
 }
 
 /**
