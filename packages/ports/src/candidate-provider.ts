@@ -54,6 +54,23 @@ export interface CandidateProviderRequest {
  * derives canonical order from scores and source position, never from arrival
  * position (INV-DET-002).
  *
+ * A provider **proposes from the corpus it was given**. Two different guarantees
+ * check that, at two different layers, and neither subsumes the other:
+ *
+ * * `CandidateValidator` proves *source-document validity* — the block names a
+ *   source in the request registry, agrees with it on scope and type, and
+ *   carries a hash and a token count consistent with its own content;
+ * * the consumer that assembled the corpus proves *prepared-corpus membership* —
+ *   the block is one it actually prepared. The kernel cannot: it never receives
+ *   the corpus, only the candidates and the source registry (DEC-039).
+ *
+ * A block that satisfies the first and fails the second is content the provider
+ * invented, and it must be rejected rather than compiled (INV-PROV-001).
+ *
+ * The corpus a provider receives may be an isolated copy. Mutating it is not a
+ * way to change what is compiled, and a mutated block returned as a candidate is
+ * rejected (INV-ADAPTER-004).
+ *
  * An empty result means *this provider found nothing*. A failure must be
  * explicit and project-owned, never an empty successful result
  * (INV-ADAPTER-003).

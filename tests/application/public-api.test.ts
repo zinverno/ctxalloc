@@ -30,6 +30,7 @@ const SOURCE_FILES = [
   'packages/application/src/source-ingestion.ts',
   'packages/application/src/markdown-chunker.ts',
   'packages/application/src/chunking-primitives.ts',
+  'packages/application/src/canonical-record.ts',
   'packages/application/src/text-chunker.ts',
   'packages/application/src/conversation-source.ts',
   'packages/application/src/conversation-chunker.ts',
@@ -87,6 +88,8 @@ describe('@ctxalloc/application public API', () => {
       'sha256',
       'canonicalConversationContent',
       'ChunkingOptionsSchema',
+      'canonicalRecordJson',
+      'cloneRecord',
     ]) {
       expect(Object.keys(application), `exports ${name}`).not.toContain(name);
     }

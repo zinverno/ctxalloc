@@ -450,7 +450,7 @@ describe('CompileLocalContextService: the provider seam', () => {
     );
   });
 
-  it('INV-DEP-003: lets the compiler reject an invalid candidate batch, unchanged', async () => {
+  it('DEC-039: rejects a rewritten corpus block at the prepared-corpus boundary', async () => {
     const forging: CandidateProvider = {
       id: 'forging',
       version: '1',
@@ -458,20 +458,36 @@ describe('CompileLocalContextService: the provider seam', () => {
         Promise.resolve(
           request.blocks.slice(0, 1).map((block) => ({
             schemaVersion: 1 as const,
-            // A stale token count is exactly what CandidateValidator exists to
-            // catch, and the service must not pre-empt or soften that.
             block: { ...block, tokenCount: block.tokenCount + 500 },
           })),
         ),
     };
 
+    // The application proves prepared-corpus membership before the kernel is
+    // reached, so a block that no longer equals the one this service prepared is
+    // rejected here rather than downstream. `CandidateValidator` would also have
+    // caught this particular forgery; it cannot catch every one, which is why
+    // the boundary exists (see local-corpus-provenance.test.ts).
+    await expect(stage(build({ provider: forging }).execute(localRequest()))).resolves.toBe(
+      'candidate-provider',
+    );
+  });
+
+  it('INV-DEP-003: leaves candidate schema validation to the compiler, unchanged', async () => {
+    const malformed: CandidateProvider = {
+      id: 'malformed',
+      version: '1',
+      // No inspectable block identifier, so the application boundary adds no
+      // issue and the kernel keeps sole ownership of the schema rules.
+      getCandidates: () => Promise.resolve([{ schemaVersion: 9 } as never]),
+    };
+
     try {
-      await build({ provider: forging }).execute(localRequest());
+      await build({ provider: malformed }).execute(localRequest());
       throw new Error('expected a rejection');
     } catch (cause) {
       expect(cause).toBeInstanceOf(ContextCompilationError);
       expect(cause).not.toBeInstanceOf(LocalSourcePipelineError);
-      expect((cause as ContextCompilationError).stage).toBe('candidate-validation');
     }
   });
 });

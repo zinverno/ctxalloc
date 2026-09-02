@@ -4020,6 +4020,113 @@ Pre-compiler failures raise a project-owned `LocalSourcePipelineError` naming th
 
 A failure **inside** the compiler is not wrapped. `ContextCompilationError` already names its stage, its issues, and its compilation identifier, and replacing it with a weaker application error would discard exactly the detail a caller needs (INV-DEP-003). A provider that forges a stale token count is rejected by `CandidateValidator`, unchanged, and an invalid policy is rejected by `CompilationRequestValidator`, unchanged.
 
+### The Prepared-Corpus Provenance Boundary
+
+The kernel cannot prove a candidate came from the local corpus, because it never
+receives the corpus. `CandidateValidator` is given a scope, a source-document
+registry, and candidate wrappers, and from those it proves *source-document
+validity*: the block names a source in the registry, agrees with it on scope and
+type, carries a `tokenCount` matching its content under the configured
+tokenizer, a `normalizedContentHash` that is the canonical hash of that content,
+and a location kind suited to its source type (DEC-030).
+
+That is not membership. The gap is reachable:
+
+```text id="ma16f"
+service prepares source D with blocks A and B
+provider returns block F: sourceDocumentId D, request scope, valid location,
+                          hash and tokenCount recomputed from F's own text
+every CandidateValidator rule holds  ->  F is accepted
+compiled context now carries content no local source ever held
+```
+
+The application therefore proves the second guarantee itself, after the provider
+returns and before `ContextCompiler` is called. Every candidate whose block
+exposes an identifier must:
+
+1. carry the identifier of a block in the prepared corpus, and
+2. be **structurally identical** to that prepared block.
+
+Equality covers every `ContextBlock` field — schema version, scope, source
+document, source type, location, content, hash, token count, heading path,
+timestamps, attributes, and metadata — compared by canonical serialization so
+property insertion order is irrelevant. Comparing only identifier, content, and
+hash was rejected: `attributes.required` alone changes what the allocator must
+include, and a rewritten location destroys provenance while leaving the text
+intact (INV-PROV-002).
+
+Two focused codes name the two failures: `candidate_outside_prepared_corpus` and
+`candidate_block_mismatch`.
+
+A mismatch is **rejected, never repaired**. Substituting the prepared block would
+compile something other than what was proposed and would conceal a provider that
+is malfunctioning or hostile (INV-ADAPTER-003).
+
+The boundary owns exactly one question. A candidate too malformed to expose a
+block identifier passes through untouched, so `CandidateValidator` keeps sole
+ownership of `CandidateBlock` schema validation, and none of its rules are
+duplicated here (INV-DEP-003). Retrieval evidence takes no part in the
+comparison: it is the provider's own, and two wrappers around one prepared block
+with different evidence are both legitimate. Repeated wrappers stay legitimate
+too — the duplicate belongs to `CandidateDeduplicator` (DEC-031). Array order is
+untouched.
+
+### The Provider Receives an Isolated Corpus
+
+The provider previously received the very `SourceDocument` and `ContextBlock`
+objects the service went on to compile and return. `readonly` is a compile-time
+annotation and prevents nothing at runtime, so a provider could mutate a block in
+place and the compiled result would silently carry the change — without ever
+returning that block as a candidate (INV-ADAPTER-004).
+
+The provider is now handed a deep copy. The original prepared corpus stays
+private, and returned candidates are compared against that original, so mutating
+the copy changes nothing and returning the mutated block is a
+`candidate_block_mismatch`.
+
+### Untrusted Dependency Messages Are Not Republished
+
+A port implementation chooses its own error wording and nothing constrains it: a
+filesystem error names an absolute path, a control-plane error can carry a
+connection string or a query, and a retrieval provider's can echo the raw query
+or a stored document. Copying `cause.name` and `cause.message` into a
+project-owned issue published all of it (INV-SEC-001).
+
+`LocalSourcePipelineError` now uses fixed project-owned messages —
+`ControlStore listSources failed.`, `SourceReader failed for logical source
+<namespace>/<key>.`, and `CandidateProvider getCandidates failed.` — and no
+`cause` is attached. The logical identity stays because it is registration data
+the caller already supplied and it says *which* source failed; the locator is not
+repeated, because that is where the source lives rather than what it is.
+
+Only a project-owned `issues` array is still carried through, from errors this
+project raises. An empty one falls back to the fixed message, so a chunker's
+tokenizer failure no longer produces a pipeline error that names its stage and
+says nothing else.
+
+For the same reason, `parseConversationSourceJson` no longer copies the
+`SyntaxError` message. Parser diagnostics quote a fragment of the input — which is
+conversation content — and their wording is a property of the JavaScript engine,
+so a project-owned issue that repeated one would leak content *and* vary by
+runtime (INV-DET-001). The issue is the fixed text `must be valid JSON`, keeping
+its `invalid_json` code and its project-owned error type.
+
+### NodeFileSourceReader Validates Its Configuration and Requests Strictly
+
+Both arrive from outside — a file, an environment, another language — so a
+compile-time type proves nothing about them (INV-BLOCK-005). The constructor
+takes `unknown` and validates exactly the two documented fields;
+`NodeFileSourceReaderConfig` stays exported for callers that do build it in
+TypeScript. The read request is checked the same way.
+
+An unknown field is rejected rather than ignored. A misspelled `maxByte` would
+otherwise leave the reader with no size limit its caller believes they
+configured, and a request field naming something this reader does not implement —
+a byte range, an encoding, a follow-symlinks flag — would look accepted while
+being silently dropped, answering a different question than the one asked.
+Nothing is defaulted and nothing is coerced: a numeric-string `maxBytes` is a
+rejection, not a parse.
+
 ### Test Doubles Contain No Product Logic
 
 `@ctxalloc/testing` gains `InMemorySourceReader`, `InMemoryControlStore`, and `FakeCandidateProvider`. `FakeModelProvider` is deliberately absent: no `ModelProvider` port exists yet.
@@ -4074,7 +4181,7 @@ A failure **inside** the compiler is not wrapped. `ContextCompilationError` alre
 
 `@ctxalloc/adapters` is created with `NodeFileSourceReader`, its configuration, its project-owned error and error-code union, and its stable identity constants. It depends on `@ctxalloc/ports` only.
 
-`@ctxalloc/application` gains `TextChunker` with its options and two error types, the conversation format with its schema version, message and payload contracts, `parseConversationSourceJson`, `validateConversationSourcePayload`, `ingestConversationSource`, `ConversationChunker` with its two error types, and `CompileLocalContextService` with its configuration, request, result, error, and stage union. It adds `@ctxalloc/compiler` as a dependency.
+`@ctxalloc/application` gains `TextChunker` with its options and two error types, the conversation format with its schema version, message and payload contracts, `parseConversationSourceJson`, `validateConversationSourcePayload`, `ingestConversationSource`, `ConversationChunker` with its two error types, and `CompileLocalContextService` with its configuration, request, result, error, and stage union. It adds `@ctxalloc/compiler` as a dependency. The canonical comparison and record-isolation helpers behind the provenance boundary are package-internal and are not exported.
 
 `@ctxalloc/testing` gains `InMemorySourceReader`, `InMemoryControlStore`, and `FakeCandidateProvider` with their configuration errors, and adds a `@ctxalloc/domain` dependency.
 

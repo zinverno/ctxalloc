@@ -230,11 +230,61 @@ describe('NodeFileSourceReader: explicit failures', () => {
   });
 
   it('rejects a request that is not an object carrying a string locator', async () => {
-    for (const request of [null, undefined, {}, { locator: 7 }]) {
+    for (const request of [null, undefined, {}, { locator: 7 }, [], 'lf.md']) {
       await expect(reader.read(request as unknown as { locator: string })).rejects.toMatchObject({
         code: 'NODE_FILE_SOURCE_READER_INVALID_REQUEST',
       });
     }
+  });
+
+  it('INV-BLOCK-005: rejects an unknown configuration field rather than ignoring it', () => {
+    // A misspelled limit must not leave the reader silently unbounded, and a
+    // field this reader does not implement must not look accepted.
+    for (const config of [
+      { rootDirectory: root, maxBytes: MAX_BYTES, maxByte: 1 },
+      { rootDirectory: root, maxBytes: MAX_BYTES, followSymlinks: false },
+      { rootDirectory: root, maxBytes: MAX_BYTES, encoding: 'latin1' },
+    ]) {
+      expect(() => new NodeFileSourceReader(config), JSON.stringify(config)).toThrow(
+        NodeFileSourceReaderError,
+      );
+      expect(() => new NodeFileSourceReader(config)).toThrow(/unknown field/);
+    }
+  });
+
+  it('rejects a configuration that is missing a required field', () => {
+    for (const config of [{}, { rootDirectory: root }, { maxBytes: MAX_BYTES }]) {
+      expect(() => new NodeFileSourceReader(config), JSON.stringify(config)).toThrow(
+        NodeFileSourceReaderError,
+      );
+    }
+  });
+
+  it('rejects a configuration that is not an object', () => {
+    for (const config of [null, undefined, 7, 'root', []]) {
+      expect(() => new NodeFileSourceReader(config), String(config)).toThrow(
+        NodeFileSourceReaderError,
+      );
+    }
+  });
+
+  it('INV-BLOCK-005: rejects an unknown request field rather than ignoring it', async () => {
+    for (const request of [
+      { locator: 'lf.md', encoding: 'latin1' },
+      { locator: 'lf.md', maxBytes: 1 },
+      { locator: 'lf.md', range: { start: 0, end: 4 } },
+    ]) {
+      await expect(
+        reader.read(request as unknown as { locator: string }),
+        JSON.stringify(request),
+      ).rejects.toMatchObject({ code: 'NODE_FILE_SOURCE_READER_INVALID_REQUEST' });
+    }
+  });
+
+  it('coerces nothing: a numeric-string maxBytes is rejected, not parsed', () => {
+    expect(() => new NodeFileSourceReader({ rootDirectory: root, maxBytes: '4096' })).toThrow(
+      NodeFileSourceReaderError,
+    );
   });
 });
 

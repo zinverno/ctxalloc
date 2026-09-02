@@ -203,9 +203,13 @@ export function canonicalConversationContent(
  *
  * `JSON.parse` throws a `SyntaxError`, which is a runtime type of the parser
  * rather than a project failure category, so it is caught and re-reported as a
- * structured issue. The parser message is included because it names the offending
- * position, and it is the parser's own description of the *syntax*, not of the
- * conversation's content.
+ * structured issue.
+ *
+ * The parser's own message is deliberately **not** copied. It routinely quotes a
+ * fragment of the input around the fault — which is conversation content this
+ * component must not publish — and its exact wording is a property of the
+ * JavaScript engine, so repeating it would make a project-owned issue vary with
+ * the runtime it happened to run on (INV-SEC-001, INV-DET-001).
  *
  * @throws {ConversationSourceValidationError} when the text is not a valid conversation source.
  */
@@ -219,11 +223,8 @@ export function parseConversationSourceJson(text: unknown): ConversationSourcePa
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
-  } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    throw new ConversationSourceValidationError([
-      issue([], `must be valid JSON: ${detail}`, 'invalid_json'),
-    ]);
+  } catch {
+    throw new ConversationSourceValidationError([issue([], 'must be valid JSON', 'invalid_json')]);
   }
 
   return validateConversationSourcePayload(parsed);

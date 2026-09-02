@@ -2414,6 +2414,31 @@ Future: SQLite FTS5, QMD, Qdrant, or another external retrieval system.
 The compiler must not know which provider produced the blocks. Candidate order
 is provider-owned, and the application preserves it rather than re-sorting it.
 
+Two different guarantees check that a provider proposed from the corpus it was
+given, at two different layers, and neither subsumes the other:
+
+```text
+CandidateValidator, in the kernel:
+  proves source-document validity
+  the block names a source in the request registry, agrees with it on scope
+  and type, and its hash and token count match its own content
+  it never receives the prepared corpus, so it cannot prove membership
+
+Application prepared-corpus boundary, Phase 16:
+  proves prepared-corpus membership
+  the block carries the identifier of a block this service prepared and is
+  structurally identical to it in every field
+  a mismatch is rejected, never repaired
+```
+
+A block can satisfy the first and fail the second: a provider may return a
+schema-valid block naming a real source whose content came from nowhere. That is
+provider-invented content, and it must not reach a compiled result
+(INV-PROV-001).
+
+The provider receives an isolated copy of the corpus, so mutating what it is
+handed cannot change what is compiled (INV-ADAPTER-004).
+
 The provider is not allowed to:
 
 * enforce the final token budget;
@@ -2467,6 +2492,7 @@ Control plane, implemented and read-only:
 
 SourceReader adapter, implemented:
   reads exact source text for one adapter locator
+  validates its configuration and its request strictly, with exact fields
   confines every locator to a configured root by real path
   decodes UTF-8 strictly and normalizes nothing
   infers no source type and no timestamp
@@ -2508,6 +2534,13 @@ Logical source identity is never a machine path. A registration carries an
 `identity` — namespace plus key — and a `locator`; only the identity, the scope,
 and the source type determine the derived `SourceDocument.id`, so moving a file
 moves a source rather than creating a second one.
+
+A dependency's own error message is untrusted output and is never republished.
+Port implementations choose their own wording, which routinely carries an
+absolute path, a connection string, a query, or stored content, so the
+application reports fixed project-owned messages and attaches no cause
+(INV-SEC-001). Parser diagnostics are treated the same way: they quote the input
+and vary by runtime, so they are not part of any published contract.
 
 Real retrieval, trace persistence, control-plane writing, model execution, the
 CLI, and the HTTP API remain later phases.

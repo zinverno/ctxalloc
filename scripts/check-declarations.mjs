@@ -529,6 +529,16 @@ requireContains(
   }
 }
 
+// The canonical comparison and record-isolation helpers behind the
+// prepared-corpus provenance boundary are mechanics, not a contract (DEC-039).
+for (const name of ['canonicalRecordJson', 'cloneRecord']) {
+  const content = contents.get('packages/application/dist/index.d.ts');
+  if (content === undefined) continue;
+  if (stripComments(content).includes(name)) {
+    fail(`packages/application/dist/index.d.ts exposes the internal helper "${name}"`);
+  }
+}
+
 // Internal chunking primitives stay private to the package (DEC-029, DEC-039).
 const CHUNKING_PRIMITIVE_TYPES = [
   'SourceLine',
@@ -579,6 +589,13 @@ requireContains(
 requireContains(
   'packages/adapters/dist/node-file-source-reader.d.ts',
   'declare class NodeFileSourceReaderError extends Error',
+);
+// The configuration is a runtime boundary: the constructor takes `unknown` and
+// validates the documented shape itself, while the interface stays exported for
+// callers that build one in TypeScript (DEC-039, INV-BLOCK-005).
+requireContains(
+  'packages/adapters/dist/node-file-source-reader.d.ts',
+  'constructor(config: unknown);',
 );
 requireContains(
   'packages/adapters/dist/node-file-source-reader.d.ts',

@@ -29,6 +29,7 @@ import type {
   Tokenizer,
 } from '@ctxalloc/ports';
 import { z } from 'zod';
+import { canonicalRecordJson, cloneRecord } from './canonical-record.js';
 import { issue } from './chunking-primitives.js';
 import { ConversationChunker } from './conversation-chunker.js';
 import { ingestConversationSource, parseConversationSourceJson } from './conversation-source.js';
@@ -295,18 +296,28 @@ function underField(field: string, issues: readonly ValidationIssue[]): readonly
   });
 }
 
-/** The structured issues of a project-owned error, or a single generic issue. */
+/**
+ * The structured issues of a project-owned error, or one fixed generic issue.
+ *
+ * Only a project-owned `issues` array is carried through: those are already
+ * serializable, deterministic, and written by this project. The thrown value's
+ * `message` is never read, because an error raised inside an injected component
+ * may quote source content or a machine path (INV-SEC-001).
+ *
+ * An empty `issues` array falls back too. A chunker reports a tokenizer failure
+ * with a message and no issues, and passing that empty array through would
+ * produce a pipeline failure that names its stage but says nothing at all.
+ */
 function issuesOf(
   cause: unknown,
   path: readonly string[],
   fallback: string,
 ): readonly ValidationIssue[] {
-  if (
-    typeof cause === 'object' &&
-    cause !== null &&
-    Array.isArray((cause as { issues?: unknown }).issues)
-  ) {
-    return (cause as { issues: readonly ValidationIssue[] }).issues;
+  if (typeof cause === 'object' && cause !== null) {
+    const nested: unknown = (cause as { issues?: unknown }).issues;
+    if (Array.isArray(nested) && nested.length > 0) {
+      return nested as readonly ValidationIssue[];
+    }
   }
   return [issue(path, fallback)];
 }
@@ -568,13 +579,13 @@ export class CompileLocalContextService {
     let listed: unknown;
     try {
       listed = await this.#controlStore.listSources(scope);
-    } catch (cause) {
+    } catch {
+      // The thrown value is deliberately not inspected. A port implementation
+      // chooses its own message, and a control plane's may carry a connection
+      // string, a query, or a credential; copying it into a project-owned issue
+      // would publish whatever the dependency happened to say (INV-SEC-001).
       throw new LocalSourcePipelineError('control-store', [
-        issue(
-          ['controlStore'],
-          `listSources failed: ${describe(cause)}`,
-          'control_store_unavailable',
-        ),
+        issue(['controlStore'], 'ControlStore listSources failed.', 'control_store_unavailable'),
       ]);
     }
     if (!Array.isArray(listed)) {
@@ -657,11 +668,15 @@ export class CompileLocalContextService {
     let result: unknown;
     try {
       result = await this.#sourceReader.read({ locator: registration.locator });
-    } catch (cause) {
+    } catch {
+      // The reader's own message is not copied: a filesystem error routinely
+      // names an absolute path, and another reader's could carry a token or a
+      // fragment of the file itself. The logical identity is registration data
+      // the caller already holds; the locator is not repeated (INV-SEC-001).
       throw new LocalSourcePipelineError('source-read', [
         issue(
           [String(index), 'locator'],
-          `read failed for ${identityLabel(registration)}: ${describe(cause)}`,
+          `SourceReader failed for logical source ${identityLabel(registration)}.`,
           'source_unreadable',
         ),
       ]);
@@ -771,6 +786,16 @@ export class CompileLocalContextService {
     }
   }
 
+  /**
+   * Asks the provider for candidates, then proves every one of them came from
+   * the prepared corpus.
+   *
+   * The provider is handed an **isolated deep copy** of the corpus. It would
+   * otherwise receive the very objects this service later compiles and returns,
+   * and `readonly` stops nothing at runtime: a provider could mutate a block in
+   * place and the compiled result would silently carry the change
+   * (INV-ADAPTER-004).
+   */
   async #getCandidates(
     request: {
       readonly scope: Scope;
@@ -786,14 +811,17 @@ export class CompileLocalContextService {
         scope: request.scope,
         query: request.query,
         referenceTime: request.referenceTime,
-        sourceDocuments,
-        blocks,
+        sourceDocuments: sourceDocuments.map(cloneRecord),
+        blocks: blocks.map(cloneRecord),
       });
-    } catch (cause) {
+    } catch {
+      // A retrieval provider's message may echo the raw query, a provider
+      // payload, or an index error carrying stored content, so none of it is
+      // copied into a project-owned issue (INV-SEC-001).
       throw new LocalSourcePipelineError('candidate-provider', [
         issue(
           ['candidateProvider'],
-          `getCandidates failed: ${describe(cause)}`,
+          'CandidateProvider getCandidates failed.',
           'provider_unavailable',
         ),
       ]);
@@ -803,29 +831,127 @@ export class CompileLocalContextService {
         issue(['candidateProvider'], 'getCandidates must resolve to an array', 'invalid_type'),
       ]);
     }
-    // The wrappers themselves are not re-validated here. `CandidateValidator` is
-    // the kernel's trust boundary and validates the batch strictly, all or
-    // nothing; a second implementation of those rules would be a second place
-    // for one truth to drift (DEC-030, INV-DEP-003).
-    return candidates as readonly CandidateBlock[];
+    return verifyPreparedCorpusMembership(candidates, blocks);
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Prepared-corpus provenance boundary                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Proves that every inspectable candidate block is one this service prepared
+ * (DEC-039).
+ *
+ * **Why the kernel cannot prove this.** `CandidateValidator` receives a scope, a
+ * source-document registry, and candidate wrappers — and nothing else. It can
+ * prove a candidate names a source in the registry, that its scope and type
+ * agree with it, that its `tokenCount` matches its content under the configured
+ * tokenizer, that its `normalizedContentHash` is the canonical hash of its
+ * content, and that its location kind suits its source type. It cannot prove
+ * *prepared-corpus membership*, because it never receives the prepared corpus:
+ * that registry exists only in this phase, above the kernel (DEC-030,
+ * INV-DEP-003).
+ *
+ * The gap is reachable. Suppose the service prepares source `D` with blocks `A`
+ * and `B`. A provider returns a block `F` that names `D`, sits in the right
+ * scope, carries a well-formed location, and whose hash and token count were
+ * recomputed from its own text — text that appears in no local source. Every
+ * kernel rule holds, so `F` is accepted, and the compiled context contains
+ * content the local corpus never held (INV-PROV-001).
+ *
+ * The rule enforced here is therefore membership **and** exact equality: the
+ * candidate's block must carry the identifier of a prepared block, and must be
+ * structurally identical to that prepared block in every field — schema version,
+ * scope, source document, source type, location, content, hash, token count,
+ * heading path, timestamps, attributes, and metadata. Comparing only the
+ * identifier, the content, and the hash would accept a block whose location,
+ * attributes, or metadata were rewritten, and `attributes.required` alone can
+ * change what the allocator must include.
+ *
+ * Comparison is by canonical serialization, so property insertion order does not
+ * matter: a provider that rebuilt a block field by field, or round-tripped it
+ * through JSON, is proposing the same record and is accepted.
+ *
+ * A mismatch is **rejected, never repaired**. Substituting the prepared block for
+ * the one the provider returned would silently compile something other than what
+ * was proposed, and would hide a provider that is malfunctioning or hostile
+ * (INV-ADAPTER-003).
+ *
+ * Retrieval evidence takes no part: `candidate.retrieval` is the provider's own,
+ * and two wrappers around one prepared block with different evidence are both
+ * legitimate. Repeated wrappers are legitimate too — deciding what to do with a
+ * duplicate belongs to `CandidateDeduplicator` (DEC-031).
+ *
+ * A candidate too malformed to expose a block identifier is passed through
+ * untouched, so `CandidateValidator` keeps sole ownership of `CandidateBlock`
+ * schema validation. This boundary owns exactly one question: *did this block
+ * come from the prepared corpus?*
+ *
+ * Array order is preserved exactly: the provider's own array is returned.
+ */
+function verifyPreparedCorpusMembership(
+  candidates: readonly unknown[],
+  corpus: readonly ContextBlock[],
+): readonly CandidateBlock[] {
+  const prepared = new Map<string, string>();
+  for (const block of corpus) prepared.set(String(block.id), canonicalRecordJson(block));
+
+  const issues: ValidationIssue[] = [];
+  candidates.forEach((candidate, index) => {
+    const block = blockOf(candidate);
+    // Not inspectable as a block: the kernel's schema validation owns it.
+    if (block === null) return;
+
+    const expected = prepared.get(block.id);
+    if (expected === undefined) {
+      issues.push(
+        issue(
+          [String(index), 'block', 'id'],
+          `must identify a block of the prepared local corpus: no prepared block has the identifier ${JSON.stringify(block.id)}`,
+          'candidate_outside_prepared_corpus',
+        ),
+      );
+      return;
+    }
+
+    if (canonicalRecordJson(block.value) !== expected) {
+      issues.push(
+        issue(
+          [String(index), 'block'],
+          `must equal the prepared block ${JSON.stringify(block.id)} exactly: the provider returned a modified block`,
+          'candidate_block_mismatch',
+        ),
+      );
+    }
+  });
+
+  if (issues.length > 0) {
+    throw new LocalSourcePipelineError('candidate-provider', issues);
+  }
+  return candidates as readonly CandidateBlock[];
+}
+
+/**
+ * The candidate's block and its identifier, or `null` when the candidate is not
+ * shaped like one at all.
+ *
+ * Only enough structure is read to look the block up. Everything else about the
+ * wrapper — its schema version, its retrieval evidence, its block's own fields —
+ * belongs to `CandidateValidator`.
+ */
+function blockOf(candidate: unknown): { readonly id: string; readonly value: unknown } | null {
+  if (typeof candidate !== 'object' || candidate === null) return null;
+  const value: unknown = (candidate as { block?: unknown }).block;
+  if (typeof value !== 'object' || value === null) return null;
+  const id: unknown = (value as { id?: unknown }).id;
+  if (typeof id !== 'string' || id.length === 0) return null;
+  return { id, value };
 }
 
 /** `namespace/key`, which names the logical source without disclosing its location. */
 function identityLabel(registration: SourceRegistration): string {
   return `${registration.identity.namespace}/${registration.identity.key}`;
-}
-
-/**
- * A short deterministic description of a thrown value.
- *
- * An `Error`'s name and message are strings the throwing component chose. The
- * error object itself is never attached, so no filesystem error, `SyntaxError`,
- * or validation-library error reaches a consumer (INV-ADAPTER-001).
- */
-function describe(cause: unknown): string {
-  if (cause instanceof Error) return `${cause.name}: ${cause.message}`;
-  return String(cause);
 }
 
 /**

@@ -43,6 +43,11 @@ export const NODE_FILE_SOURCE_READER_VERSION = '1';
  * Nothing is defaulted and nothing is discovered: no root is taken from the
  * working directory or an environment variable, and no size limit is invented
  * (INV-DET-003).
+ *
+ * The constructor takes `unknown` and validates this shape at runtime, because
+ * configuration routinely arrives from a file, an environment, or a caller in
+ * another language, where a compile-time type proves nothing (INV-BLOCK-005).
+ * The interface stays exported for callers that do build it in TypeScript.
  */
 export interface NodeFileSourceReaderConfig {
   /** Directory every locator is resolved inside and confined to. */
@@ -91,6 +96,12 @@ export class NodeFileSourceReaderError extends Error {
 /** The NUL code unit, which terminates a path in the operating system interface. */
 const NUL = '\u0000';
 
+/** The complete set of configuration fields. Anything else is rejected. */
+const CONFIG_KEYS: readonly string[] = ['maxBytes', 'rootDirectory'];
+
+/** The complete set of read-request fields. Anything else is rejected. */
+const REQUEST_KEYS: readonly string[] = ['locator'];
+
 /** Bounded rendering of a locator for a message, so a long path cannot flood a log. */
 const LOCATOR_PREVIEW_CODE_POINTS = 120;
 
@@ -128,31 +139,52 @@ export class NodeFileSourceReader implements SourceReader {
   readonly #maxBytes: number;
 
   /**
+   * Validates the configuration strictly: exactly the two documented fields, no
+   * unknown field, no default, and no coercion.
+   *
+   * An unknown field is rejected rather than ignored. Silently accepting one
+   * means a misspelled `maxByte` leaves the reader with no size limit the caller
+   * believes they configured, and a future field name would be swallowed by an
+   * older build instead of failing visibly (INV-BLOCK-005).
+   *
    * @throws {NodeFileSourceReaderError} when the configuration is not usable.
    */
-  constructor(config: NodeFileSourceReaderConfig) {
-    if (typeof config !== 'object' || config === null) {
+  constructor(config: unknown) {
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_CONFIG',
         'NodeFileSourceReader configuration must be an object.',
       );
     }
-    if (typeof config.rootDirectory !== 'string' || config.rootDirectory.trim().length === 0) {
+
+    const unknownKeys = Object.keys(config)
+      .filter((key) => !CONFIG_KEYS.includes(key))
+      .sort();
+    if (unknownKeys.length > 0) {
+      throw new NodeFileSourceReaderError(
+        'NODE_FILE_SOURCE_READER_INVALID_CONFIG',
+        `NodeFileSourceReader configuration has unknown field(s): ${unknownKeys.join(', ')}.`,
+      );
+    }
+
+    const { rootDirectory, maxBytes } = config as Partial<NodeFileSourceReaderConfig>;
+
+    if (typeof rootDirectory !== 'string' || rootDirectory.trim().length === 0) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_CONFIG',
         'NodeFileSourceReader rootDirectory must not be empty or whitespace-only.',
       );
     }
-    if (config.rootDirectory.includes(NUL)) {
+    if (rootDirectory.includes(NUL)) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_CONFIG',
         'NodeFileSourceReader rootDirectory must not contain a NUL code unit.',
       );
     }
-    if (!Number.isSafeInteger(config.maxBytes) || config.maxBytes <= 0) {
+    if (typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_CONFIG',
-        `NodeFileSourceReader maxBytes must be a positive safe integer, received ${String(config.maxBytes)}.`,
+        `NodeFileSourceReader maxBytes must be a positive safe integer, received ${String(maxBytes)}.`,
       );
     }
 
@@ -160,8 +192,8 @@ export class NodeFileSourceReader implements SourceReader {
     // absolute spelling. It is deliberately *not* real-pathed here: the root may
     // legitimately be created after construction, and a constructor that touched
     // the filesystem would make configuring a reader an IO operation.
-    this.#rootDirectory = resolve(config.rootDirectory);
-    this.#maxBytes = config.maxBytes;
+    this.#rootDirectory = resolve(rootDirectory);
+    this.#maxBytes = maxBytes;
   }
 
   /**
@@ -176,12 +208,29 @@ export class NodeFileSourceReader implements SourceReader {
     return { content: this.#decode(locator, bytes) };
   }
 
-  /** Rejects a locator that is not a usable relative path, before any IO happens. */
+  /**
+   * Rejects a request that is not a usable read request, before any IO happens.
+   *
+   * The request shape is checked strictly for the same reason the configuration
+   * is: an unknown field is a caller believing they asked for something this
+   * reader does not do — a range, an encoding, a follow-symlinks flag — and
+   * ignoring it would answer a different question than the one asked
+   * (INV-BLOCK-005).
+   */
   #validateLocator(request: SourceReadRequest): string {
-    if (typeof request !== 'object' || request === null) {
+    if (typeof request !== 'object' || request === null || Array.isArray(request)) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_REQUEST',
         'NodeFileSourceReader request must be an object carrying a locator.',
+      );
+    }
+    const unknownKeys = Object.keys(request)
+      .filter((key) => !REQUEST_KEYS.includes(key))
+      .sort();
+    if (unknownKeys.length > 0) {
+      throw new NodeFileSourceReaderError(
+        'NODE_FILE_SOURCE_READER_INVALID_REQUEST',
+        `NodeFileSourceReader request has unknown field(s): ${unknownKeys.join(', ')}.`,
       );
     }
     const locator: unknown = request.locator;
