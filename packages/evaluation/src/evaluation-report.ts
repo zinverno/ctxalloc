@@ -384,6 +384,38 @@ function percentile(sorted: readonly number[], p: number): number {
 }
 
 /**
+ * The mean of finite observations, computed without an overflowing intermediate.
+ *
+ * A naive `sum / count` can reach `Infinity` on the way to a mean that is
+ * perfectly representable: the mean of `[MAX_VALUE, MAX_VALUE]` is `MAX_VALUE`,
+ * but their sum is not a double, so the distribution would publish `Infinity`
+ * for a value every observation already demonstrated is representable.
+ *
+ * This is the standard online mean, updated one observation at a time:
+ *
+ * ```text
+ * mean_k = mean_(k-1) + (x_k / k - mean_(k-1) / k)
+ * ```
+ *
+ * The running mean stays inside the range of the observations, so it cannot
+ * overflow. The increment is grouped deliberately — `mean + (a - b)` rather than
+ * `mean + a - b` — because the ungrouped form adds `x_k / k` to a mean already
+ * near the maximum and overflows before the subtraction can bring it back.
+ *
+ * It is at least as accurate as a single division of an exact sum in the
+ * ordinary case, so no existing distribution changes.
+ */
+function safeMean(values: readonly number[]): number {
+  let mean = 0;
+  let count = 0;
+  for (const value of values) {
+    count += 1;
+    mean = mean + (value / count - mean / count);
+  }
+  return mean;
+}
+
+/**
  * Summarizes observations, or reports that there were none.
  *
  * An empty set produces `undefined` rather than a distribution of zeros. A
@@ -394,12 +426,17 @@ export function summarize(values: readonly number[]): EvaluationDistribution | u
   if (values.length === 0) return undefined;
 
   const sorted = [...values].sort((a, b) => a - b);
-  const sum = sorted.reduce((total, value) => total + value, 0);
+  const mean = safeMean(sorted);
+  // Unreachable for finite observations, and every observation reaching here is
+  // one the harness already validated as finite. It exists so that no path can
+  // put `NaN` or `Infinity` into a distribution — and from there into the report
+  // hash — however a future caller supplies its numbers.
+  if (!Number.isFinite(mean)) return undefined;
   const p50 = percentile(sorted, 0.5);
 
   return {
     count: sorted.length,
-    mean: sum / sorted.length,
+    mean,
     // One definition, two names: `median` is `p50` under the nearest-rank rule,
     // not an averaged middle pair.
     median: p50,

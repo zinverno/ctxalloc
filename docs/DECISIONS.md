@@ -4399,6 +4399,22 @@ Nothing leaks from a failure. The API key, the headers, the prompts, the context
 
 **Redirects are refused before transmission.** The adapter sets `redirect: "error"`; `fetch` would otherwise follow one by default. A 307 or 308 preserves the method and the body, so an endpoint replying `Location: <other origin>` would have the runtime re-send the `x-api-key` header, the system prompt, and the whole user prompt to a destination the caller never authorized. The configured endpoint is an **authorization boundary**, and a benchmark adapter has no reason to discover another one — so same-origin, cross-origin, loopback, and HTTPS-to-HTTP redirects are all refused alike. Validating a redirect after the fact would be too late: by then the request has already gone, and the `Location` value is itself not disclosed.
 
+**The timeout bound matches Node's actual timer primitive.** `setTimeout` stores its delay as a signed 32-bit value and silently replaces anything larger with `1`. `timeoutMs` is therefore required to be a safe integer between `1` and `2_147_483_647`, and a larger value is rejected rather than clamped: accepting `2_147_483_648` would abort the request after about a millisecond while the configuration says it waits for twenty-four days, and clamping would substitute a timeout the caller did not configure. The bound is a property of the primitive the adapter uses, so it belongs in the adapter's own validation.
+
+### A Provider Result Is Validated Before It Becomes a Measurement
+
+`ModelProvider` is an injected runtime port, so what it resolves with is data from outside the evaluation package no matter how the shipped adapter behaves. A TypeScript interface is erased at run time and constrains only code compiled against it, and the harness immediately hashes, scores, counts, and publishes what it gets back — so an unchecked result turns malformed provider data into benchmark numbers.
+
+Every successful call is therefore validated against schema v1 before anything is hashed, scored, or projected into a report: `schemaVersion` exactly `1`; `outputText` a well-formed UTF-16 string, empty allowed and preserved exactly; `usage` an optional strict object whose present counts are non-negative safe integers; `providerRequestId`, `stopReason`, and `actualModelId` non-empty well-formed strings when present; unknown fields rejected. Nothing is coerced, defaulted, or repaired.
+
+A resolved-but-invalid result is a **call failure**, reported exactly like a call that did not return: `MODEL_PROVIDER_INVALID_RESULT`, no score, no answer hash, no provider usage, and no quality comparison. An invalid baseline result also means the compiled call is not attempted, because a comparison that cannot be made is not worth a second paid call. Neither the malformed content nor any validator detail appears in the failure (INV-SEC-001).
+
+Reading the result is total: a hostile implementation may return a `Proxy` whose traps throw, so every read is guarded and the validator returns a fresh plain object. Nothing downstream reads a provider-controlled property a second time, so a getter cannot return one value to the validator and another to the report.
+
+An injected provider's own capability and identity are validated at **construction**: a non-null object with a `generate` function and non-blank, well-formed `id`, `version`, and `modelId`. A reflective failure while reading any of them is the same `invalid_harness_configuration` error, and no provider-controlled value is quoted in it. The identity is captured once at that point and used for every later report field, so a provider whose `modelId` changes between the run and the report cannot make a report name a model that produced nothing.
+
+**Failure-code inspection is non-throwing.** Describing a provider failure must not become a second failure: `instanceof` walks a prototype chain and a property descriptor read consults a trap, and a `Proxy` may throw from either. Both are guarded, an accessor is still never invoked, and anything unreadable or not shaped like a machine-readable constant becomes the opaque `provider_call_failed`.
+
 ### The Harness Owns the Prompt, and Both Calls Differ Only by Context
 
 `ctxalloc-eval-prompt` v1 builds one deterministic JSON object with exactly two keys, in the fixed order `context`, then `query`:
@@ -4449,6 +4465,8 @@ duration = end - start
 Both readings must be finite and non-negative and `end >= start`. A clock that moved backwards would produce a negative duration, and publishing one would report a measurement that cannot have happened, so it is an `EvaluationHarnessError` with issue code `clock_failed` instead. A clock that **throws** — an adapter exception, or a test double running out of readings — is wrapped into the same failure with a fixed message, so no dependency's wording escapes the port boundary (INV-ADAPTER-003).
 
 Compilation latency, full-baseline model latency, and compiled-context model latency are measured separately, and `compiledRequestLatency = compilationLatency + compiledModelLatency` is derived. That is deliberately **not** METRICS 17.5 complete context-preparation latency: Phase 17 uses static candidate cases, so no retrieval time is in it.
+
+**A derived or aggregated latency can never be published as a non-finite number.** Each measured interval is finite, but arithmetic over finite doubles is not closed: the sum of two finite durations can overflow to `Infinity`, and the intermediate sum of a mean can overflow even when the mean itself is perfectly representable — `[MAX_VALUE, MAX_VALUE]` averages to `MAX_VALUE`, but does not add up to a double. A derived request latency that is not finite is a `clock_failed` failure rather than a published `Infinity`, and is never clamped, because clamping states a specific wrong number. Distributions compute their mean with the online update `mean_k = mean_(k-1) + (x_k / k - mean_(k-1) / k)`, whose running value stays inside the range of the observations and therefore cannot overflow; the ordinary case is at least as accurate as dividing an exact sum, so no existing distribution changes.
 
 ### Expected Failures Are Their Own Result State
 
@@ -4537,7 +4555,7 @@ CI runs the whole dataset with model execution **disabled**, and the answer-eval
 
 `@ctxalloc/testing` gains `FakeModelProvider` and `FakeMonotonicClock` with their configuration and failure errors. Neither derives anything from its input: the model double answers only from its script and invents no token usage, and the clock double returns only the sequence it was given and fails explicitly when exhausted.
 
-`@ctxalloc/evaluation` becomes active with `EvaluationCase` and its validation, `EvaluationRequiredFact`, `AnswerCriterion`, `ExpectedCompilationFailure`, `EvaluationRunConfig`, the versioned prompt builder, the baseline contracts and renderer identity, the rule-based answer evaluator, `EvaluationCaseResult`, `EvaluationCaseDetails`, `EvaluationReport`, `EvaluationHarness`, and two project-owned errors. Its canonical serializer, percentile helper, hash preimage helpers, and baseline builders are package-internal and are not exported.
+`@ctxalloc/evaluation` becomes active with `EvaluationCase` and its validation, `EvaluationRequiredFact`, `AnswerCriterion`, `ExpectedCompilationFailure`, `EvaluationRunConfig`, the versioned prompt builder, the baseline contracts and renderer identity, the rule-based answer evaluator, `EvaluationCaseResult`, `EvaluationCaseDetails`, `EvaluationReport`, `EvaluationHarness`, and two project-owned errors. Its canonical serializer, percentile helper, hash preimage helpers, baseline builders, token-measurement helper, mean helper, and model-result validator are package-internal and are not exported.
 
 `benchmarks/evaluation/v1/` is added as a versioned dataset of thirteen cases.
 

@@ -108,6 +108,19 @@ export class AnthropicModelProviderError extends Error {
 /** The complete set of configuration fields. Anything else is rejected. */
 const CONFIG_KEYS: readonly string[] = ['apiKey', 'apiVersion', 'baseUrl', 'modelId', 'timeoutMs'];
 
+/**
+ * The largest delay Node's timer primitive actually honors.
+ *
+ * `setTimeout` stores its delay as a signed 32-bit value: a larger delay is
+ * silently replaced by `1`. A configured timeout of `2_147_483_648` ms would
+ * therefore abort the request after about a millisecond while the configuration
+ * says it waits for twenty-four days — the exact kind of silent substitution
+ * this adapter refuses everywhere else. The bound is enforced rather than
+ * clamped, because clamping would also be choosing a timeout the caller did not
+ * configure.
+ */
+const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
+
 /** The complete set of request fields. Anything else is rejected. */
 const REQUEST_KEYS: readonly string[] = [
   'maxOutputTokens',
@@ -252,8 +265,15 @@ export class AnthropicModelProvider implements ModelProvider {
       }
     }
 
-    if (typeof timeoutMs !== 'number' || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-      throw invalidConfig('AnthropicModelProvider timeoutMs must be a positive safe integer.');
+    if (
+      typeof timeoutMs !== 'number' ||
+      !Number.isSafeInteger(timeoutMs) ||
+      timeoutMs < 1 ||
+      timeoutMs > MAX_NODE_TIMER_DELAY_MS
+    ) {
+      throw invalidConfig(
+        'AnthropicModelProvider timeoutMs must be a safe integer of at least 1 and at most 2147483647 milliseconds.',
+      );
     }
 
     // `apiKey` is read into a private field and never stored anywhere a

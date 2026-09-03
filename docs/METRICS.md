@@ -666,7 +666,10 @@ clamped; the ratio is **absent** when the baseline is empty rather than `NaN` or
 beside it, always named, never as "the" token reduction.
 
 Provider-native `usage` counts are a different vocabulary and are never
-subtracted from a CtxAlloc count.
+subtracted from a CtxAlloc count. They are also validated before they are
+published: a `ModelProvider` is an injected runtime port, and a count that is
+`NaN`, infinite, negative, fractional, or beyond the safe integer range is a
+failed call rather than a reported measurement (11.6).
 
 ## 8.9 Budget Utilization
 
@@ -1137,6 +1140,13 @@ zero-scoring answer. A loss **strictly greater** than the run's configured
 `severeQualityLossThreshold` is severe; equality is the boundary the run declared
 acceptable.
 
+The comparison requires two valid results. A `ModelProvider` is an injected
+runtime port, so a resolved result is validated against its schema before
+anything is hashed, scored, or counted; a result that fails validation is a call
+failure with the code `MODEL_PROVIDER_INVALID_RESULT` — no score, no answer hash,
+no usage, and no loss — and an invalid **baseline** result means the compiled
+call is not attempted at all.
+
 The comparison also requires that the two calls were served by the same model.
 When both calls report an `actualModelId` and the two differ, both call results
 and both scores are still published, but `qualityLoss` and `severeQualityLoss`
@@ -1474,7 +1484,15 @@ time is in it. A clock reading that is non-finite, negative, or backwards is a
 harness failure rather than a published negative duration, and a clock that
 *throws* is the same failure: it surfaces as an `EvaluationHarnessError` with
 issue code `clock_failed` and a fixed message, never as a raw platform error
-escaping the harness.
+escaping the harness. A **derived** latency is held to the same rule: two finite
+durations can sum to `Infinity`, so `compiledRequestLatency` is rejected as
+`clock_failed` when it is not finite, and is never clamped.
+
+Distributions compute their mean with an online update rather than a raw sum,
+because a sum can overflow on the way to a mean that is perfectly representable
+— `[MAX_VALUE, MAX_VALUE]` averages to `MAX_VALUE` but does not add up to a
+double. No distribution ever publishes `NaN` or `Infinity`, so no report hash is
+taken over one.
 
 Distributions report count, mean, median, p10, p50, p90, p95, p99, minimum, and
 maximum, using one **nearest-rank** percentile method everywhere:

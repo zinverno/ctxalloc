@@ -177,6 +177,8 @@ describe('INV-DEP-003: the evaluation package sits above the compiler only', () 
       'buildTopKBaseline',
       'countEvaluationTokens',
       'EvaluationTokenMeasurementError',
+      'validateModelProviderResult',
+      'ModelProviderResultValidationError',
     ]) {
       expect(entry, `exports ${internal}`).not.toContain(internal);
     }

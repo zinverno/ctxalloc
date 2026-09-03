@@ -433,6 +433,23 @@ describe('AnthropicModelProvider: strict configuration', () => {
     }
   });
 
+  it("bounds timeoutMs by the largest delay Node's timer actually honors", () => {
+    // `setTimeout` stores its delay as a signed 32-bit value and silently
+    // replaces anything larger with 1 ms. A configuration that validated
+    // `2_147_483_648` would therefore abort after about a millisecond while
+    // claiming to wait for twenty-four days, which is exactly the silent
+    // substitution this adapter refuses everywhere else.
+    expect(() => new AnthropicModelProvider(config({ timeoutMs: 1 }))).not.toThrow();
+    expect(() => new AnthropicModelProvider(config({ timeoutMs: 2_147_483_647 }))).not.toThrow();
+
+    for (const rejected of [2_147_483_648, Number.MAX_SAFE_INTEGER]) {
+      expect(
+        () => new AnthropicModelProvider(config({ timeoutMs: rejected })),
+        String(rejected),
+      ).toThrow(AnthropicModelProviderError);
+    }
+  });
+
   it('requires https for a non-loopback host and allows http on loopback', () => {
     expect(() => new AnthropicModelProvider(config({ baseUrl: 'http://api.example.com' }))).toThrow(
       AnthropicModelProviderError,

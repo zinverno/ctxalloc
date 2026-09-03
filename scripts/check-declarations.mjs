@@ -71,6 +71,7 @@ const DECLARATIONS = [
   'packages/evaluation/dist/evaluation-report.d.ts',
   'packages/evaluation/dist/evaluation-harness.d.ts',
   'packages/evaluation/dist/token-measurement.d.ts',
+  'packages/evaluation/dist/model-provider-result.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -2479,6 +2480,20 @@ requireContains(
 requireContains(
   'packages/evaluation/dist/token-measurement.d.ts',
   'declare function countEvaluationTokens(tokenizer: Tokenizer, text: string): number;',
+);
+// A provider result reaches a measurement only through this signature: it takes
+// `unknown`, so nothing can hand the harness a result it merely asserted.
+requireContains(
+  'packages/evaluation/dist/model-provider-result.d.ts',
+  'declare function validateModelProviderResult(value: unknown): ModelProviderResult;',
+);
+requireContains(
+  'packages/evaluation/dist/model-provider-result.d.ts',
+  'MODEL_PROVIDER_INVALID_RESULT = "MODEL_PROVIDER_INVALID_RESULT"',
+);
+requireContains(
+  'packages/evaluation/dist/model-provider-result.d.ts',
+  'class ModelProviderResultValidationError extends Error',
 );
 requireContains('packages/evaluation/dist/evaluation-report.d.ts', 'interface EvaluationReport');
 requireContains(

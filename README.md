@@ -30,10 +30,14 @@ for that, and CI runs the whole benchmark with model execution disabled.
 
 Every measurement boundary fails loudly rather than publishing a weaker number:
 the model adapter refuses redirects before a request is transmitted, so an API
-key and a prompt are never re-sent to an unauthorized host; baseline token
-counts are accepted only as non-negative safe integers; a throwing tokenizer or
-clock becomes a named harness failure; and quality loss is withheld when the two
-model calls report different actual models.
+key and a prompt are never re-sent to an unauthorized host, and its timeout is
+bounded by the timer it actually uses; baseline token counts are accepted only
+as non-negative safe integers; a throwing tokenizer or clock becomes a named
+harness failure, and a derived or averaged latency can never be published as
+`Infinity`; an injected model provider is checked for identity and capability at
+construction, and every result it resolves with is validated before it is
+hashed, scored, or counted; and quality loss is withheld when the two model
+calls report different actual models.
 
 Phase 17 adds **no** compiler selection behavior. The compiler calls no model and
 reads no clock.

@@ -6,7 +6,7 @@ import {
   type CompilationRequest,
   type CompilationResult,
 } from '@ctxalloc/compiler';
-import { availableInputTokens, type CandidateBlock } from '@ctxalloc/domain';
+import { availableInputTokens, findLoneSurrogate, type CandidateBlock } from '@ctxalloc/domain';
 import type {
   ModelProvider,
   ModelProviderResult,
@@ -51,6 +51,11 @@ import {
   type EvaluationReport,
   type EvaluationTokenMetrics,
 } from './evaluation-report.js';
+import {
+  MODEL_PROVIDER_INVALID_RESULT,
+  ModelProviderResultValidationError,
+  validateModelProviderResult,
+} from './model-provider-result.js';
 import { validateEvaluationRunConfig, type EvaluationRunConfig } from './evaluation-run-config.js';
 import { EvaluationTokenMeasurementError } from './token-measurement.js';
 
@@ -129,11 +134,113 @@ const OPAQUE_FAILURE_CODE = 'provider_call_failed';
  * one fixed opaque code (INV-SEC-001).
  */
 function failureCodeOf(cause: unknown): string {
-  if (typeof cause !== 'object' || cause === null) return OPAQUE_FAILURE_CODE;
-  const descriptor = Object.getOwnPropertyDescriptor(cause, 'code');
-  const code: unknown = descriptor === undefined ? undefined : descriptor.value;
-  if (typeof code !== 'string' || !SAFE_FAILURE_CODE.test(code)) return OPAQUE_FAILURE_CODE;
-  return code;
+  try {
+    if (cause instanceof ModelProviderResultValidationError) return MODEL_PROVIDER_INVALID_RESULT;
+    if (typeof cause !== 'object' || cause === null) return OPAQUE_FAILURE_CODE;
+    // A descriptor rather than a property read: an accessor is not invoked, so a
+    // getter cannot run arbitrary code while a failure is being described.
+    const descriptor = Object.getOwnPropertyDescriptor(cause, 'code');
+    const code: unknown = descriptor === undefined ? undefined : descriptor.value;
+    if (typeof code !== 'string' || !SAFE_FAILURE_CODE.test(code)) return OPAQUE_FAILURE_CODE;
+    return code;
+  } catch {
+    // Inspection itself is provider-controlled: a thrown value may be a `Proxy`
+    // whose `getPrototypeOf` or `getOwnPropertyDescriptor` trap throws. That is
+    // still just a failed call, so it becomes the opaque code rather than a raw
+    // exception escaping the harness (INV-ADAPTER-003).
+    return OPAQUE_FAILURE_CODE;
+  }
+}
+
+/**
+ * Whether a caught value is the harness's own error, decided without throwing.
+ *
+ * `instanceof` walks the prototype chain, and a `Proxy` may throw from its
+ * `getPrototypeOf` trap — so the plain expression is not safe on a value a
+ * provider threw.
+ */
+function isHarnessError(cause: unknown): boolean {
+  try {
+    return cause instanceof EvaluationHarnessError;
+  } catch {
+    return false;
+  }
+}
+
+/** Fixed message: no provider-controlled value is ever quoted (INV-SEC-001). */
+const INVALID_PROVIDER_MESSAGE =
+  'EvaluationHarness requires a ModelProvider with a non-blank id, version, and modelId, and a generate() method.';
+
+/** The provider identity a report records, read once and never re-read. */
+interface ProviderIdentity {
+  readonly providerId: string;
+  readonly providerVersion: string;
+  readonly modelId: string;
+}
+
+function invalidProvider(): never {
+  throw new EvaluationHarnessError('invalid_harness_configuration', INVALID_PROVIDER_MESSAGE);
+}
+
+/** One identity field of an injected provider, read at most once. */
+function providerText(provider: object, key: string): string {
+  let value: unknown;
+  try {
+    value = (provider as Record<string, unknown>)[key];
+  } catch {
+    // A reflective failure is a configuration failure: an injected object that
+    // cannot state its own identity cannot appear in a report that says what
+    // produced a measurement (INV-TRACE-005).
+    invalidProvider();
+  }
+  if (typeof value !== 'string' || value.trim().length === 0 || findLoneSurrogate(value) !== null) {
+    invalidProvider();
+  }
+  return value;
+}
+
+/**
+ * The identity of an injected `ModelProvider`, captured at construction.
+ *
+ * It is read once and stored, so a provider whose `modelId` getter returns one
+ * value while the run starts and another while the report is written cannot make
+ * a report name a model that produced nothing.
+ */
+function providerIdentityOf(provider: ModelProvider): ProviderIdentity {
+  if (typeof provider !== 'object' || provider === null) invalidProvider();
+
+  let generate: unknown;
+  try {
+    generate = (provider as unknown as Record<string, unknown>)['generate'];
+  } catch {
+    invalidProvider();
+  }
+  if (typeof generate !== 'function') invalidProvider();
+
+  return {
+    providerId: providerText(provider, 'id'),
+    providerVersion: providerText(provider, 'version'),
+    modelId: providerText(provider, 'modelId'),
+  };
+}
+
+/**
+ * One derived latency, required to stay a real number.
+ *
+ * Each measured interval is finite, but a sum of two finite doubles is not: the
+ * addition can overflow to `Infinity`, and a published `Infinity` would be a
+ * duration nobody waited for. Clamping would be worse — it would state a
+ * specific wrong number — so the derivation fails instead (METRICS 17).
+ */
+function derivedLatency(first: number, second: number): number {
+  const total = first + second;
+  if (!Number.isFinite(total)) {
+    throw new EvaluationHarnessError(
+      'clock_failed',
+      'EvaluationHarness derived a request latency that is not a finite number.',
+    );
+  }
+  return total;
 }
 
 /** A measured operation and the elapsed milliseconds around it. */
@@ -151,6 +258,7 @@ export class EvaluationHarness {
   readonly #tokenizer: Tokenizer;
   readonly #clock: MonotonicClock;
   readonly #modelProvider: ModelProvider | null;
+  readonly #providerIdentity: ProviderIdentity | null;
   readonly #compiler: ContextCompiler;
   readonly #candidateValidator: CandidateValidator;
   readonly #compilerId: string;
@@ -162,7 +270,8 @@ export class EvaluationHarness {
    * compiler has accepted it.
    * @throws {ContextCompilationError} when the compiler configuration or the
    * tokenizer is unusable.
-   * @throws {EvaluationHarnessError} when the clock is unusable.
+   * @throws {EvaluationHarnessError} when the clock or the model provider is
+   * unusable.
    */
   constructor(
     compilerConfig: unknown,
@@ -196,6 +305,10 @@ export class EvaluationHarness {
     this.#tokenizer = tokenizer;
     this.#clock = clock;
     this.#modelProvider = modelProvider ?? null;
+    // A supplied provider is checked here rather than at the first call: a run
+    // that cannot produce a usable model result should fail before it compiles
+    // anything, and the identity a report records is fixed at this point.
+    this.#providerIdentity = modelProvider === undefined ? null : providerIdentityOf(modelProvider);
   }
 
   /** The suite-safe result of one case. */
@@ -523,8 +636,10 @@ export class EvaluationHarness {
         ...(model.report.compiled === undefined
           ? {}
           : {
-              compiledRequestLatencyMilliseconds:
-                compilationLatencyMilliseconds + model.report.compiled.latencyMilliseconds,
+              compiledRequestLatencyMilliseconds: derivedLatency(
+                compilationLatencyMilliseconds,
+                model.report.compiled.latencyMilliseconds,
+              ),
             }),
       },
       ...rawBaselineContexts(baselines),
@@ -608,18 +723,21 @@ export class EvaluationHarness {
     readonly raw: Partial<EvaluationCaseDetails>;
   }> {
     const provider = this.#modelProvider;
-    if (config.modelExecution === 'disabled' || provider === null || baselines === null) {
+    // The identity snapshot taken at construction, not a fresh read: an identity
+    // read again here could disagree with the one the report commits to.
+    const identity = this.#providerIdentity;
+    if (
+      config.modelExecution === 'disabled' ||
+      provider === null ||
+      identity === null ||
+      baselines === null
+    ) {
       return { report: { state: 'disabled', callOrder: [] }, raw: {} };
     }
 
     const query = evaluationCase.compilationRequest.query;
     const baselinePrompt = buildEvaluationUserPrompt(baselines.fullContext.context, query);
     const compiledPrompt = buildEvaluationUserPrompt(result.compiledContext, query);
-    const identity = {
-      providerId: provider.id,
-      providerVersion: provider.version,
-      modelId: provider.modelId,
-    };
     // Attempted, not planned. A two-entry order published after the baseline
     // call failed would be a false audit record of a call that never happened.
     const baselineOnly: readonly EvaluationModelCall[] = ['full-baseline'];
@@ -627,11 +745,17 @@ export class EvaluationHarness {
 
     let baselineCall: Measured<ModelProviderResult>;
     try {
-      baselineCall = await this.#measureAsync(() =>
+      // Validated before anything is hashed, scored, or counted: a malformed
+      // result must not reach a measurement even once.
+      const measured = await this.#measureAsync(() =>
         provider.generate(this.#requestFor(config, baselinePrompt)),
       );
+      baselineCall = {
+        value: validateModelProviderResult(measured.value),
+        durationMilliseconds: measured.durationMilliseconds,
+      };
     } catch (cause) {
-      if (cause instanceof EvaluationHarnessError) throw cause;
+      if (isHarnessError(cause)) throw cause;
       return {
         report: {
           state: 'baseline-call-failed',
@@ -646,11 +770,15 @@ export class EvaluationHarness {
 
     let compiledCall: Measured<ModelProviderResult>;
     try {
-      compiledCall = await this.#measureAsync(() =>
+      const measured = await this.#measureAsync(() =>
         provider.generate(this.#requestFor(config, compiledPrompt)),
       );
+      compiledCall = {
+        value: validateModelProviderResult(measured.value),
+        durationMilliseconds: measured.durationMilliseconds,
+      };
     } catch (cause) {
-      if (cause instanceof EvaluationHarnessError) throw cause;
+      if (isHarnessError(cause)) throw cause;
       return {
         report: {
           state: 'compiled-call-failed',
@@ -738,7 +866,7 @@ export class EvaluationHarness {
   /* ------------------------------------------------------------------------ */
 
   #report(config: EvaluationRunConfig, cases: readonly EvaluationCaseResult[]): EvaluationReport {
-    const provider = this.#modelProvider;
+    const identity = this.#providerIdentity;
     const expectedFailureCases = cases.filter((entry) => entry.expectedFailure !== undefined);
 
     const counts = {
@@ -788,12 +916,12 @@ export class EvaluationHarness {
         baselineRendererVersion: EVALUATION_BASELINE_RENDERER_VERSION,
         clockId: this.#clock.id,
         clockVersion: this.#clock.version,
-        ...(provider === null || config.modelExecution === 'disabled'
+        ...(identity === null || config.modelExecution === 'disabled'
           ? {}
           : {
-              modelProviderId: provider.id,
-              modelProviderVersion: provider.version,
-              modelId: provider.modelId,
+              modelProviderId: identity.providerId,
+              modelProviderVersion: identity.providerVersion,
+              modelId: identity.modelId,
             }),
       },
       counts,

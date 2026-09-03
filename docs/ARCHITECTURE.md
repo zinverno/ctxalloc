@@ -235,6 +235,11 @@ It reads no environment variable, no configuration file, and no working
 directory: every value is explicit configuration. It is an evaluation adapter,
 not a model gateway.
 
+`timeoutMs` is bounded by the timer the adapter actually uses: Node's
+`setTimeout` silently replaces a delay above 2,147,483,647 ms with 1 ms, so a
+larger configured timeout is rejected rather than clamped — accepting it would
+abort after about a millisecond while the configuration claims twenty-four days.
+
 The configured endpoint is an authorization boundary, so the adapter calls
 `fetch` with `redirect: "error"`. A 307 or 308 preserves the method and the
 body, so a followed redirect would re-send the API key header, the system
@@ -2666,6 +2671,12 @@ interface ModelProvider {
 The model identity belongs to the provider **instance**, not to a request, so
 one run cannot silently mix two models. The result carries no latency: the
 caller measures duration around the call, through `MonotonicClock`.
+
+The port is a type, so it constrains only code compiled against it. A consumer
+must validate an injected provider and what it resolves with at run time before
+either becomes a published measurement; `@ctxalloc/evaluation` does that, and
+the validator stays inside that package (INV-ADAPTER-003). No runtime validation
+is added here: `@ctxalloc/ports` remains type-only, with no runtime export.
 
 The compiler must not:
 
