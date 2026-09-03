@@ -52,6 +52,7 @@ import {
   type EvaluationTokenMetrics,
 } from './evaluation-report.js';
 import { validateEvaluationRunConfig, type EvaluationRunConfig } from './evaluation-run-config.js';
+import { EvaluationTokenMeasurementError } from './token-measurement.js';
 
 /**
  * The evaluation harness (DEC-040).
@@ -290,14 +291,12 @@ export class EvaluationHarness {
       if (!(cause instanceof CandidateValidationError)) throw cause;
     }
 
+    // Every baseline token count is validated. A tokenizer that throws, or that
+    // returns anything but a non-negative safe integer, becomes one project-owned
+    // harness failure rather than a raw dependency error or an invalid published
+    // measurement (INV-BUDGET-005, INV-ADAPTER-003).
     const baselines =
-      validCandidates === null
-        ? null
-        : {
-            fullContext: buildFullContextBaseline(validCandidates, this.#tokenizer),
-            truncation: buildTruncationBaseline(validCandidates, available, this.#tokenizer),
-            topK: buildTopKBaseline(validCandidates, available, this.#tokenizer),
-          };
+      validCandidates === null ? null : this.#measureBaselines(validCandidates, available);
 
     const primary = this.#measure(() => this.#compile(request));
     const determinism = this.#checkDeterminism(config, request, primary.value);
@@ -319,6 +318,27 @@ export class EvaluationHarness {
           determinism,
           baselines,
         );
+  }
+
+  #measureBaselines(
+    validCandidates: readonly CandidateBlock[],
+    availableInputTokens: number,
+  ): BaselineBuilds {
+    try {
+      return {
+        fullContext: buildFullContextBaseline(validCandidates, this.#tokenizer),
+        truncation: buildTruncationBaseline(validCandidates, availableInputTokens, this.#tokenizer),
+        topK: buildTopKBaseline(validCandidates, availableInputTokens, this.#tokenizer),
+      };
+    } catch (cause) {
+      if (!(cause instanceof EvaluationTokenMeasurementError)) throw cause;
+      // The tokenizer's own wording and the measured text both stay inside: the
+      // first is a dependency's, the second is source content (INV-SEC-001).
+      throw new EvaluationHarnessError(
+        'tokenizer_failed',
+        'EvaluationHarness could not measure a baseline context with the configured tokenizer.',
+      );
+    }
   }
 
   #compile(request: CompilationRequest): CompileOutcome {
@@ -411,7 +431,18 @@ export class EvaluationHarness {
   }
 
   #reading(): number {
-    const reading = this.#clock.nowMilliseconds();
+    let reading: unknown;
+    try {
+      reading = this.#clock.nowMilliseconds();
+    } catch {
+      // The port is an external boundary: an adapter exception, or a test
+      // double's exhaustion, must not escape carrying its own message
+      // (INV-ADAPTER-003, INV-SEC-001).
+      throw new EvaluationHarnessError(
+        'clock_failed',
+        'EvaluationHarness could not read the configured MonotonicClock.',
+      );
+    }
     if (typeof reading !== 'number' || !Number.isFinite(reading) || reading < 0) {
       throw new EvaluationHarnessError(
         'clock_failed',
@@ -589,7 +620,10 @@ export class EvaluationHarness {
       providerVersion: provider.version,
       modelId: provider.modelId,
     };
-    const callOrder: readonly EvaluationModelCall[] = ['full-baseline', 'compiled'];
+    // Attempted, not planned. A two-entry order published after the baseline
+    // call failed would be a false audit record of a call that never happened.
+    const baselineOnly: readonly EvaluationModelCall[] = ['full-baseline'];
+    const bothCalls: readonly EvaluationModelCall[] = ['full-baseline', 'compiled'];
 
     let baselineCall: Measured<ModelProviderResult>;
     try {
@@ -601,7 +635,7 @@ export class EvaluationHarness {
       return {
         report: {
           state: 'baseline-call-failed',
-          callOrder,
+          callOrder: baselineOnly,
           ...identity,
           failedCall: 'full-baseline',
           failureCode: failureCodeOf(cause),
@@ -620,7 +654,7 @@ export class EvaluationHarness {
       return {
         report: {
           state: 'compiled-call-failed',
-          callOrder,
+          callOrder: bothCalls,
           ...identity,
           baseline: callResult('full-baseline', baselineCall, evaluationCase),
           failedCall: 'compiled',
@@ -637,18 +671,31 @@ export class EvaluationHarness {
     const baseline = callResult('full-baseline', baselineCall, evaluationCase);
     const compiled = callResult('compiled', compiledCall, evaluationCase);
 
+    // A provider may resolve one configured alias to a concrete version, which is
+    // legitimate — but if the two calls report *different* concrete models, two
+    // experimental variables changed and the difference in the answers is no
+    // longer a context effect. Both scores stay published; the comparison does
+    // not (METRICS 11.6).
+    const mismatched =
+      baseline.actualModelId !== undefined &&
+      compiled.actualModelId !== undefined &&
+      baseline.actualModelId !== compiled.actualModelId;
+
     const loss =
-      baseline.answerQualityScore === undefined || compiled.answerQualityScore === undefined
+      mismatched ||
+      baseline.answerQualityScore === undefined ||
+      compiled.answerQualityScore === undefined
         ? undefined
         : baseline.answerQualityScore - compiled.answerQualityScore;
 
     return {
       report: {
         state: 'executed',
-        callOrder,
+        callOrder: bothCalls,
         ...identity,
         baseline,
         compiled,
+        ...(mismatched ? { qualityComparisonIssue: 'actual-model-mismatch' as const } : {}),
         ...(loss === undefined
           ? {}
           : {
@@ -712,6 +759,11 @@ export class EvaluationHarness {
       determinismFailures: cases.filter((entry) => entry.determinism?.matched === false).length,
       budgetViolations: cases.filter((entry) => entry.usage?.budgetViolation === true).length,
       severeQualityLosses: cases.filter((entry) => entry.model.severeQualityLoss === true).length,
+      // Visible at suite level so a blocked comparison cannot disappear into an
+      // absent `qualityLoss` that looks like an unscored case.
+      modelIdentityMismatches: cases.filter(
+        (entry) => entry.model.qualityComparisonIssue === 'actual-model-mismatch',
+      ).length,
     };
 
     const collect = (pick: (entry: EvaluationCaseResult) => number | undefined): number[] =>

@@ -92,6 +92,7 @@ export {
   type EvaluationModelResult,
   type EvaluationModelState,
   type EvaluationPreservationMetrics,
+  type EvaluationQualityComparisonIssue,
   type EvaluationReport,
   type EvaluationReportAggregates,
   type EvaluationReportComposition,

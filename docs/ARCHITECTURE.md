@@ -235,6 +235,14 @@ It reads no environment variable, no configuration file, and no working
 directory: every value is explicit configuration. It is an evaluation adapter,
 not a model gateway.
 
+The configured endpoint is an authorization boundary, so the adapter calls
+`fetch` with `redirect: "error"`. A 307 or 308 preserves the method and the
+body, so a followed redirect would re-send the API key header, the system
+prompt, and the whole user prompt to a host the caller never authorized;
+inspecting a redirect afterwards is too late, because the request has already
+been transmitted. A redirect response is a provider failure and the `Location`
+value is never reported (INV-SEC-001).
+
 `@ctxalloc/adapters` depends on `@ctxalloc/ports` only. It deliberately does not
 depend on `@ctxalloc/compiler`: an adapter that could see the kernel would be
 able to make a selection decision, and the point of the seam is that it cannot.

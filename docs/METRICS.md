@@ -203,6 +203,16 @@ The earlier flat `sourceBlockIds` list is corrected: it cannot distinguish
 *either of these blocks proves the fact* from *these blocks together prove it*,
 and the second is exactly the distributed-facts category (6.2).
 
+A block named in `evidenceBlockGroups` must not also appear in
+`irrelevantBlockIds`. The two annotations state opposite expectations about the
+same block — it must survive to prove the fact, and it should have been dropped
+as noise — so preservation and noise-rejection would be measured against
+contradictory ground truth. Case validation rejects the case with
+`conflicting_annotation`, pointing at the exact
+`requiredFacts[i].evidenceBlockGroups[g][b]` position. The case is never
+repaired by dropping one side: which annotation the author meant is not
+something the harness can infer.
+
 ---
 
 # 5. Dataset Splits
@@ -320,6 +330,16 @@ Token counts are **not** monotonic in the number of records: adding one can lowe
 the total, because the tokenizer merges across the new boundary. Every prefix
 baseline therefore measures *every* prefix as one complete rendered string and
 takes the longest that fits.
+
+Every baseline token count passes through one project-owned measurement helper.
+The `Tokenizer` port is an external boundary, so the helper calls it exactly
+once per measurement, converts any throw into a project-owned failure, and
+accepts only a non-negative safe integer: nothing is coerced, rounded, or
+clamped. `NaN` would invalidate `baselineInputTokens` and every aggregate built
+on it, and a negative count would make a prefix "fit" any budget. A rejected
+measurement surfaces as an `EvaluationHarnessError` with issue code
+`tokenizer_failed`, carrying no dependency wording and no measured text
+(INV-BUDGET-005, INV-SEC-001).
 
 ## 7.1 Full Context Baseline
 
@@ -1097,7 +1117,11 @@ answerQualityScore = earnedWeight / totalWeight        in [0, 1]
 There is no regular expression, stemming, fuzzy matching, answer trimming, or
 Unicode normalization; case-insensitive comparison uses the locale-independent
 Unicode default casing. When a case states no criteria the score is **absent** —
-an unscored answer is not a zero-scoring answer. The rubric above remains the
+an unscored answer is not a zero-scoring answer. Case validation checks the
+running **total** of the criterion weights with overflow-safe addition before
+summing, not only each individual weight: once a total leaves the safe integer
+range the divisor stops being exact and every score computed from it is
+approximate. A case whose weights cannot total exactly is rejected. The rubric above remains the
 target shape for a later version; LLM-as-judge stays deferred (12.3).
 
 ## 11.6 Quality Loss
@@ -1112,6 +1136,20 @@ it exists only when both scores exist: a failed provider call never becomes a
 zero-scoring answer. A loss **strictly greater** than the run's configured
 `severeQualityLossThreshold` is severe; equality is the boundary the run declared
 acceptable.
+
+The comparison also requires that the two calls were served by the same model.
+When both calls report an `actualModelId` and the two differ, both call results
+and both scores are still published, but `qualityLoss` and `severeQualityLoss`
+are **absent** and the case records
+`qualityComparisonIssue: "actual-model-mismatch"`; the report counts such cases
+as `modelIdentityMismatches`. A difference between two models is not a
+difference between two contexts, and publishing it as quality loss would
+attribute a model change to CtxAlloc.
+
+`callOrder` records the calls that were **attempted**, not the calls that were
+planned: it is empty when model execution is disabled or the case was skipped,
+holds the full baseline alone when that call failed, and holds both calls
+otherwise.
 
 Report both:
 
@@ -1433,7 +1471,10 @@ model latency (17.6). It derives
 `compiledRequestLatency = compilationLatency + compiledModelLatency`, which is
 deliberately **not** 17.5: Phase 17 uses static candidate cases, so no retrieval
 time is in it. A clock reading that is non-finite, negative, or backwards is a
-harness failure rather than a published negative duration.
+harness failure rather than a published negative duration, and a clock that
+*throws* is the same failure: it surfaces as an `EvaluationHarnessError` with
+issue code `clock_failed` and a fixed message, never as a raw platform error
+escaping the harness.
 
 Distributions report count, mean, median, p10, p50, p90, p95, p99, minimum, and
 maximum, using one **nearest-rank** percentile method everywhere:

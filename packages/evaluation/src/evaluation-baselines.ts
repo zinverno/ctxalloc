@@ -1,6 +1,7 @@
 import type { CandidateBlock, ContextBlock } from '@ctxalloc/domain';
 import type { Tokenizer } from '@ctxalloc/ports';
 import { canonicalJson, compareCodeUnits, domainSeparatedHash } from './canonical-json.js';
+import { countEvaluationTokens } from './token-measurement.js';
 
 /**
  * Deterministic comparison baselines (DEC-040, METRICS 7).
@@ -15,6 +16,12 @@ import { canonicalJson, compareCodeUnits, domainSeparatedHash } from './canonica
  * shape matches `ContextRenderer` v1 exactly, so a token comparison between a
  * baseline and a compiled context is a comparison of context and not of two wire
  * formats. Equality is proved by a golden test rather than asserted here.
+ *
+ * Every token count here goes through `countEvaluationTokens`, which requires a
+ * non-negative safe integer and turns a throwing tokenizer into a project-owned
+ * failure. A benchmark that published `NaN`, a negative, or a fractional count
+ * would be reporting a measurement nobody could have made, and a negative count
+ * would additionally make a prefix "fit" any budget (INV-BUDGET-005).
  *
  * **Tokenization is not monotonic.** Adding a record to a rendered string can
  * *lower* its token count: the tokenizer merges across the boundary the new
@@ -129,7 +136,7 @@ function buildOf(
       rendererId: EVALUATION_BASELINE_RENDERER_ID,
       rendererVersion: EVALUATION_BASELINE_RENDERER_VERSION,
       includedCandidateCount: candidates.length,
-      contextTokens: tokenizer.countTokens(context),
+      contextTokens: countEvaluationTokens(tokenizer, context),
       contextHash: domainSeparatedHash(BASELINE_CONTEXT_HASH_DOMAIN, context),
     },
     context,
@@ -187,7 +194,7 @@ function longestFittingPrefix(
   let best: readonly CandidateBlock[] = [];
   for (let length = 1; length <= ordered.length; length += 1) {
     const prefix = ordered.slice(0, length);
-    if (tokenizer.countTokens(renderBaselineContext(prefix)) <= availableInputTokens) {
+    if (countEvaluationTokens(tokenizer, renderBaselineContext(prefix)) <= availableInputTokens) {
       best = prefix;
     }
   }

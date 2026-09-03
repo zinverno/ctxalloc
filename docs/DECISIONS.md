@@ -4320,6 +4320,10 @@ The two identifiers stay separate. `EvaluationCase.id` is dataset identity — w
 
 Nothing is defaulted or coerced, and every annotation is cross-checked against the case's own candidate corpus: an annotation naming a block the case does not contain is a broken answer key, and a benchmark run against a broken answer key reports a number that means nothing.
 
+**Wanted and unwanted are exclusive, and required-fact evidence is wanted.** A block named by `requiredFacts[i].evidenceBlockGroups[g][b]` is wanted for exactly the reason a `requiredBlockIds` entry is: the case says the compiled context needs it. Listing it in `irrelevantBlockIds` as well makes the benchmark reward opposite decisions about one block — including it raises weighted fact coverage and lowers the irrelevant-exclusion rate, excluding it does the reverse — so no compilation can score well on both. That is rejected with `conflicting_annotation`, pointing at the exact evidence occurrence, and **never repaired**: nothing is removed from `irrelevantBlockIds` and nothing is added to `relevantBlockIds` or `requiredBlockIds` on the author's behalf. Evidence merely absent from `relevantBlockIds` stays legal; the rule is about contradiction, not completeness.
+
+**Criterion weights must add up exactly.** Each weight is individually a positive safe integer, but a sum of safe integers need not be one, and `earnedWeight / totalWeight` stops being the score the case describes once exact integer arithmetic ends. Validation checks the running total *before* each addition, so the unsafe value is never computed and then inspected.
+
 ### Required-Fact Evidence Is OR-of-AND Block Groups
 
 The METRICS draft modelled evidence as one flat `sourceBlockIds` list. That cannot distinguish two different situations: *either of these blocks proves the fact*, and *these blocks together prove it*. Both occur in a real benchmark — the second is the whole point of the distributed-facts category — and a flat list silently scores one of them wrong.
@@ -4379,6 +4383,8 @@ The harness owns a single `Tokenizer` object and gives it to `CandidateValidator
 
 Provider-native `usage` is a **different** vocabulary and keeps its own names — `providerInputTokens`, `providerOutputTokens`. Nothing subtracts a CtxAlloc count from a provider count: the provider's input count also includes the system prompt and the message framing, so the difference would not be rendering overhead or token reduction. An absent usage value stays absent rather than being estimated.
 
+**Every evaluation-owned token count is validated.** The `Tokenizer` port is an external boundary, and a baseline count is both a published measurement and the thing that decides whether a prefix fits. One internal helper wraps every measurement: it calls the tokenizer exactly once, catches whatever it throws, and requires a non-negative safe integer with no coercion, rounding, or clamping. A throwing tokenizer, a `NaN`, an `Infinity`, a negative, a fractional, or an out-of-range count becomes one `EvaluationHarnessError` with issue code `tokenizer_failed` and a fixed message that carries neither the tokenizer's wording nor the measured text (INV-BUDGET-005, INV-SEC-001). A negative count is not merely cosmetic: it would make any prefix "fit" any budget. The compiler's own token validation is unchanged, and the evaluation layer no longer publishes weaker numbers than the compiler would accept.
+
 ### The Model Sits Outside the Compiler
 
 `ModelProvider` is a narrow project-owned port: one configured model, one text request, one text result. No streaming, tools, function calling, routing, retry, fallback model, prompt-caching orchestration, or pricing — each is a product decision with its own failure semantics, and adding one would start turning CtxAlloc into a model gateway. Model identity belongs to the provider **instance**, not to a request, so one run cannot silently mix two models and call the difference a context effect. Latency is absent from the result: the caller measures it.
@@ -4390,6 +4396,8 @@ One real adapter implements the model port: `AnthropicModelProvider`, over the A
 The adapter **reads no environment**: not `ANTHROPIC_API_KEY`, no configuration file, no working directory. Every value is explicit configuration, validated strictly with exact keys and no defaults. HTTPS is required except on the loopback addresses, where a local stub server can be used without weakening production transport. Credentials, a query, or a fragment in the base URL are rejected.
 
 Nothing leaks from a failure. The API key, the headers, the prompts, the context, the response body, the provider's own error text, and the generated output all stay inside; an `AnthropicModelProviderError` carries a stable code, one fixed message, and — for an HTTP error — the status code, which names the class of problem without quoting anything (INV-SEC-001). A timeout is an `AbortController` abort reported as a project-owned timeout, and nothing is retried automatically.
+
+**Redirects are refused before transmission.** The adapter sets `redirect: "error"`; `fetch` would otherwise follow one by default. A 307 or 308 preserves the method and the body, so an endpoint replying `Location: <other origin>` would have the runtime re-send the `x-api-key` header, the system prompt, and the whole user prompt to a destination the caller never authorized. The configured endpoint is an **authorization boundary**, and a benchmark adapter has no reason to discover another one — so same-origin, cross-origin, loopback, and HTTPS-to-HTTP redirects are all refused alike. Validating a redirect after the fact would be too late: by then the request has already gone, and the `Location` value is itself not disclosed.
 
 ### The Harness Owns the Prompt, and Both Calls Differ Only by Context
 
@@ -4404,6 +4412,10 @@ No instruction text, no delimiter, no commentary. Framing belongs in the system 
 For one case both model calls use the same provider instance, identity, system prompt, query, output limit, temperature, and prompt version. **Only the context differs**, the full baseline is called first and the compiled context second, and the order is recorded. This is regression-tested directly.
 
 A provider failure is a failure. A baseline failure and a compiled failure are distinct result states, neither becomes an answer score of zero, and a failed pair is excluded from the quality aggregate and counted separately — a model that could not be reached said nothing about the context, and scoring silence as a wrong answer would blame the compiler for an outage.
+
+`callOrder` records the calls **attempted**, not planned: empty when no model ran, `["full-baseline"]` when the baseline call failed and the compiled call therefore never happened, and both entries otherwise. A two-entry order published after a failed baseline call would be a false audit record of a call that did not occur.
+
+**A quality loss requires one concrete model.** `actualModelId` is recorded rather than checked against the configured identifier, because a provider may legitimately resolve an alias to a concrete version. But when both calls report a concrete model and the two **differ**, two experimental variables changed — the context and the model — and the difference between the answers is no longer a context effect. Both call results and both scores stay published; `qualityLoss` and `severeQualityLoss` are withheld, `qualityComparisonIssue: "actual-model-mismatch"` is recorded on the case, and the suite report counts it under `modelIdentityMismatches` so a blocked comparison cannot be mistaken for an unscored one. When one or both identifiers are absent, the provider-instance contract stands and the comparison proceeds.
 
 ### Answer Evaluation Is Deterministic and Rule-Based
 
@@ -4434,7 +4446,7 @@ end   = clock.nowMilliseconds()
 duration = end - start
 ```
 
-Both readings must be finite and non-negative and `end >= start`. A clock that moved backwards would produce a negative duration, and publishing one would report a measurement that cannot have happened, so it is an `EvaluationHarnessError` instead.
+Both readings must be finite and non-negative and `end >= start`. A clock that moved backwards would produce a negative duration, and publishing one would report a measurement that cannot have happened, so it is an `EvaluationHarnessError` with issue code `clock_failed` instead. A clock that **throws** — an adapter exception, or a test double running out of readings — is wrapped into the same failure with a fixed message, so no dependency's wording escapes the port boundary (INV-ADAPTER-003).
 
 Compilation latency, full-baseline model latency, and compiled-context model latency are measured separately, and `compiledRequestLatency = compilationLatency + compiledModelLatency` is derived. That is deliberately **not** METRICS 17.5 complete context-preparation latency: Phase 17 uses static candidate cases, so no retrieval time is in it.
 
@@ -4521,7 +4533,7 @@ CI runs the whole dataset with model execution **disabled**, and the answer-eval
 
 `@ctxalloc/ports` gains `ModelProvider`, `ModelProviderRequest`, `ModelProviderResult`, `ModelProviderUsage`, and `MonotonicClock`. It still has **no runtime export**, and no HTTP, `fetch`, or provider type appears in it.
 
-`@ctxalloc/adapters` gains `AnthropicModelProvider` with its configuration, its project-owned error and error-code union, and its identity constants, plus `SystemMonotonicClock`. It still depends on `@ctxalloc/ports` alone, and no `Response`, `Headers`, `AbortSignal`, `AbortController`, `Buffer`, or `node:` type reaches a public declaration.
+`@ctxalloc/adapters` gains `AnthropicModelProvider` with its configuration, its project-owned error and error-code union, and its identity constants, plus `SystemMonotonicClock`. The model adapter refuses HTTP redirects. It still depends on `@ctxalloc/ports` alone, and no `Response`, `Headers`, `AbortSignal`, `AbortController`, `Buffer`, or `node:` type reaches a public declaration.
 
 `@ctxalloc/testing` gains `FakeModelProvider` and `FakeMonotonicClock` with their configuration and failure errors. Neither derives anything from its input: the model double answers only from its script and invents no token usage, and the clock double returns only the sequence it was given and fails explicitly when exhausted.
 

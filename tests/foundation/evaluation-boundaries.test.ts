@@ -175,6 +175,8 @@ describe('INV-DEP-003: the evaluation package sits above the compiler only', () 
       'buildFullContextBaseline',
       'buildTruncationBaseline',
       'buildTopKBaseline',
+      'countEvaluationTokens',
+      'EvaluationTokenMeasurementError',
     ]) {
       expect(entry, `exports ${internal}`).not.toContain(internal);
     }

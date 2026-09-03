@@ -26,7 +26,9 @@ import type { ModelProvider, ModelProviderRequest, ModelProviderResult } from '@
  *
  * **Nothing leaks.** The API key, the request headers, the prompts, the context,
  * the response body, the provider's own error text, and the generated output all
- * stay inside. A failure carries a stable project-owned code, one fixed message,
+ * stay inside. **Redirects are refused**: the configured endpoint is the endpoint
+ * the caller authorized, and following a 307 or 308 would re-send the credential
+ * and the whole prompt to a destination chosen by the other side. A failure carries a stable project-owned code, one fixed message,
  * and — for an HTTP error — the status code, which names the class of problem
  * without quoting anything the caller did not ask to disclose (INV-SEC-001,
  * INV-ADAPTER-003).
@@ -300,12 +302,24 @@ export class AnthropicModelProvider implements ModelProvider {
           'anthropic-version': this.#apiVersion,
         },
         body,
+        // The configured endpoint is an authorization boundary, not a starting
+        // point for discovery. `fetch` follows redirects by default, and a 307
+        // or 308 preserves the method and the body — so a compromised or
+        // misconfigured endpoint could reply `Location: <other origin>` and have
+        // the runtime re-send the `x-api-key` header, the system prompt, and the
+        // whole user prompt somewhere the caller never authorized. Rejecting at
+        // the fetch boundary is the only point that helps: validating a redirect
+        // after the fact is too late, because the request has already gone
+        // (INV-SEC-001).
+        redirect: 'error',
         signal: controller.signal,
       });
     } catch {
       // The rejection reason is discarded deliberately. A `fetch` failure names
       // the host it could not reach and, for some causes, echoes request detail;
-      // neither belongs in an error this adapter publishes.
+      // neither belongs in an error this adapter publishes. A refused redirect
+      // arrives here too, and its `Location` is exactly the value not to
+      // disclose.
       throw timedOut
         ? new AnthropicModelProviderError(
             'ANTHROPIC_MODEL_PROVIDER_TIMEOUT',

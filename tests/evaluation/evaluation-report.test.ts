@@ -229,6 +229,7 @@ describe('suite report: ordering, counts, and composition', () => {
       determinismFailures: 0,
       budgetViolations: 0,
       severeQualityLosses: 0,
+      modelIdentityMismatches: 0,
     });
   });
 

@@ -168,6 +168,9 @@ export interface EvaluationModelCallResult {
   readonly actualModelId?: string;
 }
 
+/** Why a quality comparison could not be made from two otherwise valid answers. */
+export type EvaluationQualityComparisonIssue = 'actual-model-mismatch';
+
 /**
  * The model half of one case result.
  *
@@ -175,9 +178,22 @@ export interface EvaluationModelCallResult {
  * compiled context that answers *better* than the full one is a real result, and
  * clamping it to zero would hide it (METRICS 11.6). Both values must exist for a
  * loss to exist — a failed provider call never becomes a zero score.
+ *
+ * `qualityComparisonIssue` records why a loss is absent even though both calls
+ * succeeded and both were scored. Today there is one reason: the two calls
+ * reported **different** `actualModelId` values, so context was not the only
+ * variable that changed and the difference is not a context effect. Both scores
+ * are still published; only the comparison is withheld.
  */
 export interface EvaluationModelResult {
   readonly state: EvaluationModelState;
+  /**
+   * The calls actually **attempted**, in order.
+   *
+   * Empty when no model ran; `['full-baseline']` when the baseline call failed
+   * and the compiled call therefore never happened; both entries otherwise.
+   * Publishing a planned order would be a false audit record.
+   */
   readonly callOrder: readonly EvaluationModelCall[];
   readonly providerId?: string;
   readonly providerVersion?: string;
@@ -186,6 +202,7 @@ export interface EvaluationModelResult {
   readonly compiled?: EvaluationModelCallResult;
   readonly failedCall?: EvaluationModelCall;
   readonly failureCode?: string;
+  readonly qualityComparisonIssue?: EvaluationQualityComparisonIssue;
   readonly qualityLoss?: number;
   readonly severeQualityLoss?: boolean;
 }
@@ -284,6 +301,8 @@ export interface EvaluationReportCounts {
   readonly determinismFailures: number;
   readonly budgetViolations: number;
   readonly severeQualityLosses: number;
+  /** Cases where the two calls reported different concrete models. */
+  readonly modelIdentityMismatches: number;
 }
 
 /** Distributions of the measured metrics, each absent when nothing produced it. */

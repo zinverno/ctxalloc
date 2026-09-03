@@ -416,11 +416,33 @@ function validateFacts(facts: readonly EvaluationRequiredFact[]): readonly Valid
   return issues;
 }
 
+/**
+ * Validates the criteria, including that their weights still add up exactly.
+ *
+ * Each weight is individually a positive safe integer, but a *sum* of safe
+ * integers is not necessarily one: `MAX_SAFE_INTEGER` plus `1` is where exact
+ * integer arithmetic ends, and `earnedWeight / totalWeight` would stop being the
+ * score the case describes. The running total is therefore checked **before**
+ * each addition, so the unsafe value is never computed and then inspected.
+ */
 function validateCriteria(criteria: readonly AnswerCriterion[]): readonly ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const seenIds = new Set<string>();
+  let totalWeight = 0;
 
   criteria.forEach((criterion, index) => {
+    if (totalWeight > Number.MAX_SAFE_INTEGER - criterion.weight) {
+      issues.push(
+        issue(
+          'invalid_case',
+          ['answerCriteria', index, 'weight'],
+          'must keep the total criterion weight within the safe integer range',
+        ),
+      );
+    } else {
+      totalWeight += criterion.weight;
+    }
+
     if (seenIds.has(criterion.id)) {
       issues.push(
         issue(
@@ -459,8 +481,21 @@ function validateCriteria(criteria: readonly AnswerCriterion[]): readonly Valida
  *
  * Both checks catch the same class of mistake: an answer key that has drifted
  * from the corpus it describes. A required identifier no candidate carries makes
- * required-block recall unreachable by construction, and a block that is both
- * relevant and irrelevant makes two metrics disagree about the same block.
+ * required-block recall unreachable by construction.
+ *
+ * **"Wanted" includes required-fact evidence.** A block named by
+ * `requiredFacts[i].evidenceBlockGroups[g][b]` is wanted for exactly the same
+ * reason a `requiredBlockIds` entry is: the case says the compiled context needs
+ * it. Listing it as irrelevant as well makes the benchmark reward opposite
+ * decisions about one block — including it raises weighted fact coverage and
+ * lowers the irrelevant-exclusion rate, and excluding it does the reverse — so no
+ * compilation can score well on both. That is a broken answer key, and it is
+ * **rejected, never repaired**: nothing is removed from `irrelevantBlockIds` and
+ * nothing is added to `relevantBlockIds` or `requiredBlockIds` on the author's
+ * behalf.
+ *
+ * Evidence that is simply not listed in `relevantBlockIds` stays perfectly legal:
+ * the rule is about contradiction, not about completeness.
  */
 function validateAnnotations(
   shape: {
@@ -531,6 +566,24 @@ function validateAnnotations(
       }
     });
   }
+
+  // The pointer names the exact evidence occurrence, so an author reading the
+  // failure knows which group member to change rather than which fact.
+  shape.requiredFacts.forEach((fact, factIndex) => {
+    fact.evidenceBlockGroups.forEach((group, groupIndex) => {
+      group.forEach((blockId, blockIndex) => {
+        if (irrelevant.has(blockId)) {
+          issues.push(
+            issue(
+              'conflicting_annotation',
+              ['requiredFacts', factIndex, 'evidenceBlockGroups', groupIndex, blockIndex],
+              'must not also be annotated as an irrelevant block',
+            ),
+          );
+        }
+      });
+    });
+  });
 
   return issues;
 }

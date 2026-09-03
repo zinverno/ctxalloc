@@ -167,11 +167,13 @@ describe('evaluation harness: context preservation (METRICS 9)', () => {
             acceptableEvidence: ['alpha'],
           },
           {
+            // Evidence deliberately avoids `blk:c`, which this case annotates as
+            // irrelevant: a block cannot be both wanted and unwanted.
             id: 'fact:minor',
-            description: 'Beta and gamma together.',
+            description: 'Alpha and beta together.',
             importance: 'minor',
-            evidenceBlockGroups: [['blk:b', 'blk:c']],
-            acceptableEvidence: ['beta gamma'],
+            evidenceBlockGroups: [['blk:a', 'blk:b']],
+            acceptableEvidence: ['alpha beta'],
           },
         ],
       }),

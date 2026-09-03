@@ -70,6 +70,7 @@ const DECLARATIONS = [
   'packages/evaluation/dist/answer-evaluator.d.ts',
   'packages/evaluation/dist/evaluation-report.d.ts',
   'packages/evaluation/dist/evaluation-harness.d.ts',
+  'packages/evaluation/dist/token-measurement.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -2467,6 +2468,18 @@ requireContains(
   'packages/evaluation/dist/evaluation-baselines.d.ts',
   'type EvaluationBaselineResult',
 );
+requireContains(
+  'packages/evaluation/dist/evaluation-report.d.ts',
+  'type EvaluationQualityComparisonIssue',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-report.d.ts',
+  'readonly modelIdentityMismatches: number;',
+);
+requireContains(
+  'packages/evaluation/dist/token-measurement.d.ts',
+  'declare function countEvaluationTokens(tokenizer: Tokenizer, text: string): number;',
+);
 requireContains('packages/evaluation/dist/evaluation-report.d.ts', 'interface EvaluationReport');
 requireContains(
   'packages/evaluation/dist/evaluation-report.d.ts',
@@ -2506,6 +2519,8 @@ requireContains(
       'buildFullContextBaseline',
       'buildTruncationBaseline',
       'buildTopKBaseline',
+      'countEvaluationTokens',
+      'EvaluationTokenMeasurementError',
       'AnthropicResponse',
       'Anthropic',
     ]) {

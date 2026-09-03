@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
@@ -318,6 +319,97 @@ describe('AnthropicModelProvider: failures and privacy', () => {
     // Reopened so the shared teardown has a server to close.
     server = createServer();
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  });
+});
+
+describe('AnthropicModelProvider: redirects are refused before transmission', () => {
+  /**
+   * The configured endpoint is an authorization boundary.
+   *
+   * `fetch` follows redirects by default, and a 307 or 308 preserves the method
+   * and the body — so an endpoint replying `Location: <other origin>` would have
+   * the runtime re-send `x-api-key`, the system prompt, and the whole user prompt
+   * to a destination the caller never authorized. Validating a redirect after the
+   * fact does not help: by then the request has already gone.
+   */
+  let target: Server;
+  let targetUrl: string;
+  let targetHits: Captured[] = [];
+
+  beforeEach(async () => {
+    targetHits = [];
+    target = createServer((request, response) => {
+      let body = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk: string) => {
+        body += chunk;
+      });
+      request.on('end', () => {
+        targetHits.push({
+          method: request.method ?? '',
+          url: request.url ?? '',
+          headers: request.headers,
+          body,
+        });
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify(successPayload()));
+      });
+    });
+    await new Promise<void>((resolve) => target.listen(0, '127.0.0.1', resolve));
+    const address = target.address() as AddressInfo;
+    targetUrl = `http://127.0.0.1:${String(address.port)}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => {
+      target.closeAllConnections();
+      target.close(() => {
+        resolve();
+      });
+    });
+  });
+
+  it.each([307, 308])(
+    'rejects a %s redirect, and the target receives nothing at all',
+    async (status) => {
+      respond = (_request, response) => {
+        response.writeHead(status, { location: `${targetUrl}/v1/messages` });
+        response.end();
+      };
+
+      const error = await failureOf(new AnthropicModelProvider(config()).generate(request()));
+      expect(error.code).toBe('ANTHROPIC_MODEL_PROVIDER_TRANSPORT_FAILED');
+
+      // The configured endpoint saw exactly one request, and nothing was retried.
+      expect(captured).toHaveLength(1);
+      // The redirect target saw none: no key, no prompts, no body.
+      expect(targetHits).toHaveLength(0);
+
+      const serialized = `${error.message} ${JSON.stringify(error)} ${String(error.stack)}`;
+      for (const secret of [API_KEY, 'CONTEXT-SECRET', 'QUERY-SECRET', targetUrl]) {
+        expect(serialized, `leaks ${secret}`).not.toContain(secret);
+      }
+    },
+  );
+
+  it('refuses a same-origin redirect too, because discovery is not its job', async () => {
+    respond = (_request, response) => {
+      response.writeHead(307, { location: `${baseUrl}/v1/messages` });
+      response.end();
+    };
+    const error = await failureOf(new AnthropicModelProvider(config()).generate(request()));
+    expect(error.code).toBe('ANTHROPIC_MODEL_PROVIDER_TRANSPORT_FAILED');
+    expect(captured).toHaveLength(1);
+  });
+
+  it('asks the runtime for redirect: "error" rather than relying on a default', () => {
+    const source = readFileSync(
+      new URL('../../packages/adapters/src/anthropic-model-provider.ts', import.meta.url),
+      'utf8',
+    );
+    expect(source).toContain("redirect: 'error'");
+    expect(source).not.toContain("redirect: 'follow'");
+    expect(source).not.toContain("redirect: 'manual'");
   });
 });
 

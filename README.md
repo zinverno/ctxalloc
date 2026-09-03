@@ -28,6 +28,13 @@ the context, and reports token reduction, context preservation, answer quality
 loss, and latency as **separate** numbers. One real model adapter is available
 for that, and CI runs the whole benchmark with model execution disabled.
 
+Every measurement boundary fails loudly rather than publishing a weaker number:
+the model adapter refuses redirects before a request is transmitted, so an API
+key and a prompt are never re-sent to an unauthorized host; baseline token
+counts are accepted only as non-negative safe integers; a throwing tokenizer or
+clock becomes a named harness failure; and quality loss is withheld when the two
+model calls report different actual models.
+
 Phase 17 adds **no** compiler selection behavior. The compiler calls no model and
 reads no clock.
 
