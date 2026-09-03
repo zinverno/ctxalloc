@@ -610,8 +610,16 @@ Invalid values include:
 
 * `NaN`;
 * `Infinity`;
-* negative values when prohibited by the schema;
-* values outside the documented provider range.
+* negative values when prohibited by the schema.
+
+**A value outside a scoring policy's normalization window is a different finding
+and is not listed here.** `RetrievalNormalizationRule.min` / `max` state the raw
+interval one policy is prepared to normalize; they are not a claim about what the
+provider may emit, and a metric that is unbounded above can exceed any finite
+window while remaining a perfectly valid measurement. That case rejects with
+`retrieval_score_out_of_range`, meaning *this policy does not cover this raw
+value* rather than *the provider is invalid* (DEC-032, DEC-041). It must still
+never be clamped.
 
 ---
 

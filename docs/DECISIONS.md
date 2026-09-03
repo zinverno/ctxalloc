@@ -1881,16 +1881,20 @@ Phase 9 interprets a raw value only when the policy owns an exact rule for the c
 [providerId, providerVersion, semantics, higherIsBetter]
 ```
 
-Two rules may not own the same tuple. For a matching rule with inclusive range `[min, max]`:
+Two rules may not own the same tuple. For a matching rule with inclusive normalization window `[min, max]`:
 
 ```text
 higherIsBetter true   normalized = (rawValue - min) / (max - min)
 higherIsBetter false  normalized = (max - rawValue) / (max - min)
 ```
 
-The range is fixed policy input. It is never inferred from the provider, from a rank, or from the values observed in the current batch. Batch-relative normalization was rejected outright: it would make one candidate's normalized score change when an unrelated candidate is added or removed, which would make compilation depend on retrieval result composition rather than on the candidate being scored (INV-DET-001).
+`min` and `max` are the policy's **normalization window**, not a claim about what the provider can emit. This is stated precisely because the original wording — "the inclusive bounds of the provider's documented range" — is not satisfiable in general and was **corrected in Phase 18** (DEC-041): several real retrievers have no documented finite maximum. A lexical BM25+ score grows with term frequency and corpus statistics and is unbounded above, so a rule that claimed to state its range would be asserting something untrue about the provider. The window states only which raw interval *this scoring policy* is prepared to interpret.
 
-A raw value below `min` or above `max` rejects scoring rather than clamping. Clamping would silently reinterpret a measurement the policy says it does not describe, and a provider that has started emitting values outside its documented range is a configuration failure worth reporting.
+The window is fixed policy input. It is never inferred from the provider, from a rank, or from the values observed in the current batch. Batch-relative normalization was rejected outright: it would make one candidate's normalized score change when an unrelated candidate is added or removed, which would make compilation depend on retrieval result composition rather than on the candidate being scored (INV-DET-001).
+
+A raw value below `min` or above `max` rejects scoring with `retrieval_score_out_of_range` rather than clamping. The finding means **"this scoring policy does not cover this observed raw value"**, not "the provider returned an invalid value" — an unbounded-above metric can legitimately exceed any finite window without the provider malfunctioning. The correct response is to widen the window deliberately, or to accept that this policy declines to score that batch. Clamping is not a response: it would silently reinterpret a measurement the policy says it does not describe, and publish a normalized value the policy never defined.
+
+Nothing about the algorithm, the schema, or the issue code changes with this correction. The window must still be finite with `min < max`, normalization is still the same linear map, and the arithmetic is untouched. What changed is what the two numbers are understood to assert.
 
 A scored record with no exact rule also rejects, with `retrieval_score_rule_not_found`. Treating it as zero would state that the provider found the block irrelevant, and dropping it silently would hide a policy that no longer covers the retrieval actually in use (INV-SCORE-002, INV-SCORE-004).
 
@@ -4584,6 +4588,219 @@ MVP_SCOPE changes: 3.9 marks `FakeModelProvider` implemented; 3.13 marks the sin
 METRICS changes: section 4 records the implemented `EvaluationCase` v1 and the corrected `RequiredFact`; section 7 records the implemented baselines; sections 8.7 and 8.8 name `EvaluationHarness` as their producer; 11.5 records the rule-based v1 score; section 17 records the Phase 17 latency scope.
 
 **The harness exists. The acceptance gates are not claimed.** A benchmark that runs is not a benchmark that has passed: MVP targets in METRICS remain unmet until a real run reports them. Real retrieval, persistence, the CLI, the HTTP API, pricing and cost, LLM-as-judge, and multi-model routing all remain later phases.
+
+## DEC-041: Select the First Real Offline Lexical CandidateProvider Behind the Existing Port
+
+### Status
+
+Accepted
+
+### Decision
+
+Phase 15 completed the compiler kernel (DEC-038), Phase 16 completed the local source-to-compilation slice (DEC-039), and Phase 17 completed the evaluation harness (DEC-040). Every one of them ran on candidates that a test double proposed without reading the query.
+
+Phase 18 adds the first **real** retrieval implementation behind the already-implemented `CandidateProvider` port:
+
+```text id="rt18a"
+local sources
+  -> source preparation (ControlStore, SourceReader, ingestion, chunking)
+  -> exact prepared ContextBlocks
+  -> MiniSearchCandidateProvider          <- new
+  -> CandidateBlock[] with truthful retrieval evidence
+  -> prepared-corpus provenance boundary  (DEC-039, unchanged)
+  -> ContextCompiler
+  -> CompilationResult
+```
+
+Retrieval stays **outside and before** the compiler. `ContextCompiler` and every stage it composes are unchanged in behavior; no compiler file is touched; the port is unchanged; the domain is unchanged. The compiler still cannot tell which provider produced a candidate, which is the whole point of the seam (INV-DEP-002, INV-ALLOC-002).
+
+### The Spike Rejected the Named Primary Candidate
+
+`docs/RETRIEVAL_SPIKE.md` records the evidence. Two technologies were installed and executed against eight hard gates: `@tobilu/qmd` 2.8.3, named in the phase brief, and `minisearch` 7.2.0.
+
+**QMD was rejected on evidence, not on reading.** It is a capable on-device search product, and that is precisely the problem: it owns document identity, chunking, and storage — the responsibilities CtxAlloc already owns and must keep.
+
+* **Gate 1, exact block identity: failed.** QMD's library API creates records by scanning a filesystem collection. No method indexes an in-memory string; `insertDocument` takes a path and reads the body from disk. Identity is provider-owned: `filepath` is `qmd://<collection>/<file>` and `docid` is a truncated content hash, so two distinct blocks with byte-identical content came back sharing `docid` `031e10`. A block identifier could only be preserved by encoding it into a filename and parsing it back, which is a provider-owned identity mapping rather than `String(block.id)`.
+* **Gate 2, explicit corpus: failed.** The corpus can only be supplied as files inside a globbed directory, so the adapter would have to materialize a shadow filesystem corpus and let QMD interpret it — including frontmatter and a filename-derived title.
+* **Gates 3, 7, and 8: failed.** `node-llama-cpp` 3.20.0 is a hard, non-optional dependency, as are `better-sqlite3`, `sqlite-vec`, and four native tree-sitter grammars. Installing the package cost 856 MB, 662 MB of it prebuilt llama.cpp binaries, none of which the BM25 path uses.
+* **Gate 6: failed.** A SQLite database file is mandatory, and the default path resolves to a shared cache location.
+
+`minisearch` 7.2.0 passes all eight. It is selected.
+
+**No project-owned BM25 engine was written.** Writing one to "finish the phase" was available and refused: a search engine is a component with its own correctness surface, and the spike found a technology that already satisfies every gate.
+
+### The Dependency Is Pinned Exactly, Because the Version Is Provenance
+
+`minisearch` is pinned to `7.2.0` with no caret and no tilde, and the pin lives in `packages/adapters/package.json` alone. This is not packaging hygiene: the published score is produced by *this* version's BM25+ implementation, its parameters, and its tokenizer, so a different version is a different metric under the same name. The pin is therefore part of the retrieval contract, and a regression test keeps the adapter's declared library version equal to the manifest pin.
+
+The adapter does **not** read `package.json` at runtime to discover its own version. An adapter that had to open a file to know who it is would make its identity depend on the shape of an installation (INV-DET-003).
+
+MIT-licensed, one package, zero transitive dependencies. No model, embedding, vector, reranker, or database package enters the workspace, and a boundary test asserts the lockfile stays free of them.
+
+### One ContextBlock Is One Retrieval Record
+
+Every supplied `ContextBlock` becomes exactly one indexed document:
+
+```text id="rt18b"
+external record id  = String(block.id)
+searchable text     = block.content     (the only indexed field)
+```
+
+Nothing else is indexed. Not `headingPath`, not the source title, not the source path, not block or source metadata, not a category. The default preference of the phase contract holds: **exact `block.content` only**, and heading text is deliberately not part of the retrieval field contract.
+
+CtxAlloc performs **no** text normalization: no lowercasing, no whitespace collapsing, no Markdown stripping, no Unicode normalization, and no prefix concatenation. MiniSearch applies its own documented lexical handling, and that is recorded here as the field contract: it splits on `/[\n\r\p{Z}\p{P}]+/u` and lowercases each term. There is no stemming and no stop-word list, so a common word can pull a low-scoring block into a result — which is honest lexical behavior and is asserted as such rather than papered over.
+
+No provider-owned chunk can become a candidate, because the provider creates none. Every returned wrapper carries the **exact request block value by reference**: content, `normalizedContentHash`, `tokenCount`, attributes, and metadata are the request's own, never copied, rebuilt, or recomputed (INV-ADAPTER-002, INV-ALLOC-004).
+
+The library never sees a `ContextBlock`. It receives `{ id, content }` records, because a retrieval library holding the live block could mutate it in place and `readonly` stops nothing at run time (INV-ADAPTER-004).
+
+A result identifier that the request corpus does not contain is a project-owned failure, never a fabricated block — and resolution happens **before** ordering and truncation, so a bogus identifier fails the call even when it would have fallen outside `maxCandidates` (INV-PROV-001).
+
+Duplicate block identifiers in one request are **rejected**, not overwritten. A prepared corpus has unique identifiers, but this provider is public, and a silent overwrite would turn two distinct blocks into one and lose the other without a word (INV-BLOCK-002).
+
+### The Score Is Published for What It Actually Is
+
+```text id="rt18c"
+providerId       = "ctxalloc-minisearch-bm25plus"
+providerVersion  = "1+minisearch@7.2.0"
+semantics        = "minisearch-bm25plus-sum-times-matched-query-terms"
+higherIsBetter   = true
+rank             = zero-based, equal to the position in the returned array
+```
+
+MiniSearch computes a BM25+ score per matched query term over the indexed field and returns their **sum multiplied by the number of matched query terms**. That product is what the adapter publishes. It is not plain BM25 and not a similarity: it is unbounded above, its scale moves with corpus statistics, and it is comparable only among the results of one query over one corpus. Calling it "BM25", "relevance", or "cosine" would be a claim the library does not support (INV-SCORE-002).
+
+The provider identifier says `bm25plus` for the same reason. A policy rule matches `providerId` exactly, so an identifier naming plain BM25 would invite a rule written for that metric to claim a contract it does not describe. The identifier only has to be truthful, not exhaustive; `semantics` carries the detail.
+
+Nothing is invented, clamped, inverted, rescaled, or mapped into `[0, 1]`. Mapping it would publish a number the library never produced under a name suggesting a bounded metric. Values are always finite and, for any match, strictly positive — BM25+ adds a positive floor per matched term, and a block with no matched term is simply not returned rather than returned with a zero. That is pinned as a property of *this* library rather than assumed of BM25 in general, and it is **enforced, not merely observed**: the adapter requires `Number.isFinite(score) && score > 0` before a value may be published. A zero, a `-0`, or a negative is malformed output for this contract rather than a weak match, and publishing one would put a value under `MINISEARCH_RETRIEVAL_SCORE_SEMANTICS` that the named metric cannot produce. It is rejected with `INVALID_RETRIEVAL_SCORE` — never clamped, absolute-valued, coerced, or silently dropped. There is no upper bound; inventing a ceiling would be the same untruth in the other direction.
+
+`providerVersion` binds the adapter revision to the library version because both can change what a score means. A consumer matches on it exactly: `CandidateScorer` refuses to normalize a score whose contract no rule covers, which is exactly the protection wanted when the library moves.
+
+### This Provider Corrects the Phase 9 Normalization Contract
+
+DEC-032 documented `RetrievalNormalizationRule.min` / `max` as "the inclusive bounds of the provider's documented range". This provider is the first real one, and it makes that reading **unsatisfiable**: a BM25+ sum scaled by the matched-term count has no finite documented maximum, so no correct rule for it could exist and every fixture choosing a finite `max` was quietly asserting something untrue about the library.
+
+The contract is corrected here rather than worked around. `min` and `max` are an explicit, versioned **policy normalization window**: the raw interval *this scoring policy* is prepared to map onto `[0, 1]` for one exact contract tuple. They say nothing about what the provider may emit.
+
+Everything else is unchanged, deliberately. The matching tuple is still exact; the window is still fixed policy input, never inferred from the batch; it must still be finite and ordered; normalization is still the same linear map; and the failure is still `retrieval_score_out_of_range`. No schema field, no arithmetic, and no issue code changes.
+
+What changes is what that failure *means*: **"this scoring policy does not cover this observed raw value"**, not "the provider returned an invalid value". A valid MiniSearch score can exceed any finite window without anything being wrong. The response is to widen the window deliberately — a regression proves exactly that round trip: a real measured score is rejected under a narrow window, and the *same* raw values score successfully once only the window widens. Clamping remains forbidden; it would publish a normalized value the policy never defined.
+
+`INV-SCORE-004` is corrected to match: an out-of-window value is no longer listed among invalid scores, because it is a policy-coverage finding rather than an invalid measurement.
+
+### The Search Mode Is Stated, Not Inherited
+
+The adapter passes `combineWith: 'OR'`, `prefix: false`, `fuzzy: false`, and the BM25+ parameters `{ k: 1.2, b: 0.7, d: 0.5 }` explicitly. Every one is also MiniSearch 7.2.0's own default, so **stating them changes no score and no ranking** — a golden test compares the adapter's published values against the library run with no options at all and requires them to be identical.
+
+They are stated because Phase 18 promises a *stable, explicit* retrieval mode, and a mode assembled from library defaults is stable only until the library changes one. An earlier draft of this adapter claimed it used "no combination operator", which was simply false: one was always in effect, silently inherited. Terms are combined with **OR**, so a multi-term query matches a block containing any term and a block containing more of them scores higher on both factors of the product. AND is deliberately not used — it would make a longer query retrieve strictly less, which is not what a relevance ranking is for.
+
+None of it is configurable. A deployment that could retune `combineWith` or the BM25+ parameters would make one deployment's score mean something different from another's under one `providerVersion`, which is exactly the comparability `providerVersion` exists to protect.
+
+**A provider score is not a compiler score.** `CandidateScorer` is unchanged: it still normalizes a raw value only through an explicit `RetrievalNormalizationRule` owning the exact `providerId`, `providerVersion`, `semantics`, `higherIsBetter` tuple, still rejects a value outside the rule's declared range instead of clamping it, and still refuses a batch it has no rule for. No provider-specific normalization is hardcoded into the scorer, and the concrete rule for this provider lives only in tests and examples. The adapter knows nothing about `ScoringPolicy`.
+
+### Ranking Is Made Total by the Adapter
+
+MiniSearch sorts by score descending, but equal scores keep the order the documents were added in. The same corpus in a different array order would therefore return tied results in a different order — the exact failure INV-DET-005 exists to prevent.
+
+The adapter imposes its own total order: score descending, then `block.id` ascending over **UTF-16 code units**. `localeCompare` is not used anywhere, because its result depends on machine locale data. Input array position is not a tie-break at any level, so an input permutation cannot change the result (INV-ALLOC-005).
+
+`rank` is zero-based and equals the array position, stated rather than assumed: the schema imposes no convention, and a consumer reading the evidence and a consumer reading the order must see one ranking. After `maxCandidates` truncates, ranks are renumbered from zero.
+
+### maxCandidates Is a Retrieval Bound, Not a Token Budget
+
+`maxCandidates` caps how many wrappers one call proposes, chosen strictly by lexical rank. The provider never reads the token budget, never inspects `tokenCount`, never computes a compiler score, and never keeps retrieving to fill a budget. Allocation is downstream and belongs to `BudgetAllocator` alone (INV-ALLOC-002).
+
+The configuration is exactly `schemaVersion: 1` and `maxCandidates`. Strict object, unknown fields rejected, no defaults, no coercion, no environment fallback; `maxCandidates` must be a positive safe integer, and zero is rejected because a provider that proposes nothing while looking configured is worse than one that refuses to be built.
+
+There is **no** embedding model, reranker, query-expansion model, semantic weight, hybrid weight, endpoint, API key, index path, or scratch directory — the provider performs none of those things, and a field configuring one would advertise behavior that does not exist. There is no fuzzy or prefix option either: v1 is plain term relevance. Prefix and fuzzy expansion are passed as `false` explicitly rather than inherited, so a future library default cannot quietly turn this provider into an approximate matcher.
+
+**No scratch path is configured because none is needed.** The index is an in-memory value built per call and discarded when the call returns. That removes the whole ephemeral-database problem the phase brief anticipated: there is no file to place, no cleanup to perform in a `finally`, and no failure mode for cleanup — which is why the error surface carries no `cleanup_failed` code.
+
+### The Corpus Is Exactly What the Request Carries
+
+The index is built per call from `request.blocks` and from nothing else. No cache directory, no home-directory collection, no working-directory scan, no previous session's index, and no cross-scope static index. Two scopes holding lexically identical blocks cannot reach each other, because neither call has ever seen the other's corpus (INV-SCOPE-005).
+
+An **empty corpus** and a **blank query** both return `[]` before the library is touched. `LocalCompilationRequest` permits a blank query, so failing on one would break a request the public contract accepts, and proposing nothing is the truthful answer to *what matches this?*. This is an adapter contract about the whole call, not text normalization: a query that is actually searched is never trimmed, lowercased, or Unicode-normalized first.
+
+`referenceTime` is accepted because the port carries it and is used **nowhere** in ranking. Neither are `createdAt`, `updatedAt`, `attributes.priority`, `attributes.required`, `attributes.category`, `headingPath`, block metadata, source metadata, source title, or source type. Those are compiler and application concerns, and a provider that boosted on one would be making an allocation decision under another name.
+
+### Failures Are Project-Owned and Disclose Nothing
+
+One error type, `MiniSearchCandidateProviderError`, with a stable code:
+
+```text id="rt18d"
+MINISEARCH_CANDIDATE_PROVIDER_INVALID_CONFIG
+MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST
+MINISEARCH_CANDIDATE_PROVIDER_DUPLICATE_BLOCK_ID
+MINISEARCH_CANDIDATE_PROVIDER_INDEX_FAILED
+MINISEARCH_CANDIDATE_PROVIDER_SEARCH_FAILED
+MINISEARCH_CANDIDATE_PROVIDER_UNKNOWN_RESULT_BLOCK
+MINISEARCH_CANDIDATE_PROVIDER_INVALID_RETRIEVAL_SCORE
+```
+
+Every code corresponds to a real branch; none was added speculatively.
+
+**Every library call is adapter-owned.** A throw from `addAll` or `search` becomes a project-owned failure and never escapes raw. A malformed search result is rejected rather than coerced: an identifier that is not a string and a score that is not a finite number both fail explicitly, because either would travel into a trace as a measurement (INV-SCORE-004, INV-ADAPTER-003).
+
+Nothing leaks. The error carries a code and, where one exists, the block identifier at fault — a project-owned value the caller already holds. It carries no raw query, no block content, no source content, no library error, no library message or stack, no result payload, and no path (INV-SEC-001).
+
+Request validation is deliberately **thin**: the request is an object with the port's fields, the query is a well-formed UTF-16 string, the two collections are arrays, and the scope is structurally present. It is not a second `CandidateValidator` — the candidate schema, the scope rule, the hash rule, and the token-count rule stay owned by the kernel (INV-DEP-003).
+
+**Inspection is total, and passive.** The configuration, the request, its blocks, and the library's own output are all untrusted at run time: any of them may be a `Proxy` whose traps throw, or an object whose properties are throwing accessors. `Object.keys`, destructuring, and a bare descriptor read would each let a raw `TypeError` — or a message the inspected value chose — escape as this adapter's failure, which is precisely what the Phase 16 and Phase 17 boundaries established must not happen. Every reflective operation therefore goes through a guarded helper that reports failure as data, and the failure becomes a project-owned error naming *where* it happened: `INVALID_CONFIG` at construction, `INVALID_REQUEST` for the request or corpus, and the search codes for library output.
+
+**Not throwing is not sufficient; not executing is the requirement.** An earlier form of this adapter snapshotted an array spine by reading `value.length` and `value[index]`. Both are property *gets*: on a `Proxy` each runs the `get` trap, and on an array carrying an installed getter the element read runs that getter. A `try` around them made a *thrown* failure project-owned, but the untrusted code had already executed — and a getter that does **not** throw is the worse case, because it can mutate external state, answer differently on each read, or simply observe that it was consulted. Reproduced before the fix, one accessor and two `get` traps ran per request.
+
+Every read now goes through `Object.getOwnPropertyDescriptor`, which reports an accessor without invoking it. An array is readable only when `length` is an own data property holding a non-negative safe integer and no index carries an accessor; a hole snapshots as `undefined`, which ordinary validation then rejects, keeping sparseness a deterministic data problem rather than a second reflective failure mode. Regressions count invocations, so reintroducing a plain read fails even when nothing throws.
+
+**A dependency-owned identifier is never published.** `blockId` is documented as a project-owned value the caller already holds, and an identifier a search result carries that the request corpus does not contain is not one — on malformed output it could be arbitrary data. Result identifiers are therefore resolved against the request map *before* any public error may carry one: an unknown or unreadable identifier fails with an empty `blockId` and is copied nowhere at all, while a score problem can name its block only because the identifier has already been proved to come from the caller's own corpus.
+
+### The Phase 16 Provenance Boundary Is Unchanged and Still Authoritative
+
+`CompileLocalContextService` is not modified. It still hands the provider an isolated deep copy of the corpus, still snapshots what the provider returns, and still proves prepared-corpus membership and exact structural equality before compiling.
+
+The real provider is **not** a reason to weaken any of that. A provider being shipped by this project says nothing about a provider being correct, and the boundary exists to catch exactly the case where it is not.
+
+### Evaluation Composes Retrieval; It Does Not Perform It
+
+`EvaluationHarness` is unchanged and still evaluates an explicit `CompilationRequest`. It calls no `CandidateProvider`, and a test asserts it names none. Teaching it to retrieve would make one component own both the measurement and half of what is measured, and a case would stop being static data (INV-DEP-003).
+
+Retrieval-backed evaluation is therefore a **composition outside the harness**: the provider produces a candidate batch over the versioned corpus, the batch is placed into an exact `CompilationRequest`, and the existing harness runs it. Both prefix baselines are built from that real batch, and the **top-k baseline is applicable** — every wrapper agrees on provider, version, metric, and direction, so a normal single-provider result never reports `incomparable-retrieval-evidence`.
+
+No retrieval metric enters `CompilationResult`. Recall and reciprocal rank are retrieval diagnostics, and a compilation result carrying them would publish a number the compiler never computed.
+
+### The Retrieval Dataset Is Diagnostic Evidence, Not a Gate
+
+`benchmarks/retrieval/v1/` adds a transparent fixture corpus and thirteen expected-outcome cases, one per required category, with `recall@k` and reciprocal rank as the only metrics. It is deliberately not a second evaluation framework.
+
+**A no-match case is not a recall or reciprocal-rank observation.** Both are relevance-retrieval metrics, and the no-match case has no relevant block: recall has no denominator and there is no "first relevant result" to rank. An earlier draft answered `1` for recall and `0` for reciprocal rank on that case, which is internally inconsistent — it credits the same empty answer as perfect on one metric and worst on the other — and it made the suite's mean depend on which fill-in convention was chosen rather than on retrieval quality.
+
+The measurement is therefore a discriminated union. A case with a relevance set reports exact `recallAtK` and `reciprocalRank`; a case without one reports `expectedEmptyResult` and `emptyResultSatisfied` and carries neither metric, so a consumer cannot read a number that was never measured. The helpers *fail* rather than return a convention when asked for either metric with no relevance set, and the suite summary reports relevance cases and no-match cases separately — no aggregate mixes them.
+
+Expectations are about **lexical retrieval**, never about compiler selection: a block named relevant is one whose text the query matches, and whether a compilation would include it is a budget and policy question this dataset does not ask. No case claims semantic paraphrase quality from a lexical retriever, and the no-match case pins exactly that limit.
+
+**The first real run is evidence, not a product guarantee.** These numbers establish a baseline over a corpus a reader can inspect; turning them into an MVP acceptance gate would freeze whatever this corpus happens to contain (METRICS 18). Nothing here is tuned against the adapter's output — a case the provider fails is a finding, not a fixture to adjust.
+
+### Consequences
+
+`@ctxalloc/adapters` gains `MiniSearchCandidateProvider` with its configuration, its project-owned error and error-code union, and its identity, library, and score-semantics constants. Its manifest gains `@ctxalloc/domain` — for the candidate wrapper's schema version and the shared UTF-16 check, the same project-owned vocabulary the ports already speak — and `minisearch` pinned to `7.2.0`. It still does **not** depend on `@ctxalloc/compiler`. The internal dependency allowlist is widened to `["@ctxalloc/domain", "@ctxalloc/ports"]`, which is the direction ARCHITECTURE 9 already permits.
+
+No MiniSearch type, option object, index handle, or search result reaches a public declaration. The declaration checker verifies the new surface and the absence of the library's types.
+
+`benchmarks/retrieval/v1/` is added as a versioned dataset of thirteen cases with two metric helpers. `docs/RETRIEVAL_SPIKE.md` is added as committed spike evidence, and its hard gates are kept as regression tests.
+
+`@ctxalloc/domain`, `@ctxalloc/ports`, `@ctxalloc/compiler`, `@ctxalloc/application`, `@ctxalloc/evaluation`, and `@ctxalloc/testing` are **unchanged**. `CandidateProvider`, `CandidateBlock`, `CandidateRetrieval`, `CandidateScorer`, `CompileLocalContextService`, `EvaluationHarness`, and the baselines are unchanged in behavior. `FakeCandidateProvider` remains, and remains the right tool for a test that needs an exact candidate batch rather than a ranking.
+
+`packages/compiler` changes are **documentation and error wording only**: the corrected `RetrievalNormalizationRule` contract and the two messages that named a "range". No scoring arithmetic, no schema field, no issue code, and no ranking rule changes.
+
+INVARIANTS changes: `INV-SCORE-004` no longer lists an out-of-window retrieval value among invalid scores, and states that such a value is a policy-coverage finding instead. No guarantee is weakened: the value still must never be clamped.
+
+ARCHITECTURE changes: 3.4 marks `MiniSearchCandidateProvider` implemented and removes `QmdCandidateProvider` from the future list, recording the rejection; section 8 records the implemented real provider beside the fake and keeps a persistent index future.
+
+MVP_SCOPE changes: 3.12 marks the retrieval spike complete and one real offline lexical provider implemented, records that QMD was inspected and rejected, and keeps hybrid and semantic retrieval future.
+
+METRICS changes: retrieval-backed evaluation can now materialize a real candidate batch; retrieval recall and reciprocal-rank fixtures are diagnostic and are not an MVP gate; the Phase 17 `compiledRequestLatency` definition is unchanged, and retrieval latency is not folded into it.
+
+**Deferred, and named so nothing is assumed:** semantic retrieval, hybrid BM25-plus-vector, embeddings, a vector database or Qdrant, cross-encoder reranking, query expansion, LLM reranking, a persistent retrieval index and its lifecycle, index reuse across requests, file watching, SQLite control-plane, trace, or report persistence, migrations, the CLI, and the HTTP API.
 
 ---
 

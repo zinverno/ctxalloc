@@ -24,7 +24,10 @@
       "@ctxalloc/evaluation": ["packages/evaluation/src/index.ts"],
       "@ctxalloc/ports": ["packages/ports/src/index.ts"],
       "@ctxalloc/testing": ["packages/testing/src/index.ts"],
-      "@ctxalloc/tokenization": ["packages/tokenization/src/index.ts"]
+      "@ctxalloc/tokenization": ["packages/tokenization/src/index.ts"],
+      // The retrieval library is a dependency of `@ctxalloc/adapters`, so a test
+      // that imports it directly needs its types resolved explicitly.
+      "minisearch": ["packages/adapters/node_modules/minisearch/dist/es/index.d.ts"]
     }
   },
   "include": [

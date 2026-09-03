@@ -186,9 +186,15 @@ describe('INV-DEP-003: the evaluation package sits above the compiler only', () 
 });
 
 describe('INV-DEP-001: adapters stay below the kernel', () => {
-  it('depends on ports alone', () => {
+  it('depends on ports, domain, and the one pinned retrieval library', () => {
+    // `@ctxalloc/domain` and `minisearch` arrive with the first real retrieval
+    // adapter (DEC-041). The compiler is still absent, which is the property
+    // this assertion exists for: an adapter that could see the kernel could make
+    // a selection decision.
     expect(readManifest('packages/adapters').dependencies).toEqual({
+      '@ctxalloc/domain': 'workspace:*',
       '@ctxalloc/ports': 'workspace:*',
+      minisearch: '7.2.0',
     });
   });
 

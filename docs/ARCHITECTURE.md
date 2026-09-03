@@ -217,18 +217,27 @@ Implemented:
 * `NodeFileSourceReader` in `@ctxalloc/adapters` (DEC-039);
 * `AnthropicModelProvider` in `@ctxalloc/adapters`, for evaluation only (DEC-040);
 * `SystemMonotonicClock` in `@ctxalloc/adapters` (DEC-040);
+* `MiniSearchCandidateProvider` in `@ctxalloc/adapters`, the first real retrieval
+  implementation (DEC-041);
 * `FakeTokenizer`, `InMemorySourceReader`, `InMemoryControlStore`,
   `FakeCandidateProvider`, `FakeModelProvider`, and `FakeMonotonicClock` in
   `@ctxalloc/testing`.
 
 Future:
 
-* SQLiteFtsCandidateProvider;
-* QmdCandidateProvider;
 * InMemoryTraceStore;
 * SQLiteTraceStore;
 * SQLiteControlStore;
-* ObsidianVaultSourceReader.
+* ObsidianVaultSourceReader;
+* a semantic or hybrid `CandidateProvider`, and a persistent retrieval index.
+
+`QmdCandidateProvider` is **not** on that list any more. QMD was the named
+primary candidate of the Phase 18 retrieval spike and was rejected on evidence:
+its library API creates records by scanning a filesystem collection, so it owns
+document identity and chunking, and its lexical path arrives with a hard
+`node-llama-cpp` dependency it never uses (DEC-041,
+[RETRIEVAL_SPIKE.md](./RETRIEVAL_SPIKE.md)). A future retrieval adapter is
+selected by the same gates, not by the same name.
 
 `AnthropicModelProvider` uses Node's built-in `fetch` and adds no provider SDK.
 It reads no environment variable, no configuration file, and no working
@@ -2436,10 +2445,55 @@ current phase has no persistent retrieval index. A provider that owned an index
 would query it; a provider that does not is handed exactly the corpus the
 application prepared.
 
-Implemented: `FakeCandidateProvider`, a test double that performs no retrieval
-at all. It reads no query, computes no similarity, and invents no score.
+Two implementations exist, and the compiler can distinguish neither:
 
-Future: SQLite FTS5, QMD, Qdrant, or another external retrieval system.
+* `FakeCandidateProvider` in `@ctxalloc/testing` — a test double that performs no
+  retrieval at all. It reads no query, computes no similarity, and invents no
+  score, which is what makes it the right tool for a test that needs an exact
+  candidate batch rather than a ranking (DEC-039).
+* `MiniSearchCandidateProvider` in `@ctxalloc/adapters` — the first **real**
+  provider: offline lexical BM25+ retrieval over exactly the corpus the request
+  carries (DEC-041).
+
+The real adapter consumes **exact `ContextBlock` records**. One prepared block is
+one indexed record whose identifier is `String(block.id)` and whose only
+searchable text is `block.content`; nothing is re-chunked, overlapped, rewritten,
+or reconstructed, and every returned wrapper carries the exact request block
+value. Its index is built per call in memory and discarded when the call returns,
+so no state, no file, and no corpus survives between requests.
+
+Its search mode is **stated, not inherited**: terms are combined with OR, matching
+is exact — no prefix expansion, no fuzzy matching — one field is indexed, and the
+BM25+ parameters are the pinned library defaults restated in the adapter. Each is
+also the library's own default, so stating them changes no score; they are stated
+because a mode assembled from defaults is stable only until the library changes
+one, and none of it is configurable.
+
+Its inspection of untrusted runtime values is **total**: a `Proxy` trap or a
+throwing accessor on the configuration, the request, a block, or the library's own
+output becomes a project-owned error rather than a raw reflection failure, and an
+identifier a search result carries that the request corpus does not contain is
+never published (DEC-041).
+
+The compiler remains retrieval-provider agnostic. A provider score is carried as
+evidence with its own declared semantics and normalized only through an explicit
+`RetrievalNormalizationRule`; it is never read as a compiler score or as an
+ordering instruction (INV-SCORE-002, INV-ALLOC-002).
+
+That rule's `min` and `max` are a **policy normalization window**, not the
+provider's range: this provider's score is unbounded above, so no finite pair
+could state one truthfully. A raw value outside the window rejects with
+`retrieval_score_out_of_range`, meaning *this policy does not cover that value*
+rather than *the provider is invalid*, and it is never clamped (DEC-032 as
+corrected by DEC-041).
+
+Phase 17 evaluation can consume a `CompilationRequest` populated by retrieval,
+but it does not own retrieval execution: `EvaluationHarness` calls no provider,
+and a retrieval-backed run is a composition assembled outside it (DEC-041).
+
+Future: a persistent retrieval index, semantic retrieval, hybrid BM25-plus-vector
+search, reranking, Qdrant, or another external retrieval system. None of them is
+implemented.
 
 The compiler must not know which provider produced the blocks. Candidate order
 is provider-owned, and the application preserves it rather than re-sorting it.

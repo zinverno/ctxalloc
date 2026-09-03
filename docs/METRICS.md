@@ -1416,6 +1416,38 @@ secretExposureCount = 0
 
 Retrieval is outside the compiler kernel but must be evaluated for end-to-end scenarios.
 
+**Phase 18 scope** (DEC-041). The first real `CandidateProvider`,
+`MiniSearchCandidateProvider`, exists, so a **real candidate batch can now be
+materialized** for a query over a prepared corpus and handed to the existing
+`EvaluationHarness` as an exact `CompilationRequest`. That composition happens
+outside the harness: the harness still evaluates an explicit request and calls no
+provider of its own.
+
+Two of the metrics below are implemented, over the versioned fixture corpus in
+`benchmarks/retrieval/v1/`: **recall@k** (16.1) and **reciprocal rank** (16.3, as
+a per-case value and as a mean over the cases that have one). Nothing else in
+this section has a producer yet.
+
+**Both are defined only for a case that has a relevance set.** A no-match case —
+one asserting that a lexical retriever proposes nothing when nothing shares a
+term — has no relevant block, so recall has no denominator and there is no first
+relevant result to rank. Such a case is measured by an explicit empty-result
+expectation instead, carries neither metric, and is **excluded from every
+recall and MRR aggregate**. Answering `1` for recall and `0` for reciprocal rank
+on it, as an earlier draft did, is internally inconsistent and makes an aggregate
+describe the fill-in convention rather than the retriever (DEC-041).
+
+**They are diagnostic, not an acceptance gate.** The initial targets in 16.1
+predate any real retrieval implementation and remain aspirational; the first real
+run establishes a baseline over a corpus a reader can inspect, and no MVP gate is
+created from those numbers. A fixture the provider fails is a finding, not a
+fixture to adjust (section 18).
+
+A retrieval measurement is about **lexical relevance**, never about compiler
+selection: a block the retriever ranks first may be excluded by allocation, and
+reading one number as the other would misreport both. No retrieval metric appears
+on `CompilationResult` — the compiler never computed one.
+
 ## 16.1 Recall at K
 
 ```text id="j0x15m"
@@ -1450,6 +1482,11 @@ MRR
   = average(1 / rank of first relevant result)
 ```
 
+The average is taken over **relevance-bearing cases only**. A case with no
+relevant block contributes to neither the numerator nor the count: it has no
+first relevant result, and including it would average a value the case never
+had (DEC-041).
+
 ## 16.4 Retrieval Noise Ratio
 
 ```text id="j987vb"
@@ -1480,7 +1517,15 @@ compilation latency (17.1), full-baseline model latency, and compiled-context
 model latency (17.6). It derives
 `compiledRequestLatency = compilationLatency + compiledModelLatency`, which is
 deliberately **not** 17.5: Phase 17 uses static candidate cases, so no retrieval
-time is in it. A clock reading that is non-finite or negative is a harness
+time is in it.
+
+**Phase 18 does not change that definition.** A real provider now exists, and a
+candidate batch can be produced by it before a request is evaluated — but that
+retrieval happens outside the harness, and the harness measures no part of it. No
+retrieval latency is folded into `compiledRequestLatency`, and none may be
+without an explicit contract that says so: silently widening a published duration
+would make two runs' numbers incomparable while still printing them under one
+name (DEC-041). A clock reading that is non-finite or negative is a harness
 failure rather than a published impossible duration, and a clock that *throws* is
 the same failure: it surfaces as an `EvaluationHarnessError` with issue code
 `clock_failed` and a fixed message, never as a raw platform error escaping the

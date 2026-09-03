@@ -916,21 +916,30 @@ The first implementation sequence is:
    `CandidateProvider` port;
 3. static benchmark fixtures — **implemented** (DEC-040), under
    `benchmarks/evaluation/v1/`;
-4. technical spike for real retrieval — future;
-5. one selected real retrieval provider — future.
+4. technical spike for real retrieval — **complete** (DEC-041), recorded in
+   [RETRIEVAL_SPIKE.md](./RETRIEVAL_SPIKE.md);
+5. one selected real retrieval provider — **implemented** (DEC-041):
+   `MiniSearchCandidateProvider`, offline lexical BM25+ over exactly the corpus
+   the request carries.
 
-The port is in place, so a real provider replaces the fake without changing the
-application service or the compiler.
+The port was in place, so the real provider was added without changing the
+application service, the port, or the compiler.
 
-Candidate real providers include:
+**QMD was inspected and rejected.** It was the spike's named primary candidate.
+Executed at version 2.8.3, it failed the exact-block-identity gate — its library
+API creates records by scanning a filesystem collection, and its result identity
+is a path plus a truncated content hash, which two byte-identical blocks share —
+and it failed the offline and CI gates, because `node-llama-cpp` is a hard
+dependency its BM25 path never uses. The wording that once expected QMD is
+removed rather than softened: the spike disproved it.
 
-* a small project-owned SQLite FTS5 implementation;
-* QMD;
-* another local retrieval system that passes the adapter contract.
+`minisearch` 7.2.0 is selected and pinned exactly. It is the only retrieval
+dependency, and it lives entirely inside `@ctxalloc/adapters`.
 
-QMD is a candidate, not a required dependency.
+Real hybrid and semantic retrieval remain **future**, as do a persistent
+retrieval index and its lifecycle, reranking, query expansion, and embeddings.
 
-The MVP must not integrate both QMD and Qdrant.
+The MVP must not integrate both QMD and Qdrant, and now integrates neither.
 
 ---
 
@@ -1292,8 +1301,8 @@ The implementation order is:
 11. Markdown integration;
 12. CLI;
 13. optional LLM evaluation;
-14. retrieval technical spike;
-15. one real retrieval adapter;
+14. retrieval technical spike — complete (DEC-041);
+15. one real retrieval adapter — implemented (DEC-041);
 16. HTTP API;
 17. local persistence;
 18. Docker or VPS staging.

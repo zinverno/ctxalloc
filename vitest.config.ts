@@ -10,6 +10,22 @@ import { defineConfig } from 'vitest/config';
 const packageEntry = (name: string): string =>
   fileURLToPath(new URL(`./packages/${name}/src/index.ts`, import.meta.url));
 
+/**
+ * The retrieval library is a dependency of `@ctxalloc/adapters`, not of the
+ * workspace root, so Node resolution from `tests/` cannot find it. The alias lets
+ * an adapter test build a control index and observe the exact scores the library
+ * produces, and — because the alias resolves to the *same* module instance the
+ * adapter loads — lets one test replace `search` to exercise the malformed-result
+ * branches the real library cannot produce.
+ *
+ * It grants tests no architectural licence: `pnpm check:boundaries` and the
+ * retrieval boundary suite still forbid every package source outside
+ * `@ctxalloc/adapters` from naming it.
+ */
+const retrievalLibraryEntry = fileURLToPath(
+  new URL('./packages/adapters/node_modules/minisearch/dist/es/index.js', import.meta.url),
+);
+
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
@@ -29,6 +45,7 @@ export default defineConfig({
       '@ctxalloc/ports': packageEntry('ports'),
       '@ctxalloc/testing': packageEntry('testing'),
       '@ctxalloc/tokenization': packageEntry('tokenization'),
+      minisearch: retrievalLibraryEntry,
     },
   },
 });
