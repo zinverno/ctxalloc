@@ -12,6 +12,8 @@
     }
   },
   "dependencies": {
-    "@ctxalloc/ports": "workspace:*"
+    "@ctxalloc/domain": "workspace:*",
+    "@ctxalloc/ports": "workspace:*",
+    "minisearch": "7.2.0"
   }
 }

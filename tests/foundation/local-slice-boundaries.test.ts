@@ -66,9 +66,16 @@ describe('local slice boundaries: dependency direction', () => {
     expect(manifest.dependencies).toEqual({ zod: '^4.4.3' });
   });
 
-  it('the adapters package depends on the ports and nothing else', () => {
+  it('the adapters package depends on ports, domain, and one pinned retrieval library', () => {
+    // The first real retrieval adapter adds `@ctxalloc/domain` — the same
+    // project-owned vocabulary the ports already speak — and one exactly pinned
+    // lexical library (DEC-041). The compiler stays absent.
     const manifest = readManifest('packages/adapters');
-    expect(manifest.dependencies).toEqual({ '@ctxalloc/ports': 'workspace:*' });
+    expect(manifest.dependencies).toEqual({
+      '@ctxalloc/domain': 'workspace:*',
+      '@ctxalloc/ports': 'workspace:*',
+      minisearch: '7.2.0',
+    });
     expect(manifest.devDependencies).toBeUndefined();
   });
 
@@ -83,6 +90,8 @@ describe('local slice boundaries: dependency direction', () => {
         expect(
           specifier.startsWith('./') ||
             specifier === '@ctxalloc/ports' ||
+            specifier === '@ctxalloc/domain' ||
+            specifier === 'minisearch' ||
             specifier.startsWith('node:'),
           `${path} imports ${specifier}`,
         ).toBe(true);

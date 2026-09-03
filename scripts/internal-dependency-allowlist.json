@@ -1,7 +1,7 @@
 {
   "@ctxalloc/domain": [],
   "@ctxalloc/ports": ["@ctxalloc/domain"],
-  "@ctxalloc/adapters": ["@ctxalloc/ports"],
+  "@ctxalloc/adapters": ["@ctxalloc/domain", "@ctxalloc/ports"],
   "@ctxalloc/compiler": ["@ctxalloc/domain", "@ctxalloc/ports"],
   "@ctxalloc/application": ["@ctxalloc/domain", "@ctxalloc/ports", "@ctxalloc/compiler"],
   "@ctxalloc/tokenization": ["@ctxalloc/domain", "@ctxalloc/ports"],

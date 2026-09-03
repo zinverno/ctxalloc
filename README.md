@@ -9,9 +9,9 @@ or agent framework.
 
 ## Status
 
-Phase 17 — **the compiler kernel is complete, the first local
-source-to-compilation slice is complete, and the evaluation harness is
-complete**.
+Phase 18 — **the compiler kernel is complete, the first local
+source-to-compilation slice is complete, the evaluation harness is complete, and
+the first real lexical candidate provider is complete**.
 
 `ContextCompiler` composes the kernel stages, settles the rendered budget, and
 returns a `CompilationResult` (Phase 15). `CompileLocalContextService` carries
@@ -40,8 +40,39 @@ capability at construction, and every result it resolves with is validated
 before it is hashed, scored, or counted; and quality loss is withheld when the
 two model calls report different actual models.
 
-Phase 17 adds **no** compiler selection behavior. The compiler calls no model and
-reads no clock.
+`MiniSearchCandidateProvider` closes the last gap in that flow: until now every
+candidate came from a test double that never read the query. It is **offline
+lexical retrieval** — BM25+ over exactly the corpus the request carries, with no
+embedding, no model, no reranker, no query expansion, no network, and no index
+that survives the call. One prepared block is one indexed record whose identifier
+is the block's own and whose only searchable text is the block's own content, and
+every candidate it proposes wraps the exact block it was given: nothing is
+re-chunked, rewritten, or reconstructed (Phase 18).
+
+The complete local flow is now real end to end:
+
+```text
+local files
+  -> ControlStore + SourceReader
+  -> ingestion and chunking
+  -> exact prepared ContextBlocks
+  -> MiniSearchCandidateProvider          (lexical retrieval)
+  -> CandidateBlock[] with truthful retrieval evidence
+  -> prepared-corpus provenance boundary
+  -> ContextCompiler
+  -> CompilationResult + settled trace
+```
+
+The provider's score is published for what it is — the library's BM25+ sum times
+the number of matched query terms, unbounded and comparable only within one query
+— and never as a compiler score: the compiler normalizes it only through an
+explicit policy rule and decides inclusion itself. Retrieval proposes; the
+compiler selects. The technology was chosen by a committed spike with hard gates,
+and the primary candidate it names was rejected on measured evidence
+([docs/RETRIEVAL_SPIKE.md](./docs/RETRIEVAL_SPIKE.md)).
+
+Phases 17 and 18 add **no** compiler selection behavior. The compiler calls no
+model, reads no clock, and cannot tell which provider produced a candidate.
 
 The repository contains the TypeScript monorepo scaffolding from Phase 1
 (workspace structure, strict compiler and linting configuration, test
@@ -55,19 +86,24 @@ deterministic test doubles in `@ctxalloc/testing` (`FakeTokenizer`,
 `InMemorySourceReader`, `InMemoryControlStore`, `FakeCandidateProvider`,
 `FakeModelProvider`, `FakeMonotonicClock`) with a reusable tokenizer contract
 test suite, a real offline tokenizer adapter in `@ctxalloc/tokenization`, the
-real local file reader, model adapter, and monotonic clock in
-`@ctxalloc/adapters`, the application use cases in `@ctxalloc/application`
+real local file reader, model adapter, monotonic clock, and lexical candidate
+provider in `@ctxalloc/adapters`, the application use cases in `@ctxalloc/application`
 (source ingestion, Markdown, plain-text, and conversation chunking, and the local
 compilation service), the compiler kernel in `@ctxalloc/compiler` — structural
 request and policy validation plus nine components: `CandidateValidator`,
 `CandidateDeduplicator`, `CandidateScorer`, `CandidateFilter`, `BudgetAllocator`,
 `ContextOrderer`, `ContextRenderer`, the observational `TraceBuilder`, and
 `ContextCompiler` — and the evaluation harness in `@ctxalloc/evaluation` with a
-versioned benchmark dataset under `benchmarks/evaluation/v1/`.
+versioned benchmark dataset under `benchmarks/evaluation/v1/`, plus a versioned
+retrieval dataset under `benchmarks/retrieval/v1/`.
 
-**The product is not complete.** Real retrieval, persistence and SQLite,
-control-plane writing, trace persistence, the CLI, the HTTP API, pricing and
-cost, LLM-as-judge scoring, and multi-model routing remain later phases.
+**The product is not complete.** Semantic and hybrid retrieval, embeddings, a
+vector database, reranking, query expansion, a persistent retrieval index and its
+lifecycle, persistence and SQLite, control-plane writing, trace persistence, the
+CLI, the HTTP API, pricing and cost, LLM-as-judge scoring, and multi-model routing
+remain later phases. Phase 18 retrieval is **lexical only** — it matches words,
+not meaning, and a paraphrase sharing no term with the corpus is a legitimate
+miss.
 
 **No benchmark acceptance gate is claimed.** The harness runs; the MVP targets in
 [Metrics](./docs/METRICS.md) remain unmet until a real run reports them. CtxAlloc
@@ -727,8 +763,11 @@ apps -> application -> compiler -> ports -> domain
 ```
 
 `@ctxalloc/adapters` is the only workspace that touches a filesystem, a network,
-or a platform clock, and it depends on `@ctxalloc/ports` alone: an adapter never
-sees the compiler kernel.
+or a platform clock, and the only one that may depend on an external retrieval
+library. It depends on `@ctxalloc/ports`, on `@ctxalloc/domain` for the
+project-owned types the ports already speak, and on one exactly pinned lexical
+search library — never on the compiler kernel: an adapter that could see the
+kernel could make a selection decision.
 
 `@ctxalloc/evaluation` sits above the compiler and deliberately **not** on
 `@ctxalloc/application`: a benchmark case is static data, so the measurement
@@ -742,3 +781,4 @@ stays decoupled from the pipeline that produces what is measured.
 - [Invariants](./docs/INVARIANTS.md)
 - [Metrics](./docs/METRICS.md)
 - [Decisions](./docs/DECISIONS.md)
+- [Retrieval Spike](./docs/RETRIEVAL_SPIKE.md)

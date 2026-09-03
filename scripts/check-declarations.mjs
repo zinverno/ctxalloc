@@ -45,6 +45,7 @@ const DECLARATIONS = [
   'packages/adapters/dist/node-file-source-reader.d.ts',
   'packages/adapters/dist/anthropic-model-provider.d.ts',
   'packages/adapters/dist/system-monotonic-clock.d.ts',
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
   'packages/domain/dist/index.d.ts',
   'packages/domain/dist/candidate-block.d.ts',
   'packages/domain/dist/block-content-hash.d.ts',
@@ -638,6 +639,147 @@ requireContains(
 );
 requireContains('packages/adapters/dist/index.d.ts', "} from './node-file-source-reader.js'");
 
+// The first real candidate provider keeps its documented runtime-boundary
+// constructor, its narrow configuration, its project-owned error, and its stable
+// retrieval identity (DEC-041).
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'class MiniSearchCandidateProvider implements CandidateProvider',
+);
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'interface MiniSearchCandidateProviderConfig',
+);
+// The configuration is a runtime boundary: the constructor takes `unknown` and
+// validates the documented shape itself, while the interface stays exported for
+// callers that build one in TypeScript (INV-BLOCK-005).
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'constructor(config: unknown);',
+);
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'readonly maxCandidates: number;',
+);
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'getCandidates(request: CandidateProviderRequest): Promise<readonly CandidateBlock[]>;',
+);
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'declare class MiniSearchCandidateProviderError extends Error',
+);
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'MINISEARCH_CANDIDATE_PROVIDER_ID = "ctxalloc-minisearch-bm25"',
+);
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'MINISEARCH_LIBRARY_NAME = "minisearch"',
+);
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'MINISEARCH_LIBRARY_VERSION = "7.2.0"',
+);
+// The provider version binds the adapter revision to the exact library version,
+// because both can change what a score means (DEC-041).
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'MINISEARCH_CANDIDATE_PROVIDER_VERSION = "1+minisearch@7.2.0"',
+);
+requireContains(
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'MINISEARCH_RETRIEVAL_SCORE_SEMANTICS = "minisearch-bm25plus-sum-times-matched-query-terms"',
+);
+requireContains('packages/adapters/dist/index.d.ts', "} from './minisearch-candidate-provider.js'");
+
+// The retrieval library stays behind the adapter: no MiniSearch type, option
+// object, index handle, or search result may appear in the published surface
+// (INV-ADAPTER-001). The project-owned names legitimately begin with the library
+// name, and the stable identity strings name it on purpose, so those are removed
+// before the sweep and are the accepted occurrences.
+const RETRIEVAL_PROJECT_OWNED_NAMES = [
+  // The project-owned error codes, which are a stable public contract.
+  'MINISEARCH_CANDIDATE_PROVIDER_INVALID_CONFIG',
+  'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST',
+  'MINISEARCH_CANDIDATE_PROVIDER_DUPLICATE_BLOCK_ID',
+  'MINISEARCH_CANDIDATE_PROVIDER_INDEX_FAILED',
+  'MINISEARCH_CANDIDATE_PROVIDER_SEARCH_FAILED',
+  'MINISEARCH_CANDIDATE_PROVIDER_UNKNOWN_RESULT_BLOCK',
+  'MINISEARCH_CANDIDATE_PROVIDER_INVALID_RETRIEVAL_SCORE',
+  'MINISEARCH_CANDIDATE_PROVIDER_CONFIG_SCHEMA_VERSION',
+  'MINISEARCH_CANDIDATE_PROVIDER_VERSION',
+  'MINISEARCH_CANDIDATE_PROVIDER_ID',
+  'MINISEARCH_RETRIEVAL_SCORE_HIGHER_IS_BETTER',
+  'MINISEARCH_RETRIEVAL_SCORE_SEMANTICS',
+  'MINISEARCH_LIBRARY_VERSION',
+  'MINISEARCH_LIBRARY_NAME',
+  'MiniSearchCandidateProviderConfig',
+  'MiniSearchCandidateProviderErrorCode',
+  'MiniSearchCandidateProviderError',
+  'MiniSearchCandidateProvider',
+  '"ctxalloc-minisearch-bm25"',
+  '"minisearch-bm25plus-sum-times-matched-query-terms"',
+  // The library name and the provider version name the dependency on purpose:
+  // the exact version is part of retrieval provenance, and each is asserted
+  // above rather than merely tolerated here.
+  '"minisearch"',
+  '"1+minisearch@7.2.0"',
+  // Module and source-map references to this adapter's own file.
+  './minisearch-candidate-provider.js',
+  'minisearch-candidate-provider.d.ts.map',
+];
+
+const RETRIEVAL_LIBRARY_TYPES = [
+  'MiniSearch',
+  'SearchResult',
+  'SearchOptions',
+  'SearchIndex',
+  'AsPlainObject',
+  'SearchableMap',
+  'BM25Params',
+  'Suggestion',
+];
+
+// Retrieval mechanics stay private to the module. An exported index builder,
+// document mapper, or score parser would let a consumer bypass the adapter's own
+// validation and its provenance mapping (DEC-041).
+const RETRIEVAL_INTERNAL_NAMES = [
+  'RetrievalDocument',
+  'ScoredResult',
+  'buildIndex',
+  'documentsOf',
+  'validateRequest',
+  'ownDataProperty',
+  'INDEXED_FIELD',
+];
+
+for (const relativePath of [
+  'packages/adapters/dist/index.d.ts',
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+
+  let stripped = declarations;
+  for (const name of RETRIEVAL_PROJECT_OWNED_NAMES) stripped = stripped.replaceAll(name, '');
+
+  for (const type of RETRIEVAL_LIBRARY_TYPES) {
+    if (stripped.includes(type)) {
+      fail(`${relativePath} exposes the retrieval library type "${type}"`);
+    }
+  }
+  if (/minisearch/i.test(stripped)) {
+    fail(`${relativePath} references the retrieval library outside its stable identity`);
+  }
+  for (const name of RETRIEVAL_INTERNAL_NAMES) {
+    if (declarations.includes(name)) {
+      fail(`${relativePath} exports the retrieval internal "${name}"`);
+    }
+  }
+}
+
 const ADAPTER_LEAKED_TYPES = [
   'Buffer',
   'Stats',
@@ -654,6 +796,7 @@ const ADAPTER_LEAKED_TYPES = [
 for (const relativePath of [
   'packages/adapters/dist/index.d.ts',
   'packages/adapters/dist/node-file-source-reader.d.ts',
+  'packages/adapters/dist/minisearch-candidate-provider.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
