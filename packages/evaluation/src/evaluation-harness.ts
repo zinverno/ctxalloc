@@ -249,10 +249,18 @@ function clockIdentityOf(clock: MonotonicClock): ClockIdentity {
 /**
  * One derived latency, required to stay a real number.
  *
- * Each measured interval is finite, but a sum of two finite doubles is not: the
- * addition can overflow to `Infinity`, and a published `Infinity` would be a
- * duration nobody waited for. Clamping would be worse — it would state a
- * specific wrong number — so the derivation fails instead (METRICS 17).
+ * A sum of two finite doubles is not itself guaranteed finite, and a published
+ * `Infinity` would be a duration nobody waited for. Clamping would be worse — it
+ * would state a specific wrong number — so the derivation fails instead
+ * (METRICS 17).
+ *
+ * Under the current topology this is a **defensive invariant rather than a
+ * reachable failure**: one harness reads one globally non-decreasing clock, and
+ * the compilation and compiled-model intervals it adds are disjoint spans of
+ * that single finite timeline, so their sum cannot exceed the clock's own total
+ * span. The guard exists because that reasoning depends on the composition
+ * staying this way — a second clock, an overlapping measurement, or a duration
+ * arriving from a future code path would each break it silently.
  */
 function derivedLatency(first: number, second: number): number {
   const total = first + second;
@@ -290,6 +298,8 @@ export class EvaluationHarness {
   readonly #tokenizer: Tokenizer;
   readonly #clock: MonotonicClock;
   readonly #clockIdentity: ClockIdentity;
+  /** The last reading this harness accepted from the clock, across every operation. */
+  #lastClockReading: number | null = null;
   readonly #modelProvider: ModelProvider | null;
   readonly #providerIdentity: ProviderIdentity | null;
   readonly #compiler: ContextCompiler;
@@ -537,21 +547,16 @@ export class EvaluationHarness {
   /**
    * Measures one operation with the injected monotonic clock.
    *
-   * Both readings are validated and the interval is required to be
-   * non-decreasing. A clock that moved backwards would produce a negative
-   * duration, and publishing one would be reporting a measurement that cannot
-   * have happened — so it is a harness failure instead.
+   * Every reading is validated by `#reading`, which owns the whole clock
+   * contract — including the non-decreasing rule, enforced across the harness's
+   * entire stream of readings rather than inside this pair. So `end >= start`
+   * holds here by construction, and no second monotonicity rule is stated: two
+   * places deciding the same thing is how they come to disagree.
    */
   #measure<T>(operation: () => T): Measured<T> {
     const start = this.#reading();
     const value = operation();
     const end = this.#reading();
-    if (end < start) {
-      throw new EvaluationHarnessError(
-        'clock_failed',
-        'EvaluationHarness observed a MonotonicClock reading that moved backwards.',
-      );
-    }
     return { value, durationMilliseconds: end - start };
   }
 
@@ -587,12 +592,6 @@ export class EvaluationHarness {
     }
 
     const end = this.#reading();
-    if (end < start) {
-      throw new EvaluationHarnessError(
-        'clock_failed',
-        'EvaluationHarness observed a MonotonicClock reading that moved backwards.',
-      );
-    }
 
     let value: ModelProviderResult;
     try {
@@ -625,6 +624,23 @@ export class EvaluationHarness {
         'EvaluationHarness requires every MonotonicClock reading to be a finite non-negative number.',
       );
     }
+    // The port contract is one non-decreasing stream per instance, not a set of
+    // independent start/end pairs. Comparing only within a pair would accept a
+    // clock that reads 0, 10, 5, 15: both intervals look fine, yet the same
+    // instance moved backwards by five milliseconds between them, and every
+    // duration measured after that point describes a timeline that did not
+    // happen. The comparison is against the previously *accepted* reading, so a
+    // rejected one never becomes the baseline for the next check.
+    if (this.#lastClockReading !== null && reading < this.#lastClockReading) {
+      throw new EvaluationHarnessError(
+        'clock_failed',
+        'EvaluationHarness observed a MonotonicClock reading that moved backwards.',
+      );
+    }
+    // Equal readings are legal: the contract is non-decreasing, and a clock
+    // whose resolution is coarser than an operation reports a zero duration
+    // rather than an impossible one.
+    this.#lastClockReading = reading;
     return reading;
   }
 

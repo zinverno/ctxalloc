@@ -1,6 +1,7 @@
 import { EvaluationHarness, EvaluationHarnessError } from '@ctxalloc/evaluation';
 import type { ModelProvider, ModelProviderResult } from '@ctxalloc/ports';
 import { FakeMonotonicClock } from '@ctxalloc/testing';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { summarize } from '../../packages/evaluation/src/evaluation-report.js';
 import {
@@ -635,55 +636,166 @@ describe('the clock identity is validated and snapshotted (DEC-040)', () => {
   });
 });
 
-describe('derived and aggregated latency stay finite (METRICS 17)', () => {
-  /** Alternating readings, so every measured interval is the largest double. */
-  function extremeClock(): FakeMonotonicClock {
-    return new FakeMonotonicClock(
-      Array.from({ length: 60 }, (_, index) => (index % 2 === 0 ? 0 : Number.MAX_VALUE)),
+describe('the clock contract is one non-decreasing stream (DEC-040)', () => {
+  /**
+   * The port promises readings that never decrease *within one instance*, not
+   * merely within one measured pair. Checking only `end >= start` accepts a
+   * clock reading `0, 10, 5, 15`: both intervals look sound, yet the instance
+   * lost five milliseconds between them, and every later duration describes a
+   * timeline that did not happen.
+   */
+  it('rejects a rollback that happens between two measured operations', async () => {
+    const provider = providerReturning(VALID, VALID);
+    const harness = new EvaluationHarness(
+      compilerConfig(),
+      wordTokenizer,
+      // Compilation measures 0 -> 10. The baseline call then opens at 5.
+      new FakeMonotonicClock([0, 10, 5, 15, 20, 25]),
+      provider,
     );
-  }
+
+    try {
+      await harness.runCase(EXECUTING, simpleCase());
+    } catch (cause) {
+      expect(cause).toBeInstanceOf(EvaluationHarnessError);
+      expect((cause as EvaluationHarnessError).issueCode).toBe('clock_failed');
+      // Rejected at the reading that opens the call, before the provider is
+      // asked anything and before any case result exists.
+      expect(provider.calls.count).toBe(0);
+      return;
+    }
+    throw new Error('expected a rejection');
+  });
+
+  it('rejects a rollback inside one measured operation just the same', async () => {
+    const provider = providerReturning(VALID, VALID);
+    const harness = new EvaluationHarness(
+      compilerConfig(),
+      wordTokenizer,
+      // The baseline call opens at 500 and the reading that closes it is 100.
+      new FakeMonotonicClock([0, 10, 500, 100]),
+      provider,
+    );
+
+    const error = await harness.runCase(EXECUTING, simpleCase()).then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(EvaluationHarnessError);
+    expect((error as EvaluationHarnessError).issueCode).toBe('clock_failed');
+  });
+
+  it('accepts equal successive readings, because the contract is non-decreasing', async () => {
+    // A clock coarser than the operation being measured reports a zero
+    // duration. That is a real measurement, not a broken one.
+    const result = await new EvaluationHarness(
+      compilerConfig(),
+      wordTokenizer,
+      new FakeMonotonicClock([0, 0, 0, 0]),
+    ).runCase(runConfig(), simpleCase());
+
+    expect(result.compilationLatencyMilliseconds).toBe(0);
+  });
+
+  it('refuses a reading that is not a finite non-negative number', async () => {
+    // `FakeMonotonicClock` will not script such a value, so this needs a raw
+    // clock. A refused reading is also never stored as the baseline for the
+    // next comparison — a rejected value must not redefine the timeline.
+    const readings = [0, 10, Number.NaN, 20];
+    let index = 0;
+    const harness = new EvaluationHarness(compilerConfig(), wordTokenizer, {
+      id: 'raw-clock',
+      version: '1',
+      nowMilliseconds: (): number => {
+        const value = readings[index] ?? 0;
+        index += 1;
+        return value;
+      },
+    });
+
+    // Two compilation-only cases: the first measures 0 -> 10, and the reading
+    // that opens the second is the invalid one. The stream spans cases.
+    const error = await harness
+      .runSuite(runConfig(), [simpleCase({ id: 'case-1' }), simpleCase({ id: 'case-2' })])
+      .then(
+        () => null,
+        (cause: unknown) => cause,
+      );
+    expect(error).toBeInstanceOf(EvaluationHarnessError);
+    expect((error as EvaluationHarnessError).issueCode).toBe('clock_failed');
+  });
+});
+
+describe('latency arithmetic stays finite (METRICS 17)', () => {
+  /**
+   * A large finite value chosen as a power of two, so `M`, `2M`, and `3M` are
+   * each exactly representable and every difference below is exact. A value
+   * like `MAX_VALUE / 4` is not: `3M` would need one more mantissa bit than a
+   * double has, and the test would be asserting a rounding error.
+   */
+  const M = 2 ** 1020;
 
   it('publishes one very large finite duration unchanged', async () => {
     const result = await new EvaluationHarness(
       compilerConfig(),
       wordTokenizer,
-      extremeClock(),
+      new FakeMonotonicClock([0, Number.MAX_VALUE]),
     ).runCase(runConfig(), simpleCase());
 
     expect(result.compilationLatencyMilliseconds).toBe(Number.MAX_VALUE);
     expect(result.compiledRequestLatencyMilliseconds).toBeUndefined();
   });
 
-  it('rejects a derived request latency that overflows instead of publishing it', async () => {
-    // Both intervals are finite and legitimate; their sum is not a double. A
-    // published `Infinity` would be a duration nobody waited for, and clamping
-    // would state a specific wrong number instead.
+  it('derives a finite request latency from large valid monotonic durations', async () => {
+    // Compilation 0 -> M, baseline call M -> 2M, compiled call 2M -> 3M. One
+    // non-decreasing timeline, three disjoint spans of it.
     const provider = providerReturning(VALID, VALID);
+    const result = await new EvaluationHarness(
+      compilerConfig(),
+      wordTokenizer,
+      new FakeMonotonicClock([0, M, M, 2 * M, 2 * M, 3 * M]),
+      provider,
+    ).runCase(EXECUTING, simpleCase());
 
-    try {
-      await harnessWith(provider, extremeClock()).runCase(EXECUTING, simpleCase());
-    } catch (cause) {
-      expect(cause).toBeInstanceOf(EvaluationHarnessError);
-      expect((cause as EvaluationHarnessError).issueCode).toBe('clock_failed');
-      return;
-    }
-    throw new Error('expected a rejection');
+    expect(result.compilationLatencyMilliseconds).toBe(M);
+    expect(result.model.compiled?.latencyMilliseconds).toBe(M);
+    expect(result.compiledRequestLatencyMilliseconds).toBe(2 * M);
+    expect(Number.isFinite(result.compiledRequestLatencyMilliseconds ?? Number.NaN)).toBe(true);
+  });
+
+  it('keeps the finite-add guard on the derived latency', () => {
+    // The guard is deliberately unreachable under the current topology: one
+    // harness reads one globally non-decreasing clock, so the two disjoint
+    // spans it adds cannot sum past that clock's own finite span. It is checked
+    // at the source, because the alternative is exporting an internal helper to
+    // exercise a branch that valid inputs cannot reach.
+    const source = readFileSync(
+      new URL('../../packages/evaluation/src/evaluation-harness.ts', import.meta.url),
+      'utf8',
+    );
+    expect(source).toContain('function derivedLatency(');
+    expect(source).toContain('if (!Number.isFinite(total))');
+    expect(source).toContain(
+      "'EvaluationHarness derived a request latency that is not a finite number.'",
+    );
   });
 
   it('means two maximal observations without overflowing the intermediate sum', () => {
+    // Aggregation arithmetic, independent of any clock: the naive `sum / n`
+    // reaches Infinity on the way to a mean that is perfectly representable.
     const distribution = summarize([Number.MAX_VALUE, Number.MAX_VALUE]);
 
     expect(distribution?.mean).toBe(Number.MAX_VALUE);
     expect(Number.isFinite(distribution?.mean ?? Number.NaN)).toBe(true);
   });
 
-  it('keeps every aggregate finite in a report built from extreme latencies', async () => {
+  it('keeps every aggregate finite in a report built from large latencies', async () => {
+    // Three compilation-only cases over one non-decreasing timeline: each case
+    // measures a span of M, and the readings rise 0, M, M, 2M, 2M, 3M.
     const report = await new EvaluationHarness(
       compilerConfig(),
       wordTokenizer,
-      new FakeMonotonicClock(
-        Array.from({ length: 120 }, (_, index) => (index % 2 === 0 ? 0 : Number.MAX_VALUE)),
-      ),
+      new FakeMonotonicClock([0, M, M, 2 * M, 2 * M, 3 * M]),
     ).runSuite(runConfig(), [
       simpleCase({ id: 'case-1' }),
       simpleCase({ id: 'case-2' }),
@@ -691,7 +803,7 @@ describe('derived and aggregated latency stay finite (METRICS 17)', () => {
     ]);
 
     const distribution = report.latency.compilation;
-    expect(distribution).toBeDefined();
+    expect(distribution?.mean).toBe(M);
     for (const value of Object.values(distribution ?? {})) {
       expect(Number.isFinite(value)).toBe(true);
     }

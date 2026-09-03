@@ -1480,19 +1480,34 @@ compilation latency (17.1), full-baseline model latency, and compiled-context
 model latency (17.6). It derives
 `compiledRequestLatency = compilationLatency + compiledModelLatency`, which is
 deliberately **not** 17.5: Phase 17 uses static candidate cases, so no retrieval
-time is in it. A clock reading that is non-finite, negative, or backwards is a
-harness failure rather than a published negative duration, and a clock that
-*throws* is the same failure: it surfaces as an `EvaluationHarnessError` with
-issue code `clock_failed` and a fixed message, never as a raw platform error
-escaping the harness. A **derived** latency is held to the same rule: two finite
-durations can sum to `Infinity`, so `compiledRequestLatency` is rejected as
-`clock_failed` when it is not finite, and is never clamped.
+time is in it. A clock reading that is non-finite or negative is a harness
+failure rather than a published impossible duration, and a clock that *throws* is
+the same failure: it surfaces as an `EvaluationHarnessError` with issue code
+`clock_failed` and a fixed message, never as a raw platform error escaping the
+harness.
 
-Distributions compute their mean with an online update rather than a raw sum,
-because a sum can overflow on the way to a mean that is perfectly representable
-— `[MAX_VALUE, MAX_VALUE]` averages to `MAX_VALUE` but does not add up to a
-double. No distribution ever publishes `NaN` or `Infinity`, so no report hash is
-taken over one.
+The port's non-decreasing rule is enforced across **one instance's whole stream
+of readings**, not inside each measured pair. A clock reading `0, 10, 5, 15`
+gives two intervals that each look sound while the instance itself lost five
+milliseconds between them, so every reading is compared against the previously
+accepted one and a decrease is `clock_failed` at that reading — before anything
+built on it is published. Equal successive readings are legal: the contract is
+non-decreasing, so a clock coarser than the operation reports a zero duration.
+
+`compiledRequestLatency` is likewise rejected as `clock_failed` when the sum is
+not finite, and is never clamped. That check is a **defensive invariant rather
+than a reachable failure**: one harness reads one globally non-decreasing clock,
+and the two intervals it adds are disjoint spans of that single finite timeline,
+so their sum cannot exceed the clock's own span. It is kept because the reasoning
+depends on the composition staying that way.
+
+An aggregate mean is a different matter, and its overflow is genuinely
+reachable, because a distribution's observations need not come from one clock
+run. Distributions therefore compute their mean with an online update rather
+than a raw sum, because a sum can overflow on the way to a mean that is
+perfectly representable — `[MAX_VALUE, MAX_VALUE]` averages to `MAX_VALUE` but
+does not add up to a double. No distribution ever publishes `NaN` or `Infinity`,
+so no report hash is taken over one.
 
 Distributions report count, mean, median, p10, p50, p90, p95, p99, minimum, and
 maximum, using one **nearest-rank** percentile method everywhere:
