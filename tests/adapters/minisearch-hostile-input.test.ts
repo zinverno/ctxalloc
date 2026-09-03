@@ -1,6 +1,7 @@
 import { MiniSearchCandidateProvider, MiniSearchCandidateProviderError } from '@ctxalloc/adapters';
 import type { CandidateProviderRequest } from '@ctxalloc/ports';
-import { describe, expect, it } from 'vitest';
+import MiniSearch from 'minisearch';
+import { describe, expect, it, vi } from 'vitest';
 import { block, providerRequest } from './minisearch-fixtures.js';
 
 /**
@@ -171,13 +172,14 @@ describe('a hostile request is inspected without a raw exception escaping', () =
     );
   });
 
-  it('reports a blocks array whose element read throws as an invalid request', async () => {
-    // `Array.isArray` is true of a Proxy around an array, and its element reads
-    // run code the adapter does not own.
+  it('reports a blocks array whose element descriptor throws as an invalid request', async () => {
+    // The array spine is snapshotted through own data descriptors, so this is the
+    // trap that matters. A `get` trap is deliberately never reached — see the
+    // passivity suite below.
     const blocks = new Proxy([...CORPUS], {
-      get(inner, property, receiver) {
+      getOwnPropertyDescriptor(inner, property) {
         if (property === '0') throw new Error(CANARY);
-        return Reflect.get(inner, property, receiver) as unknown;
+        return Reflect.getOwnPropertyDescriptor(inner, property);
       },
     });
     const request = { ...providerRequest({ query: 'budget', blocks: CORPUS }), blocks };
@@ -187,11 +189,25 @@ describe('a hostile request is inspected without a raw exception escaping', () =
     );
   });
 
-  it('reports a blocks array whose length read throws as an invalid request', async () => {
+  it('reports a blocks array whose length descriptor throws as an invalid request', async () => {
     const blocks = new Proxy([...CORPUS], {
-      get(inner, property, receiver) {
+      getOwnPropertyDescriptor(inner, property) {
         if (property === 'length') throw new Error(CANARY);
-        return Reflect.get(inner, property, receiver) as unknown;
+        return Reflect.getOwnPropertyDescriptor(inner, property);
+      },
+    });
+    const request = { ...providerRequest({ query: 'budget', blocks: CORPUS }), blocks };
+    assertProjectOwned(
+      await requestError(request),
+      'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST',
+    );
+  });
+
+  it('rejects a blocks array whose length is an accessor rather than data', async () => {
+    const blocks = new Proxy([...CORPUS], {
+      getOwnPropertyDescriptor(inner, property) {
+        if (property === 'length') return { get: () => 1, configurable: true };
+        return Reflect.getOwnPropertyDescriptor(inner, property);
       },
     });
     const request = { ...providerRequest({ query: 'budget', blocks: CORPUS }), blocks };
@@ -258,6 +274,125 @@ describe('a hostile request is inspected without a raw exception escaping', () =
     }
     expect(threw).toBe(false);
     return expect(promise).rejects.toBeInstanceOf(MiniSearchCandidateProviderError);
+  });
+});
+
+describe('array inspection is passive: no accessor and no get trap ever runs', () => {
+  /**
+   * The strongest form of the claim, and the one that was previously untrue.
+   *
+   * `tryOwnDataProperty` never invoked an accessor on an ordinary object field,
+   * but the array-spine snapshot read `value.length` and `value[index]` as plain
+   * property *gets*. On a `Proxy` each ran the `get` trap; on an array with an
+   * installed getter the element read ran that getter. Wrapping them in a `try`
+   * made a *thrown* failure project-owned, but by then the untrusted code had
+   * already executed — and a getter that does **not** throw is worse, because it
+   * can mutate state, answer differently on each read, or simply observe that it
+   * was consulted.
+   *
+   * The snapshot now goes through `Object.getOwnPropertyDescriptor`, which
+   * reports an accessor without calling it. These tests count invocations, so a
+   * regression that reintroduces a plain read fails here even when nothing
+   * throws.
+   */
+
+  it('never invokes an accessor installed at an array index', async () => {
+    let getterCalls = 0;
+    const blocks: unknown[] = [];
+    Object.defineProperty(blocks, '0', {
+      enumerable: true,
+      configurable: true,
+      get() {
+        getterCalls += 1;
+        return CORPUS[0];
+      },
+    });
+    Object.defineProperty(blocks, 'length', { value: 1, writable: true });
+
+    const request = { ...providerRequest({ query: 'budget', blocks: CORPUS }), blocks };
+    assertProjectOwned(
+      await requestError(request),
+      'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST',
+    );
+    expect(getterCalls).toBe(0);
+  });
+
+  it('never uses the get trap of a Proxy-backed blocks array', async () => {
+    let getCalls = 0;
+    let descriptorCalls = 0;
+    const blocks = new Proxy([...CORPUS], {
+      get(inner, property, receiver) {
+        getCalls += 1;
+        return Reflect.get(inner, property, receiver) as unknown;
+      },
+      getOwnPropertyDescriptor(inner, property) {
+        descriptorCalls += 1;
+        return Reflect.getOwnPropertyDescriptor(inner, property);
+      },
+    });
+
+    // Passive own data descriptors are still readable, so a well-formed
+    // Proxy-backed array retrieves normally rather than being rejected for
+    // merely being a Proxy.
+    const request = { ...providerRequest({ query: 'reticulator', blocks: CORPUS }), blocks };
+    const got = await provider().getCandidates(request as CandidateProviderRequest);
+
+    expect(got.map((candidate) => candidate.block.id)).toEqual(['blk-a']);
+    expect(getCalls).toBe(0);
+    expect(descriptorCalls).toBeGreaterThan(0);
+  });
+
+  it('never invokes an accessor in a dependency search-result array', async () => {
+    let getterCalls = 0;
+    const results: unknown[] = [];
+    Object.defineProperty(results, '0', {
+      enumerable: true,
+      configurable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error(CANARY);
+      },
+    });
+    Object.defineProperty(results, 'length', { value: 1, writable: true });
+
+    vi.spyOn(MiniSearch.prototype, 'search').mockReturnValue(results as never);
+    try {
+      const error = await requestError(providerRequest({ query: 'reticulator', blocks: CORPUS }));
+      assertProjectOwned(error, 'MINISEARCH_CANDIDATE_PROVIDER_SEARCH_FAILED');
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(getterCalls).toBe(0);
+  });
+
+  it('snapshots an ordinary dense array byte-identically', async () => {
+    // The passive path must not change what a normal request retrieves.
+    const dense = [...CORPUS];
+    const viaArray = await provider().getCandidates(
+      providerRequest({ query: 'reticulator budget', blocks: dense }),
+    );
+    const viaProxy = await provider().getCandidates({
+      ...providerRequest({ query: 'reticulator budget', blocks: CORPUS }),
+      blocks: new Proxy([...CORPUS], {}),
+    } as CandidateProviderRequest);
+    expect(JSON.stringify(viaProxy)).toBe(JSON.stringify(viaArray));
+  });
+
+  it('treats a hole as absent data, deterministically and without throwing', async () => {
+    // A sparse array is a data problem, not a second reflective failure mode: the
+    // hole snapshots as `undefined` and ordinary block validation rejects it.
+    const sparse: unknown[] = [];
+    Object.defineProperty(sparse, 'length', { value: 2, writable: true });
+    Object.defineProperty(sparse, '1', { value: CORPUS[0], enumerable: true, configurable: true });
+
+    const request = { ...providerRequest({ query: 'budget', blocks: CORPUS }), blocks: sparse };
+    const first = await requestError(request);
+    assertProjectOwned(first, 'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST');
+    // Deterministic: the same input fails the same way every time.
+    const second = await requestError(request);
+    expect((second as MiniSearchCandidateProviderError).code).toBe(
+      (first as MiniSearchCandidateProviderError).code,
+    );
   });
 });
 

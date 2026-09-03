@@ -107,6 +107,12 @@ export const MINISEARCH_CANDIDATE_PROVIDER_VERSION = `1+minisearch@${MINISEARCH_
  * Nothing is invented, clamped, inverted, rescaled, or mapped into `[0, 1]` —
  * mapping it would publish a number the library never produced under a name that
  * suggests a bounded metric (INV-SCORE-002, INV-PROV-003).
+ *
+ * Every published value is **strictly greater than zero**. BM25+ adds a positive
+ * floor per matched term, and a document matching no term is omitted from the
+ * results rather than returned scoring zero, so a zero or negative value is
+ * malformed output for this contract rather than a weak match. The adapter
+ * rejects one instead of publishing it.
  */
 export const MINISEARCH_RETRIEVAL_SCORE_SEMANTICS =
   'minisearch-bm25plus-sum-times-matched-query-terms';
@@ -262,9 +268,15 @@ function invalidRequest(message: string, blockId = ''): MiniSearchCandidateProvi
  * request, or dependency result — and whose message is fixed. Nothing the
  * inspected value said is ever copied.
  *
- * Accessors are never invoked deliberately. An own accessor is reported as
- * `absent` rather than read: invoking it would run code chosen by the value
- * under inspection, and every field this adapter needs is plain data.
+ * **No accessor is ever invoked, and no `get` trap is ever used.** An own
+ * accessor is reported rather than read, and an array's spine is snapshotted
+ * through own data descriptors rather than through `value.length` and
+ * `value[index]` — both of which are property *gets* that run a `Proxy` trap or
+ * an installed getter. Catching what such code throws is not enough: by then it
+ * has already run, and a getter that does *not* throw can mutate state, answer
+ * differently on each read, or merely observe that it was consulted. Every field
+ * this adapter needs is plain data, so nothing is lost by refusing to run code
+ * for it.
  */
 
 /** One guarded property read: present data, deliberately-absent, or reflection failed. */
@@ -306,24 +318,67 @@ function tryOwnEnumerableKeys(value: object): readonly string[] | null {
 }
 
 /**
- * A defensive copy of an array's spine, or `null` when reading it threw.
+ * A defensive copy of an array's spine read **through own data descriptors
+ * only**, or `null` when it cannot be read that way.
  *
- * `Array.isArray` is also true of a `Proxy` around an array, whose length and
- * element reads run code the adapter does not own. Taking the spine once, behind
- * a guard, means every later iteration walks a plain array.
+ * `Array.isArray` is also true of a `Proxy` around an array, and an ordinary
+ * array can carry an accessor at an index. So `value.length` and `value[index]`
+ * are both property *gets*: on a `Proxy` each runs the `get` trap, and on an
+ * array with an installed getter the element read runs that getter. Wrapping
+ * those reads in a `try` makes a *thrown* failure project-owned, but by then the
+ * untrusted code has already run — and a getter that does not throw is worse
+ * than one that does. It can mutate external state, return a different value
+ * each time it is consulted, or observe that it was read at all.
+ *
+ * Every read here therefore goes through `Object.getOwnPropertyDescriptor`,
+ * which reports an accessor without invoking it. The array is unreadable — and
+ * the whole request or result is rejected — when its `length` is not an own data
+ * property holding a non-negative safe integer, when any index carries an
+ * accessor, or when any descriptor lookup throws.
+ *
+ * A **hole** (an index with no own descriptor at all) copies `undefined`, which
+ * the ordinary validation downstream then rejects for not being a block or a
+ * result. That keeps sparseness a deterministic data problem rather than a
+ * second reflective failure mode.
+ *
+ * Every later iteration walks the plain snapshot, so the untrusted value is
+ * touched exactly once, reflectively.
  */
 function tryReadArrayItems(value: unknown): readonly unknown[] | null {
   if (!Array.isArray(value)) return null;
+
+  const lengthDescriptor = tryOwnDataProperty(value, 'length');
+  if (lengthDescriptor.kind !== 'value') return null;
+  const length = lengthDescriptor.value;
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return null;
+
+  const items: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const element = tryOwnDataProperty(value, String(index));
+    // An accessor reports `absent` rather than being invoked, and it is not
+    // treated as a hole: a value that installed a getter where data belongs is
+    // rejected outright rather than quietly read as `undefined`.
+    if (element.kind === 'failed') return null;
+    if (element.kind === 'absent' && hasOwnAccessor(value, String(index))) return null;
+    items.push(element.kind === 'value' ? element.value : undefined);
+  }
+  return items;
+}
+
+/**
+ * Whether `key` is an own **accessor** on `value`.
+ *
+ * Used only to tell an accessor apart from a genuine hole after
+ * `tryOwnDataProperty` has already reported `absent`. It reads a descriptor and
+ * never invokes anything; a throwing trap answers `false`, and the caller has
+ * already decided what an unreadable descriptor means.
+ */
+function hasOwnAccessor(value: object, key: string): boolean {
   try {
-    const length: unknown = (value as { length: unknown }).length;
-    if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return null;
-    const items: unknown[] = [];
-    for (let index = 0; index < length; index += 1) {
-      items.push((value as readonly unknown[])[index]);
-    }
-    return items;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && !('value' in descriptor);
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -785,10 +840,21 @@ function search(
       );
     }
     const score = inspectedScore.kind === 'value' ? inspectedScore.value : undefined;
-    if (typeof score !== 'number' || !Number.isFinite(score)) {
+    // Strictly positive, because that is what this provider's contract asserts.
+    // BM25+ adds a positive floor per matched term, and a document matching no
+    // term is omitted from the results rather than returned scoring zero — so a
+    // zero, a negative, or a `-0` is malformed output for *this* contract, not a
+    // weak match. Publishing one would put a value under
+    // `MINISEARCH_RETRIEVAL_SCORE_SEMANTICS` that the named metric cannot
+    // produce. Nothing is clamped, absolute-valued, coerced, or quietly dropped
+    // (INV-SCORE-004, INV-ADAPTER-003).
+    //
+    // There is no upper bound: the metric is unbounded above, and inventing a
+    // ceiling would be the same category of untruth in the other direction.
+    if (typeof score !== 'number' || !Number.isFinite(score) || score <= 0) {
       throw new MiniSearchCandidateProviderError(
         'MINISEARCH_CANDIDATE_PROVIDER_INVALID_RETRIEVAL_SCORE',
-        'MiniSearchCandidateProvider received a search result whose score is not a finite number.',
+        'MiniSearchCandidateProvider received a search result whose score is not a finite value above zero.',
         id,
       );
     }

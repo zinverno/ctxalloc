@@ -204,6 +204,63 @@ describe('INV-SEC-001: a dependency-owned result identifier is never published',
     expect(error.code).toBe('MINISEARCH_CANDIDATE_PROVIDER_SEARCH_FAILED');
   });
 
+  it.each([
+    ['zero', 0],
+    ['negative zero', -0],
+    ['a negative value', -1],
+    ['a large negative value', -1e6],
+  ])('rejects %s as a malformed score for this contract', async (_label, score) => {
+    // BM25+ adds a positive floor per matched term, and a document matching no
+    // term is omitted rather than returned scoring zero. A zero or negative is
+    // therefore malformed output for this contract, not a weak match, and
+    // publishing it would put a value under the named metric that the metric
+    // cannot produce.
+    const error = await failureFrom([{ id: 'blk-alpha', score }]);
+    expect(error.code).toBe('MINISEARCH_CANDIDATE_PROVIDER_INVALID_RETRIEVAL_SCORE');
+    // The identifier is request-owned, so naming it discloses nothing new.
+    expect(error.blockId).toBe('blk-alpha');
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['positive infinity', Number.POSITIVE_INFINITY],
+    ['negative infinity', Number.NEGATIVE_INFINITY],
+  ])('still rejects %s', async (_label, score) => {
+    const error = await failureFrom([{ id: 'blk-alpha', score }]);
+    expect(error.code).toBe('MINISEARCH_CANDIDATE_PROVIDER_INVALID_RETRIEVAL_SCORE');
+  });
+
+  it('accepts the smallest representable positive score', async () => {
+    // The rule is `> 0`, not "large enough". Nothing is clamped to a floor.
+    vi.spyOn(MiniSearch.prototype, 'search').mockReturnValue([
+      { id: 'blk-alpha', score: Number.MIN_VALUE },
+    ] as never);
+    const got = await provider().getCandidates(
+      providerRequest({ query: 'alpha', blocks: OR_CORPUS }),
+    );
+    expect(got).toHaveLength(1);
+    expect(got[0]?.retrieval?.score?.value).toBe(Number.MIN_VALUE);
+  });
+
+  it('imposes no upper bound: a very large finite score is published unchanged', async () => {
+    vi.spyOn(MiniSearch.prototype, 'search').mockReturnValue([
+      { id: 'blk-alpha', score: Number.MAX_VALUE },
+    ] as never);
+    const got = await provider().getCandidates(
+      providerRequest({ query: 'alpha', blocks: OR_CORPUS }),
+    );
+    expect(got[0]?.retrieval?.score?.value).toBe(Number.MAX_VALUE);
+  });
+
+  it('a real no-match query returns nothing rather than a zero-scored candidate', async () => {
+    // The positivity rule and the real library agree: a non-matching block is
+    // absent from the result, never present with score 0.
+    const got = await provider().getCandidates(
+      providerRequest({ query: 'xylophone bathysphere', blocks: OR_CORPUS }),
+    );
+    expect(got).toEqual([]);
+  });
+
   it('leaves the real library untouched afterwards', async () => {
     const got = await provider().getCandidates(
       providerRequest({ query: 'alpha', blocks: OR_CORPUS }),
