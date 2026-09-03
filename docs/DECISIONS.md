@@ -4413,7 +4413,11 @@ Reading the result is total: a hostile implementation may return a `Proxy` whose
 
 An injected provider's own capability and identity are validated at **construction**: a non-null object with a `generate` function and non-blank, well-formed `id`, `version`, and `modelId`. A reflective failure while reading any of them is the same `invalid_harness_configuration` error, and no provider-controlled value is quoted in it. The identity is captured once at that point and used for every later report field, so a provider whose `modelId` changes between the run and the report cannot make a report name a model that produced nothing.
 
-**Failure-code inspection is non-throwing.** Describing a provider failure must not become a second failure: `instanceof` walks a prototype chain and a property descriptor read consults a trap, and a `Proxy` may throw from either. Both are guarded, an accessor is still never invoked, and anything unreadable or not shaped like a machine-readable constant becomes the opaque `provider_call_failed`.
+**Failure ownership is decided by origin, never by a thrown value's class.** `EvaluationHarnessError` is exported, so an injected provider can construct one — or forge an object whose prototype makes `instanceof` true — and a `catch` that classified by class would then let a provider select an internal issue code such as `clock_failed`, skip the provider-call-failed result state entirely, and have its own message rethrown as the harness's own. The port places no restriction on what a rejected promise carries, so that is a legal provider rather than an exotic one, and the guard was a confused deputy.
+
+The structure decides instead. One model call now reads the start clock, calls `generate()` inside a `catch` that wraps **nothing else**, and reads the end clock and validates the result afterwards. A `clock_failed` can therefore only originate in this class's own call into the clock, and every value the provider catch sees — a real `EvaluationHarnessError`, an `Error`, a `Proxy`, a primitive — is a provider failure by construction, whatever it claims to be. The call returns a discriminated outcome (`{ok: true, measured}` or `{ok: false, failureCode}`), so a provider failure has no path to a `throw` at all. No public error type is added.
+
+**Failure-code inspection is non-throwing.** Describing a provider failure must not become a second failure: a property descriptor read consults a trap a `Proxy` may throw from. It is guarded, an accessor is still never invoked, nothing walks the value's prototype chain any more, and anything unreadable or not shaped like a machine-readable constant becomes the opaque `provider_call_failed`.
 
 ### The Harness Owns the Prompt, and Both Calls Differ Only by Context
 
@@ -4461,6 +4465,8 @@ start = clock.nowMilliseconds()
 end   = clock.nowMilliseconds()
 duration = end - start
 ```
+
+The clock's own identity is validated and snapshotted at construction, exactly as the provider's is and for the same reason: a report names the clock its latencies were measured with, so a clock must not be able to measure under one identity and be credited under another, or throw from an `id` getter after every measurement has already succeeded. A non-object, a missing `nowMilliseconds`, a blank or malformed `id` or `version`, or a reflective failure reading any of them is an `invalid_harness_configuration` error with a fixed message that quotes no clock-controlled value. The report uses the snapshot and never re-reads the clock.
 
 Both readings must be finite and non-negative and `end >= start`. A clock that moved backwards would produce a negative duration, and publishing one would report a measurement that cannot have happened, so it is an `EvaluationHarnessError` with issue code `clock_failed` instead. A clock that **throws** — an adapter exception, or a test double running out of readings — is wrapped into the same failure with a fixed message, so no dependency's wording escapes the port boundary (INV-ADAPTER-003).
 

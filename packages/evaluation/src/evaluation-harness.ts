@@ -9,6 +9,7 @@ import {
 import { availableInputTokens, findLoneSurrogate, type CandidateBlock } from '@ctxalloc/domain';
 import type {
   ModelProvider,
+  ModelProviderRequest,
   ModelProviderResult,
   MonotonicClock,
   Tokenizer,
@@ -53,7 +54,6 @@ import {
 } from './evaluation-report.js';
 import {
   MODEL_PROVIDER_INVALID_RESULT,
-  ModelProviderResultValidationError,
   validateModelProviderResult,
 } from './model-provider-result.js';
 import { validateEvaluationRunConfig, type EvaluationRunConfig } from './evaluation-run-config.js';
@@ -135,7 +135,6 @@ const OPAQUE_FAILURE_CODE = 'provider_call_failed';
  */
 function failureCodeOf(cause: unknown): string {
   try {
-    if (cause instanceof ModelProviderResultValidationError) return MODEL_PROVIDER_INVALID_RESULT;
     if (typeof cause !== 'object' || cause === null) return OPAQUE_FAILURE_CODE;
     // A descriptor rather than a property read: an accessor is not invoked, so a
     // getter cannot run arbitrary code while a failure is being described.
@@ -152,24 +151,12 @@ function failureCodeOf(cause: unknown): string {
   }
 }
 
-/**
- * Whether a caught value is the harness's own error, decided without throwing.
- *
- * `instanceof` walks the prototype chain, and a `Proxy` may throw from its
- * `getPrototypeOf` trap — so the plain expression is not safe on a value a
- * provider threw.
- */
-function isHarnessError(cause: unknown): boolean {
-  try {
-    return cause instanceof EvaluationHarnessError;
-  } catch {
-    return false;
-  }
-}
-
-/** Fixed message: no provider-controlled value is ever quoted (INV-SEC-001). */
+/** Fixed messages: no dependency-controlled value is ever quoted (INV-SEC-001). */
 const INVALID_PROVIDER_MESSAGE =
   'EvaluationHarness requires a ModelProvider with a non-blank id, version, and modelId, and a generate() method.';
+
+const INVALID_CLOCK_MESSAGE =
+  'EvaluationHarness requires a MonotonicClock with a non-blank id and version, and a nowMilliseconds() method.';
 
 /** The provider identity a report records, read once and never re-read. */
 interface ProviderIdentity {
@@ -178,25 +165,46 @@ interface ProviderIdentity {
   readonly modelId: string;
 }
 
-function invalidProvider(): never {
-  throw new EvaluationHarnessError('invalid_harness_configuration', INVALID_PROVIDER_MESSAGE);
+/** The clock identity a report records, read once and never re-read. */
+interface ClockIdentity {
+  readonly clockId: string;
+  readonly clockVersion: string;
 }
 
-/** One identity field of an injected provider, read at most once. */
-function providerText(provider: object, key: string): string {
+function invalidConfiguration(message: string): never {
+  throw new EvaluationHarnessError('invalid_harness_configuration', message);
+}
+
+/**
+ * One identity field of an injected dependency, read at most once.
+ *
+ * A reflective failure is a configuration failure: an injected object that
+ * cannot state its own identity cannot appear in a report that says what
+ * produced a measurement (INV-TRACE-005). The dependency's own wording is
+ * discarded, and the value it returned is never quoted.
+ */
+function identityText(target: object, key: string, message: string): string {
   let value: unknown;
   try {
-    value = (provider as Record<string, unknown>)[key];
+    value = (target as unknown as Record<string, unknown>)[key];
   } catch {
-    // A reflective failure is a configuration failure: an injected object that
-    // cannot state its own identity cannot appear in a report that says what
-    // produced a measurement (INV-TRACE-005).
-    invalidProvider();
+    invalidConfiguration(message);
   }
   if (typeof value !== 'string' || value.trim().length === 0 || findLoneSurrogate(value) !== null) {
-    invalidProvider();
+    invalidConfiguration(message);
   }
   return value;
+}
+
+/** Whether an injected dependency exposes `key` as a callable method. */
+function hasMethod(target: object, key: string, message: string): void {
+  let method: unknown;
+  try {
+    method = (target as unknown as Record<string, unknown>)[key];
+  } catch {
+    invalidConfiguration(message);
+  }
+  if (typeof method !== 'function') invalidConfiguration(message);
 }
 
 /**
@@ -207,20 +215,34 @@ function providerText(provider: object, key: string): string {
  * a report name a model that produced nothing.
  */
 function providerIdentityOf(provider: ModelProvider): ProviderIdentity {
-  if (typeof provider !== 'object' || provider === null) invalidProvider();
-
-  let generate: unknown;
-  try {
-    generate = (provider as unknown as Record<string, unknown>)['generate'];
-  } catch {
-    invalidProvider();
+  if (typeof provider !== 'object' || provider === null) {
+    invalidConfiguration(INVALID_PROVIDER_MESSAGE);
   }
-  if (typeof generate !== 'function') invalidProvider();
+  hasMethod(provider, 'generate', INVALID_PROVIDER_MESSAGE);
 
   return {
-    providerId: providerText(provider, 'id'),
-    providerVersion: providerText(provider, 'version'),
-    modelId: providerText(provider, 'modelId'),
+    providerId: identityText(provider, 'id', INVALID_PROVIDER_MESSAGE),
+    providerVersion: identityText(provider, 'version', INVALID_PROVIDER_MESSAGE),
+    modelId: identityText(provider, 'modelId', INVALID_PROVIDER_MESSAGE),
+  };
+}
+
+/**
+ * The identity of the injected `MonotonicClock`, captured at construction.
+ *
+ * Held to the same rule as the provider, and for the same reason: a report says
+ * which clock produced its latencies, so that identity must be the one the
+ * measurements were actually taken with. Re-reading `id` at report time would
+ * let a clock measure under one identity and be credited under another, or throw
+ * from a getter after every measurement had already succeeded.
+ */
+function clockIdentityOf(clock: MonotonicClock): ClockIdentity {
+  if (typeof clock !== 'object' || clock === null) invalidConfiguration(INVALID_CLOCK_MESSAGE);
+  hasMethod(clock, 'nowMilliseconds', INVALID_CLOCK_MESSAGE);
+
+  return {
+    clockId: identityText(clock, 'id', INVALID_CLOCK_MESSAGE),
+    clockVersion: identityText(clock, 'version', INVALID_CLOCK_MESSAGE),
   };
 }
 
@@ -249,6 +271,16 @@ interface Measured<T> {
   readonly durationMilliseconds: number;
 }
 
+/**
+ * One model call as this class owns it: a measured valid result, or a code.
+ *
+ * A failure never carries the thrown value, its cause, or its message. Only the
+ * code survives, and only when it is plainly a machine-readable code.
+ */
+type ProviderOutcome =
+  | { readonly ok: true; readonly measured: Measured<ModelProviderResult> }
+  | { readonly ok: false; readonly failureCode: string };
+
 /** One compilation attempt: the compiler's result, or its structured failure. */
 type CompileOutcome =
   | { readonly ok: true; readonly result: CompilationResult }
@@ -257,6 +289,7 @@ type CompileOutcome =
 export class EvaluationHarness {
   readonly #tokenizer: Tokenizer;
   readonly #clock: MonotonicClock;
+  readonly #clockIdentity: ClockIdentity;
   readonly #modelProvider: ModelProvider | null;
   readonly #providerIdentity: ProviderIdentity | null;
   readonly #compiler: ContextCompiler;
@@ -284,18 +317,10 @@ export class EvaluationHarness {
     this.#compiler = new ContextCompiler(compilerConfig, tokenizer);
     this.#candidateValidator = new CandidateValidator(tokenizer);
 
-    if (
-      typeof clock !== 'object' ||
-      clock === null ||
-      typeof clock.nowMilliseconds !== 'function' ||
-      typeof clock.id !== 'string' ||
-      typeof clock.version !== 'string'
-    ) {
-      throw new EvaluationHarnessError(
-        'invalid_harness_configuration',
-        'EvaluationHarness requires a MonotonicClock with an id, a version, and nowMilliseconds().',
-      );
-    }
+    // Validated and snapshotted here, exactly like the provider below: the
+    // report names the clock its latencies were measured with, so that name is
+    // fixed before the first measurement rather than read again afterwards.
+    this.#clockIdentity = clockIdentityOf(clock);
 
     const identity = compilerConfig as { compilerId?: unknown; compilerVersion?: unknown };
     this.#compilerId = typeof identity.compilerId === 'string' ? identity.compilerId : '';
@@ -530,9 +555,37 @@ export class EvaluationHarness {
     return { value, durationMilliseconds: end - start };
   }
 
-  async #measureAsync<T>(operation: () => Promise<T>): Promise<Measured<T>> {
+  /**
+   * One measured model call, with failure ownership decided by **origin**.
+   *
+   * The two failure kinds meeting here belong to different owners, and telling
+   * them apart by the runtime class of a caught value cannot work:
+   * `EvaluationHarnessError` is exported, so a provider is free to construct
+   * one — or to forge an object whose prototype makes `instanceof` true — and a
+   * class check would then let a provider select an internal issue code, skip
+   * the provider-call-failed result state, and have its own message rethrown as
+   * the harness's. The port places no restriction on what a rejected promise
+   * carries, so that is a legal provider, not an exotic one (INV-SEC-001).
+   *
+   * The structure decides instead. Both clock readings are taken **outside** the
+   * provider catch, so a `clock_failed` can only come from this class's own call
+   * into the clock; the catch wraps `generate()` and nothing else, so every value
+   * it sees — a harness error, an `Error`, a `Proxy`, a primitive — is a provider
+   * failure by construction, whatever it claims to be.
+   */
+  async #invokeModel(
+    provider: ModelProvider,
+    request: ModelProviderRequest,
+  ): Promise<ProviderOutcome> {
     const start = this.#reading();
-    const value = await operation();
+
+    let resolved: unknown;
+    try {
+      resolved = await provider.generate(request);
+    } catch (cause) {
+      return { ok: false, failureCode: failureCodeOf(cause) };
+    }
+
     const end = this.#reading();
     if (end < start) {
       throw new EvaluationHarnessError(
@@ -540,7 +593,17 @@ export class EvaluationHarness {
         'EvaluationHarness observed a MonotonicClock reading that moved backwards.',
       );
     }
-    return { value, durationMilliseconds: end - start };
+
+    let value: ModelProviderResult;
+    try {
+      // Validated before anything is hashed, scored, or counted: a malformed
+      // result must not reach a measurement even once.
+      value = validateModelProviderResult(resolved);
+    } catch {
+      return { ok: false, failureCode: MODEL_PROVIDER_INVALID_RESULT };
+    }
+
+    return { ok: true, measured: { value, durationMilliseconds: end - start } };
   }
 
   #reading(): number {
@@ -743,42 +806,29 @@ export class EvaluationHarness {
     const baselineOnly: readonly EvaluationModelCall[] = ['full-baseline'];
     const bothCalls: readonly EvaluationModelCall[] = ['full-baseline', 'compiled'];
 
-    let baselineCall: Measured<ModelProviderResult>;
-    try {
-      // Validated before anything is hashed, scored, or counted: a malformed
-      // result must not reach a measurement even once.
-      const measured = await this.#measureAsync(() =>
-        provider.generate(this.#requestFor(config, baselinePrompt)),
-      );
-      baselineCall = {
-        value: validateModelProviderResult(measured.value),
-        durationMilliseconds: measured.durationMilliseconds,
-      };
-    } catch (cause) {
-      if (isHarnessError(cause)) throw cause;
+    const baselineOutcome = await this.#invokeModel(
+      provider,
+      this.#requestFor(config, baselinePrompt),
+    );
+    if (!baselineOutcome.ok) {
       return {
         report: {
           state: 'baseline-call-failed',
           callOrder: baselineOnly,
           ...identity,
           failedCall: 'full-baseline',
-          failureCode: failureCodeOf(cause),
+          failureCode: baselineOutcome.failureCode,
         },
         raw: { baselineUserPrompt: baselinePrompt },
       };
     }
+    const baselineCall = baselineOutcome.measured;
 
-    let compiledCall: Measured<ModelProviderResult>;
-    try {
-      const measured = await this.#measureAsync(() =>
-        provider.generate(this.#requestFor(config, compiledPrompt)),
-      );
-      compiledCall = {
-        value: validateModelProviderResult(measured.value),
-        durationMilliseconds: measured.durationMilliseconds,
-      };
-    } catch (cause) {
-      if (isHarnessError(cause)) throw cause;
+    const compiledOutcome = await this.#invokeModel(
+      provider,
+      this.#requestFor(config, compiledPrompt),
+    );
+    if (!compiledOutcome.ok) {
       return {
         report: {
           state: 'compiled-call-failed',
@@ -786,7 +836,7 @@ export class EvaluationHarness {
           ...identity,
           baseline: callResult('full-baseline', baselineCall, evaluationCase),
           failedCall: 'compiled',
-          failureCode: failureCodeOf(cause),
+          failureCode: compiledOutcome.failureCode,
         },
         raw: {
           baselineUserPrompt: baselinePrompt,
@@ -796,6 +846,7 @@ export class EvaluationHarness {
       };
     }
 
+    const compiledCall = compiledOutcome.measured;
     const baseline = callResult('full-baseline', baselineCall, evaluationCase);
     const compiled = callResult('compiled', compiledCall, evaluationCase);
 
@@ -914,8 +965,8 @@ export class EvaluationHarness {
         promptVersion: EVALUATION_PROMPT_VERSION,
         baselineRendererId: EVALUATION_BASELINE_RENDERER_ID,
         baselineRendererVersion: EVALUATION_BASELINE_RENDERER_VERSION,
-        clockId: this.#clock.id,
-        clockVersion: this.#clock.version,
+        clockId: this.#clockIdentity.clockId,
+        clockVersion: this.#clockIdentity.clockVersion,
         ...(identity === null || config.modelExecution === 'disabled'
           ? {}
           : {

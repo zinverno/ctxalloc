@@ -2678,6 +2678,17 @@ either becomes a published measurement; `@ctxalloc/evaluation` does that, and
 the validator stays inside that package (INV-ADAPTER-003). No runtime validation
 is added here: `@ctxalloc/ports` remains type-only, with no runtime export.
 
+A consumer must also decide failure ownership **structurally**. The port places
+no restriction on what a rejected `generate()` promise carries, so a provider may
+throw a consumer's own public error class, or an object forged onto its
+prototype. A consumer that classified a caught value by its runtime class would
+let an external port select an internal failure code and have its own message
+republished, so ownership must follow where the failure occurred: clock readings
+and result validation outside the provider `catch`, and the provider call alone
+inside it. The identity of every injected dependency a report names — the model
+provider and the monotonic clock alike — is likewise read once at construction
+rather than at report time (INV-TRACE-005).
+
 The compiler must not:
 
 * call a model;

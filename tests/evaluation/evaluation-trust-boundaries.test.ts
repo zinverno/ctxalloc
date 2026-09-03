@@ -343,9 +343,13 @@ describe('failure-code inspection cannot throw (DEC-040)', () => {
     expect(result.model.failureCode).toBe('provider_call_failed');
   });
 
-  it('reports an opaque code when the thrown value has a throwing prototype trap', async () => {
+  it('never consults the prototype chain of a thrown value', async () => {
+    // Ownership is decided by origin, so nothing walks a thrown value's
+    // prototype chain any more. A `getPrototypeOf` trap that throws is
+    // therefore never reached, and the failure is described from the one
+    // guarded descriptor read.
     const hostile = new Proxy(
-      { code: 'SHOULD_NEVER_BE_READ' },
+      { code: 'PROVIDER_TRANSPORT_ERROR' },
       {
         getPrototypeOf(): never {
           throw new Error('prototype trap');
@@ -355,7 +359,8 @@ describe('failure-code inspection cannot throw (DEC-040)', () => {
 
     const result = await harnessWith(providerThrowing(hostile)).runCase(EXECUTING, simpleCase());
 
-    expect(result.model.failureCode).toBe('provider_call_failed');
+    expect(result.model.state).toBe('baseline-call-failed');
+    expect(result.model.failureCode).toBe('PROVIDER_TRANSPORT_ERROR');
   });
 
   it('still carries a provider failure code that is plainly a code', async () => {
@@ -379,6 +384,254 @@ describe('failure-code inspection cannot throw (DEC-040)', () => {
 
     expect(invoked).toBe(false);
     expect(result.model.failureCode).toBe('provider_call_failed');
+  });
+});
+
+describe('a provider cannot impersonate a harness failure (DEC-040)', () => {
+  const CANARY = 'CANARY-PROVIDER-CONTROLLED-MESSAGE';
+
+  /**
+   * `EvaluationHarnessError` is exported, so an injected provider can construct
+   * one. Classifying a caught value by its class therefore let a provider pick
+   * an internal issue code, skip the provider-call-failed state, and have its
+   * own message rethrown as the harness's own. Ownership is decided by where the
+   * failure happened instead: the clock is read outside the provider catch, and
+   * the catch wraps `generate()` and nothing else.
+   */
+  const SPOOFS: readonly (readonly [string, () => unknown])[] = [
+    [
+      'a real public EvaluationHarnessError',
+      (): unknown => new EvaluationHarnessError('clock_failed', CANARY),
+    ],
+    [
+      'an EvaluationHarnessError claiming a tokenizer failure',
+      (): unknown => new EvaluationHarnessError('tokenizer_failed', CANARY),
+    ],
+    [
+      'an object forged onto the harness error prototype',
+      (): unknown =>
+        Object.assign(Object.create(EvaluationHarnessError.prototype) as object, {
+          issueCode: 'clock_failed',
+          message: CANARY,
+        }),
+    ],
+    [
+      'a value whose prototype chain is rewritten to the harness error',
+      (): unknown => {
+        const forged = { issueCode: 'clock_failed', message: CANARY };
+        Object.setPrototypeOf(forged, EvaluationHarnessError.prototype);
+        return forged;
+      },
+    ],
+  ];
+
+  it.each(SPOOFS)('treats %s as a provider call failure', async (_label, build) => {
+    const thrown = build();
+    // The forged values really do satisfy the class check the old code used.
+    expect(thrown instanceof EvaluationHarnessError).toBe(true);
+
+    const result = await harnessWith(providerThrowing(thrown)).runCaseDetailed(
+      EXECUTING,
+      simpleCase(),
+    );
+
+    expect(result.result.model.state).toBe('baseline-call-failed');
+    expect(result.result.model.callOrder).toEqual(['full-baseline']);
+    expect(result.result.model.failedCall).toBe('full-baseline');
+    // `code` on the thrown value is `EVALUATION_HARNESS_FAILED`, which is
+    // plainly a code and so survives the existing conservative rule; the
+    // provider-chosen `issueCode` and message do not.
+    expect(result.result.model.failureCode).not.toBe('clock_failed');
+    expect(result.result.model.failureCode).not.toBe('tokenizer_failed');
+    expect(JSON.stringify(result.result)).not.toContain(CANARY);
+  });
+
+  it('keeps a valid baseline when the compiled call throws a harness error', async () => {
+    const provider: ModelProvider = {
+      id: 'spoofing-provider',
+      version: '1',
+      modelId: 'spoofing-model',
+      generate: (() => {
+        let call = 0;
+        return async (): Promise<ModelProviderResult> => {
+          call += 1;
+          if (call === 1) return VALID as unknown as ModelProviderResult;
+          throw new EvaluationHarnessError('clock_failed', CANARY);
+        };
+      })(),
+    };
+
+    const result = await harnessWith(provider).runCaseDetailed(
+      EXECUTING,
+      simpleCase({
+        answerCriteria: [
+          { kind: 'contains-all', id: 'c1', weight: 1, expected: ['Alpha'], caseSensitive: false },
+        ],
+      }),
+    );
+
+    expect(result.result.model.state).toBe('compiled-call-failed');
+    expect(result.result.model.callOrder).toEqual(['full-baseline', 'compiled']);
+    expect(result.result.model.baseline?.answerQualityScore).toBe(1);
+    expect(result.result.model.compiled).toBeUndefined();
+    expect(result.result.model.qualityLoss).toBeUndefined();
+    expect(JSON.stringify(result.result)).not.toContain(CANARY);
+  });
+
+  it('lets no exception escape runCase for any provider rejection', async () => {
+    for (const build of SPOOFS.map(([, value]) => value)) {
+      // The assertion is that this resolves at all: before the fix, a forged
+      // harness error was rethrown out of `runCase`.
+      await expect(
+        harnessWith(providerThrowing(build())).runCase(EXECUTING, simpleCase()),
+      ).resolves.toBeDefined();
+    }
+  });
+});
+
+describe('real clock failures stay harness-owned (DEC-040)', () => {
+  it('throws clock_failed before the provider is ever called', async () => {
+    // Exactly the two readings the compilation measurement consumes. The next
+    // one opens the baseline call, and it is taken outside the provider catch,
+    // so it cannot be mistaken for a call failure.
+    const provider = providerReturning(VALID, VALID);
+    const harness = new EvaluationHarness(
+      compilerConfig(),
+      wordTokenizer,
+      new FakeMonotonicClock([0, 10]),
+      provider,
+    );
+
+    try {
+      await harness.runCase(EXECUTING, simpleCase());
+    } catch (cause) {
+      expect(cause).toBeInstanceOf(EvaluationHarnessError);
+      expect((cause as EvaluationHarnessError).issueCode).toBe('clock_failed');
+      expect(provider.calls.count).toBe(0);
+      return;
+    }
+    throw new Error('expected a rejection');
+  });
+
+  it('throws clock_failed when the reading after a resolved call fails', async () => {
+    // Enough readings to compile and to open the baseline call, and none for
+    // the reading that closes it. The provider resolved successfully, so this
+    // is unambiguously the harness's own clock and not a provider failure.
+    const provider = providerReturning(VALID, VALID);
+    const harness = new EvaluationHarness(
+      compilerConfig(),
+      wordTokenizer,
+      new FakeMonotonicClock([0, 10, 20]),
+      provider,
+    );
+
+    try {
+      await harness.runCase(EXECUTING, simpleCase());
+    } catch (cause) {
+      expect(cause).toBeInstanceOf(EvaluationHarnessError);
+      expect((cause as EvaluationHarnessError).issueCode).toBe('clock_failed');
+      expect(provider.calls.count).toBeGreaterThanOrEqual(1);
+      return;
+    }
+    throw new Error('expected a rejection');
+  });
+
+  it('still rejects a backwards interval around a resolved call', async () => {
+    const provider = providerReturning(VALID, VALID);
+    const harness = new EvaluationHarness(
+      compilerConfig(),
+      wordTokenizer,
+      // The baseline call opens at 500 and closes at 100.
+      new FakeMonotonicClock([0, 10, 500, 100]),
+      provider,
+    );
+
+    const error = await harness.runCase(EXECUTING, simpleCase()).then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(EvaluationHarnessError);
+    expect((error as EvaluationHarnessError).issueCode).toBe('clock_failed');
+  });
+});
+
+describe('the clock identity is validated and snapshotted (DEC-040)', () => {
+  function construct(clock: unknown): EvaluationHarnessError {
+    try {
+      new EvaluationHarness(compilerConfig(), wordTokenizer, clock as FakeMonotonicClock);
+    } catch (cause) {
+      expect(cause).toBeInstanceOf(EvaluationHarnessError);
+      return cause as EvaluationHarnessError;
+    }
+    throw new Error('expected a construction failure');
+  }
+
+  const workingClock = {
+    id: 'c',
+    version: '1',
+    nowMilliseconds: (): number => 0,
+  };
+
+  const INVALID: readonly (readonly [string, unknown])[] = [
+    ['null', null],
+    ['a non-object', 'a-clock'],
+    ['a clock with no nowMilliseconds', { id: 'c', version: '1' }],
+    ['a clock whose nowMilliseconds is not a function', { ...workingClock, nowMilliseconds: 0 }],
+    ['a blank id', { ...workingClock, id: '  ' }],
+    ['an empty version', { ...workingClock, version: '' }],
+    ['a non-string id', { ...workingClock, id: 7 }],
+    ['a malformed version', { ...workingClock, version: LONE_SURROGATE }],
+  ];
+
+  it.each(INVALID)('rejects %s at construction', (_label, clock) => {
+    expect(construct(clock).issueCode).toBe('invalid_harness_configuration');
+  });
+
+  it('converts a throwing identity getter into a configuration failure', () => {
+    const error = construct({
+      get id(): string {
+        throw new Error('clock identity is unavailable right now');
+      },
+      version: '1',
+      nowMilliseconds: (): number => 0,
+    });
+
+    expect(error.issueCode).toBe('invalid_harness_configuration');
+    expect(error.message).not.toContain('clock identity is unavailable');
+  });
+
+  it('captures the identity once and never reads it again', async () => {
+    // A clock that renames itself after construction. The report must name the
+    // clock the measurements were actually taken with, not whatever the getter
+    // says once the run is over.
+    let idReads = 0;
+    let versionReads = 0;
+    let readings = 0;
+    const shifting = {
+      get id(): string {
+        idReads += 1;
+        return idReads === 1 ? 'clock-at-construction' : 'clock-renamed-later';
+      },
+      get version(): string {
+        versionReads += 1;
+        return versionReads === 1 ? '1' : '999';
+      },
+      nowMilliseconds: (): number => {
+        readings += 1;
+        return readings * 10;
+      },
+    };
+
+    const report = await new EvaluationHarness(compilerConfig(), wordTokenizer, shifting).runSuite(
+      runConfig(),
+      [simpleCase()],
+    );
+
+    expect(report.composition.clockId).toBe('clock-at-construction');
+    expect(report.composition.clockVersion).toBe('1');
+    // Exactly one read of each, at construction.
+    expect(idReads).toBe(1);
+    expect(versionReads).toBe(1);
   });
 });
 
