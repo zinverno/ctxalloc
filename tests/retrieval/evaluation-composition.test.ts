@@ -181,6 +181,27 @@ function caseFor(candidates: readonly CandidateBlock[]): Record<string, unknown>
   };
 }
 
+/**
+ * The block identifiers of a compiled context, read through the renderer's
+ * documented v1 record contract.
+ *
+ * `ContextRenderer` v1 emits one canonical JSON record per line, each carrying a
+ * `blockId` (DEC-035). Parsing that is how a test learns what was actually
+ * compiled; `compiledContext` exists on `EvaluationCaseDetails` for exactly this
+ * kind of inspection and is deliberately absent from the published report, so
+ * nothing here weakens report privacy.
+ */
+function compiledBlockIds(compiledContext: string | undefined): readonly string[] {
+  if (compiledContext === undefined || compiledContext.length === 0) return [];
+  return compiledContext.split('\n').map((line) => {
+    const record = JSON.parse(line) as { blockId?: unknown };
+    if (typeof record.blockId !== 'string') {
+      throw new Error('a rendered record carried no string blockId');
+    }
+    return record.blockId;
+  });
+}
+
 let candidates: readonly CandidateBlock[];
 let details: EvaluationCaseDetails;
 
@@ -247,16 +268,49 @@ describe('Phase 18: the real provider materializes a Phase 17 candidate batch', 
     );
   });
 
-  it('7. the compiler consumed the same candidate batch', () => {
-    const proposed = new Set(candidates.map((candidate) => candidate.block.id));
-    expect(details.result.compilationId).toBeTypeOf('string');
-    // Every included block came from the batch retrieval proposed, and the
-    // compiler chose among them rather than adopting the provider's order.
-    const included = details.compiledContext ?? '';
-    for (const id of proposed) {
-      if (included.includes(id)) expect(proposed.has(id)).toBe(true);
+  it('7. every block the compiler included came from the real retrieval batch', () => {
+    // The compiled context is parsed rather than substring-searched. A
+    // `proposed.has(id)` check over ids taken from `proposed` is true by
+    // construction and proves nothing; reading the rendered records is what
+    // actually shows which blocks were compiled.
+    const includedBlockIds = compiledBlockIds(details.compiledContext);
+    const proposed = new Set(candidates.map((candidate) => String(candidate.block.id)));
+
+    expect(includedBlockIds.length).toBeGreaterThan(0);
+    for (const id of includedBlockIds) {
+      expect(proposed.has(id), `compiled block ${id} was not proposed by retrieval`).toBe(true);
     }
+    expect(details.result.compilationId).toBeTypeOf('string');
     expect(details.result.usage?.budgetViolation).toBe(false);
+  });
+
+  it('7b. a corpus block the provider did not propose cannot appear in the compiled context', () => {
+    // The corpus is much larger than the batch, and every block the provider
+    // left out must be unreachable — the compiler selects from candidates, never
+    // from the corpus behind them.
+    const proposed = new Set(candidates.map((candidate) => String(candidate.block.id)));
+    const omitted = retrievalCorpusV1(tokenizer)
+      .map((entry) => String(entry.id))
+      .filter((id) => !proposed.has(id));
+
+    expect(omitted.length).toBeGreaterThan(0);
+    const includedBlockIds = new Set(compiledBlockIds(details.compiledContext));
+    for (const id of omitted) {
+      expect(includedBlockIds.has(id), `omitted block ${id} reached the compiled context`).toBe(
+        false,
+      );
+    }
+  });
+
+  it('7c. the request the harness compiled carried exactly the provider batch', () => {
+    const validated = validateEvaluationCase(caseFor(candidates));
+    expect(validated.compilationRequest.candidates.map((candidate) => candidate.block.id)).toEqual(
+      candidates.map((candidate) => candidate.block.id),
+    );
+    for (const candidate of validated.compilationRequest.candidates) {
+      expect(candidate.retrieval?.providerId).toBe(MINISEARCH_CANDIDATE_PROVIDER_ID);
+      expect(candidate.retrieval?.providerVersion).toBe(MINISEARCH_CANDIDATE_PROVIDER_VERSION);
+    }
   });
 
   it('8. token metrics keep Phase 17 semantics', () => {

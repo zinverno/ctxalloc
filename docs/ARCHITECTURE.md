@@ -2462,10 +2462,30 @@ or reconstructed, and every returned wrapper carries the exact request block
 value. Its index is built per call in memory and discarded when the call returns,
 so no state, no file, and no corpus survives between requests.
 
+Its search mode is **stated, not inherited**: terms are combined with OR, matching
+is exact — no prefix expansion, no fuzzy matching — one field is indexed, and the
+BM25+ parameters are the pinned library defaults restated in the adapter. Each is
+also the library's own default, so stating them changes no score; they are stated
+because a mode assembled from defaults is stable only until the library changes
+one, and none of it is configurable.
+
+Its inspection of untrusted runtime values is **total**: a `Proxy` trap or a
+throwing accessor on the configuration, the request, a block, or the library's own
+output becomes a project-owned error rather than a raw reflection failure, and an
+identifier a search result carries that the request corpus does not contain is
+never published (DEC-041).
+
 The compiler remains retrieval-provider agnostic. A provider score is carried as
 evidence with its own declared semantics and normalized only through an explicit
 `RetrievalNormalizationRule`; it is never read as a compiler score or as an
 ordering instruction (INV-SCORE-002, INV-ALLOC-002).
+
+That rule's `min` and `max` are a **policy normalization window**, not the
+provider's range: this provider's score is unbounded above, so no finite pair
+could state one truthfully. A raw value outside the window rejects with
+`retrieval_score_out_of_range`, meaning *this policy does not cover that value*
+rather than *the provider is invalid*, and it is never clamped (DEC-032 as
+corrected by DEC-041).
 
 Phase 17 evaluation can consume a `CompilationRequest` populated by retrieval,
 but it does not own retrieval execution: `EvaluationHarness` calls no provider,

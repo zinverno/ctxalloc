@@ -173,6 +173,11 @@ export type RetrievalCorpusName = 'main' | 'duplicate' | 'tie';
  * Demanding an exact order everywhere would turn incidental BM25+ arithmetic
  * into a frozen expectation, and the first corpus edit would break cases that
  * are not actually wrong.
+ *
+ * An **empty** `relevantBlockIds` marks a no-match case. Such a case asserts that
+ * the provider proposes nothing, and it is deliberately not a recall or
+ * reciprocal-rank observation: those are relevance metrics, and this case has no
+ * relevance set for them to be computed over (DEC-041).
  */
 export interface RetrievalCase {
   readonly id: string;
@@ -275,9 +280,12 @@ export function retrievalSuiteV1(): readonly RetrievalCase[] {
       corpus: 'main',
       query: 'xylophone bathysphere',
       k: 5,
+      // An empty relevance set is the case's whole point, and it is why this
+      // case is measured by an empty-result expectation rather than by recall or
+      // reciprocal rank: neither is defined without a relevant block.
       relevantBlockIds: [],
       expectedOrder: [],
-      note: 'No shared term means no candidate. A lexical retriever must not invent one.',
+      note: 'No shared term means no candidate. A lexical retriever must not invent one, and this case is not a recall or reciprocal-rank observation.',
     },
     {
       id: 'rc-11-punctuation-code',
@@ -324,33 +332,51 @@ export function retrievalCorpusFor(
 /* -------------------------------------------------------------------------- */
 
 /**
- * One case's measured retrieval quality.
+ * One case's measured retrieval outcome.
  *
- * Two numbers, both exact and both diagnostic. They are **evidence about this
- * corpus**, not an acceptance gate: the first real retrieval run establishes a
- * baseline to compare against, and turning its numbers into a product guarantee
- * would freeze whatever the corpus happens to contain (METRICS 18).
+ * The shape follows the case, because **recall and reciprocal rank are
+ * relevance-retrieval metrics and a case with no relevant block has neither**.
+ * With an empty relevance set there is no denominator for recall and no "first
+ * relevant result" to rank. Publishing `1` for recall while publishing `0` for
+ * reciprocal rank — the earlier convention — is internally inconsistent, and it
+ * makes an aggregate depend on which arbitrary fill-in value was chosen rather
+ * than on retrieval quality.
+ *
+ * A no-match case is still valuable. It just tests a **different property**: that
+ * a lexical retriever proposes nothing when nothing shares a term, rather than
+ * inventing a candidate. That property gets its own explicit field and stays out
+ * of the relevance aggregates entirely.
+ *
+ * The two shapes are a discriminated union so a consumer cannot read a metric
+ * that was never measured (DEC-041).
  */
-export interface RetrievalCaseMetrics {
-  readonly caseId: string;
-  /** How many of the relevant blocks appear in the first k results. */
-  readonly recallAtK: number;
-  /**
-   * `1 / rank` of the first relevant result, one-based, or `0` when none
-   * appears. A case with no relevant block reports `0` too: there is no first
-   * relevant result to rank, and reporting `1` would credit an empty answer.
-   */
-  readonly reciprocalRank: number;
-  readonly retrievedBlockIds: readonly string[];
-}
+export type RetrievalCaseMetrics =
+  | {
+      readonly caseId: string;
+      readonly kind: 'relevance';
+      /** How many of the relevant blocks appear in the first k results. */
+      readonly recallAtK: number;
+      /** `1 / rank` of the first relevant result over one-based ranks. */
+      readonly reciprocalRank: number;
+      readonly retrievedBlockIds: readonly string[];
+    }
+  | {
+      readonly caseId: string;
+      readonly kind: 'no-match';
+      /** The case asserts the provider proposes nothing at all. */
+      readonly expectedEmptyResult: true;
+      /** Whether it did. */
+      readonly emptyResultSatisfied: boolean;
+      readonly retrievedBlockIds: readonly string[];
+    };
 
 /**
  * The fraction of relevant blocks appearing in the first `k` results.
  *
- * A case with no relevant block scores `1`: everything that had to be found was
- * found, which is exactly what the no-match case asserts. Duplicate identifiers
- * in either list are collapsed, so a repeated identifier cannot inflate the
- * numerator past the denominator.
+ * Defined only for a non-empty relevance set; a caller that passes an empty one
+ * is asking a question recall cannot answer, and it fails rather than returning a
+ * convention. Duplicate identifiers in either list are collapsed, so a repeated
+ * identifier cannot inflate the numerator past the denominator.
  */
 export function recallAtK(
   retrievedBlockIds: readonly string[],
@@ -358,33 +384,91 @@ export function recallAtK(
   k: number,
 ): number {
   const relevant = new Set(relevantBlockIds);
-  if (relevant.size === 0) return 1;
+  if (relevant.size === 0) {
+    throw new Error('recallAtK is undefined for a case with no relevant block');
+  }
   const found = new Set(retrievedBlockIds.slice(0, k).filter((id) => relevant.has(id)));
   return found.size / relevant.size;
 }
 
-/** `1 / rank` of the first relevant result over one-based ranks, or `0` when there is none. */
+/**
+ * `1 / rank` of the first relevant result over one-based ranks, or `0` when the
+ * results contain none.
+ *
+ * `0` here means *the relevant block was not retrieved*, which is a real
+ * measurement. It is not the same as "there was nothing to retrieve": an empty
+ * relevance set fails, exactly as it does for recall.
+ */
 export function reciprocalRank(
   retrievedBlockIds: readonly string[],
   relevantBlockIds: readonly string[],
 ): number {
   const relevant = new Set(relevantBlockIds);
+  if (relevant.size === 0) {
+    throw new Error('reciprocalRank is undefined for a case with no relevant block');
+  }
   for (const [index, id] of retrievedBlockIds.entries()) {
     if (relevant.has(id)) return 1 / (index + 1);
   }
   return 0;
 }
 
-/** Both metrics for one case over the identifiers a provider actually returned. */
+/** The outcome for one case, in whichever shape the case's relevance set implies. */
 export function measureRetrievalCase(
   entry: RetrievalCase,
   retrievedBlockIds: readonly string[],
 ): RetrievalCaseMetrics {
+  if (entry.relevantBlockIds.length === 0) {
+    return {
+      caseId: entry.id,
+      kind: 'no-match',
+      expectedEmptyResult: true,
+      emptyResultSatisfied: retrievedBlockIds.length === 0,
+      retrievedBlockIds: [...retrievedBlockIds],
+    };
+  }
   return {
     caseId: entry.id,
+    kind: 'relevance',
     recallAtK: recallAtK(retrievedBlockIds, entry.relevantBlockIds, entry.k),
     reciprocalRank: reciprocalRank(retrievedBlockIds, entry.relevantBlockIds),
     retrievedBlockIds: [...retrievedBlockIds],
+  };
+}
+
+/**
+ * The diagnostic summary of a whole suite run.
+ *
+ * Relevance-bearing cases and no-match cases are counted and reported
+ * **separately**, and no aggregate mixes them: averaging a metric a case never
+ * had is how a suite summary starts describing its own conventions instead of
+ * the retriever (METRICS 16).
+ */
+export interface RetrievalSuiteSummary {
+  readonly relevanceCaseCount: number;
+  /** Mean recall@k over relevance-bearing cases only. `null` when there are none. */
+  readonly meanRecallAtK: number | null;
+  /** Mean reciprocal rank over relevance-bearing cases only. `null` when there are none. */
+  readonly meanReciprocalRank: number | null;
+  readonly noMatchCaseCount: number;
+  /** How many no-match cases the provider answered with no candidate at all. */
+  readonly noMatchSatisfiedCount: number;
+}
+
+export function summarizeRetrievalRun(
+  measurements: readonly RetrievalCaseMetrics[],
+): RetrievalSuiteSummary {
+  const relevance = measurements.filter((entry) => entry.kind === 'relevance');
+  const noMatch = measurements.filter((entry) => entry.kind === 'no-match');
+  const mean = (values: readonly number[]): number | null =>
+    values.length === 0 ? null : values.reduce((total, value) => total + value, 0) / values.length;
+
+  return {
+    relevanceCaseCount: relevance.length,
+    meanRecallAtK: mean(relevance.map((entry) => entry.recallAtK)),
+    meanReciprocalRank: mean(relevance.map((entry) => entry.reciprocalRank)),
+    noMatchCaseCount: noMatch.length,
+    noMatchSatisfiedCount: noMatch.filter((entry) => entry.emptyResultSatisfied).length,
   };
 }
 

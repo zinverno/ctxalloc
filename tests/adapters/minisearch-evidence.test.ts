@@ -44,7 +44,7 @@ describe('INV-TRACE-005: the provider publishes a stable identity', () => {
   it('reports the exact documented identifier and version', () => {
     const instance = provider();
     expect(instance.id).toBe(MINISEARCH_CANDIDATE_PROVIDER_ID);
-    expect(instance.id).toBe('ctxalloc-minisearch-bm25');
+    expect(instance.id).toBe('ctxalloc-minisearch-bm25plus');
     expect(instance.version).toBe(MINISEARCH_CANDIDATE_PROVIDER_VERSION);
     expect(instance.version).toBe('1+minisearch@7.2.0');
   });

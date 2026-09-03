@@ -1425,8 +1425,17 @@ provider of its own.
 
 Two of the metrics below are implemented, over the versioned fixture corpus in
 `benchmarks/retrieval/v1/`: **recall@k** (16.1) and **reciprocal rank** (16.3, as
-a per-case value rather than an aggregate MRR). Nothing else in this section has
-a producer yet.
+a per-case value and as a mean over the cases that have one). Nothing else in
+this section has a producer yet.
+
+**Both are defined only for a case that has a relevance set.** A no-match case —
+one asserting that a lexical retriever proposes nothing when nothing shares a
+term — has no relevant block, so recall has no denominator and there is no first
+relevant result to rank. Such a case is measured by an explicit empty-result
+expectation instead, carries neither metric, and is **excluded from every
+recall and MRR aggregate**. Answering `1` for recall and `0` for reciprocal rank
+on it, as an earlier draft did, is internally inconsistent and makes an aggregate
+describe the fill-in convention rather than the retriever (DEC-041).
 
 **They are diagnostic, not an acceptance gate.** The initial targets in 16.1
 predate any real retrieval implementation and remain aspirational; the first real
@@ -1472,6 +1481,11 @@ requiredFactRetrievalRecall
 MRR
   = average(1 / rank of first relevant result)
 ```
+
+The average is taken over **relevance-bearing cases only**. A case with no
+relevant block contributes to neither the numerator nor the count: it has no
+first relevant result, and including it would average a value the case never
+had (DEC-041).
 
 ## 16.4 Retrieval Noise Ratio
 

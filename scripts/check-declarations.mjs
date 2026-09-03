@@ -671,7 +671,7 @@ requireContains(
 );
 requireContains(
   'packages/adapters/dist/minisearch-candidate-provider.d.ts',
-  'MINISEARCH_CANDIDATE_PROVIDER_ID = "ctxalloc-minisearch-bm25"',
+  'MINISEARCH_CANDIDATE_PROVIDER_ID = "ctxalloc-minisearch-bm25plus"',
 );
 requireContains(
   'packages/adapters/dist/minisearch-candidate-provider.d.ts',
@@ -718,7 +718,7 @@ const RETRIEVAL_PROJECT_OWNED_NAMES = [
   'MiniSearchCandidateProviderErrorCode',
   'MiniSearchCandidateProviderError',
   'MiniSearchCandidateProvider',
-  '"ctxalloc-minisearch-bm25"',
+  '"ctxalloc-minisearch-bm25plus"',
   '"minisearch-bm25plus-sum-times-matched-query-terms"',
   // The library name and the provider version name the dependency on purpose:
   // the exact version is part of retrieval provenance, and each is asserted

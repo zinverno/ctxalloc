@@ -31,7 +31,7 @@ function rejection(config: unknown): MiniSearchCandidateProviderError {
 describe('INV-BLOCK-005: MiniSearchCandidateProvider configuration', () => {
   it('accepts exactly the two documented fields', () => {
     const provider = construct({ schemaVersion: 1, maxCandidates: 5 });
-    expect(provider.id).toBe('ctxalloc-minisearch-bm25');
+    expect(provider.id).toBe('ctxalloc-minisearch-bm25plus');
     expect(provider.version).toBe('1+minisearch@7.2.0');
   });
 
@@ -100,7 +100,9 @@ describe('INV-BLOCK-005: MiniSearchCandidateProvider configuration', () => {
   });
 
   it('accepts one as the smallest usable bound', () => {
-    expect(construct({ schemaVersion: 1, maxCandidates: 1 }).id).toBe('ctxalloc-minisearch-bm25');
+    expect(construct({ schemaVersion: 1, maxCandidates: 1 }).id).toBe(
+      'ctxalloc-minisearch-bm25plus',
+    );
   });
 
   it('does not coerce or mutate the configuration object it was given', () => {

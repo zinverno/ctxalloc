@@ -14,6 +14,7 @@ import {
   retrievalCorpusV1,
   retrievalDocumentsV1,
   retrievalSuiteV1,
+  summarizeRetrievalRun,
   type RetrievalCase,
   type RetrievalCaseMetrics,
 } from '../../benchmarks/retrieval/v1/index.js';
@@ -116,42 +117,114 @@ describe('retrieval dataset v1: metric helpers are exact', () => {
     expect(recallAtK(['a', 'a'], ['a'], 5)).toBe(1);
   });
 
-  it('scores an empty relevant set as complete recall', () => {
-    // Everything that had to be found was found. That is exactly what the
-    // no-match case asserts.
-    expect(recallAtK([], [], 5)).toBe(1);
-    expect(recallAtK(['x'], [], 5)).toBe(1);
-  });
-
   it('computes reciprocal rank over one-based ranks', () => {
     expect(reciprocalRank(['a', 'b'], ['a'])).toBe(1);
     expect(reciprocalRank(['a', 'b'], ['b'])).toBe(0.5);
     expect(reciprocalRank(['a', 'b', 'c'], ['c'])).toBeCloseTo(1 / 3, 12);
+    // Zero means the relevant block was not retrieved — a real measurement.
     expect(reciprocalRank(['a'], ['z'])).toBe(0);
   });
 
-  it('reports zero reciprocal rank when a case names no relevant block', () => {
-    // There is no first relevant result to rank, and reporting 1 would credit an
-    // empty answer with a perfect position.
-    expect(reciprocalRank([], [])).toBe(0);
+  it('refuses to compute either metric without a relevance set', () => {
+    // Recall has no denominator and reciprocal rank has no "first relevant
+    // result". The earlier convention answered 1 and 0 respectively, which is
+    // internally inconsistent and makes an aggregate describe the convention
+    // rather than the retriever (DEC-041).
+    expect(() => recallAtK([], [], 5)).toThrow();
+    expect(() => recallAtK(['x'], [], 5)).toThrow();
+    expect(() => reciprocalRank([], [])).toThrow();
+    expect(() => reciprocalRank(['x'], [])).toThrow();
+  });
+
+  it('measures a no-match case by its empty-result expectation instead', () => {
+    const noMatch = retrievalSuiteV1().find((entry) => entry.id === 'rc-10-no-match');
+    const satisfied = measureRetrievalCase(noMatch as RetrievalCase, []);
+    expect(satisfied.kind).toBe('no-match');
+    if (satisfied.kind === 'no-match') {
+      expect(satisfied.expectedEmptyResult).toBe(true);
+      expect(satisfied.emptyResultSatisfied).toBe(true);
+    }
+    // The union carries no recall or reciprocal rank at all, so a consumer
+    // cannot read a metric that was never measured.
+    expect(satisfied).not.toHaveProperty('recallAtK');
+    expect(satisfied).not.toHaveProperty('reciprocalRank');
+
+    const violated = measureRetrievalCase(noMatch as RetrievalCase, ['blk-01-reticulator']);
+    expect(violated.kind === 'no-match' && violated.emptyResultSatisfied).toBe(false);
+  });
+
+  it('aggregates relevance cases only, and counts no-match cases separately', () => {
+    const summary = summarizeRetrievalRun([
+      { caseId: 'a', kind: 'relevance', recallAtK: 1, reciprocalRank: 1, retrievedBlockIds: ['x'] },
+      {
+        caseId: 'b',
+        kind: 'relevance',
+        recallAtK: 0.5,
+        reciprocalRank: 0.5,
+        retrievedBlockIds: ['y'],
+      },
+      {
+        caseId: 'c',
+        kind: 'no-match',
+        expectedEmptyResult: true,
+        emptyResultSatisfied: true,
+        retrievedBlockIds: [],
+      },
+    ]);
+    // The no-match case contributes to neither mean. Under the old convention it
+    // would have dragged the mean reciprocal rank from 0.75 to 0.5.
+    expect(summary.relevanceCaseCount).toBe(2);
+    expect(summary.meanRecallAtK).toBe(0.75);
+    expect(summary.meanReciprocalRank).toBe(0.75);
+    expect(summary.noMatchCaseCount).toBe(1);
+    expect(summary.noMatchSatisfiedCount).toBe(1);
+  });
+
+  it('reports null rather than a fabricated mean when no relevance case ran', () => {
+    const summary = summarizeRetrievalRun([
+      {
+        caseId: 'c',
+        kind: 'no-match',
+        expectedEmptyResult: true,
+        emptyResultSatisfied: true,
+        retrievedBlockIds: [],
+      },
+    ]);
+    expect(summary.meanRecallAtK).toBeNull();
+    expect(summary.meanReciprocalRank).toBeNull();
   });
 });
 
 describe('retrieval dataset v1: the real provider over every case', () => {
-  it.each(retrievalSuiteV1().map((entry) => [entry.id, entry] as const))(
+  const relevanceCases = retrievalSuiteV1().filter((entry) => entry.relevantBlockIds.length > 0);
+
+  it.each(relevanceCases.map((entry) => [entry.id, entry] as const))(
     '%s finds every relevant block within k',
     async (_id, entry) => {
       const metrics = await runCase(entry);
-      expect(metrics.recallAtK).toBe(1);
+      expect(metrics.kind).toBe('relevance');
+      if (metrics.kind === 'relevance') expect(metrics.recallAtK).toBe(1);
     },
   );
 
-  it.each(
-    retrievalSuiteV1()
-      .filter((entry) => entry.relevantBlockIds.length > 0)
-      .map((entry) => [entry.id, entry] as const),
-  )('%s ranks a relevant block first', async (_id, entry) => {
-    expect((await runCase(entry)).reciprocalRank).toBe(1);
+  it.each(relevanceCases.map((entry) => [entry.id, entry] as const))(
+    '%s ranks a relevant block first',
+    async (_id, entry) => {
+      const metrics = await runCase(entry);
+      if (metrics.kind === 'relevance') expect(metrics.reciprocalRank).toBe(1);
+    },
+  );
+
+  it('publishes a summary that separates relevance cases from the no-match case', async () => {
+    const summary = summarizeRetrievalRun(await Promise.all(retrievalSuiteV1().map(runCase)));
+    // Twelve relevance-bearing cases and one no-match case: the aggregate
+    // describes retrieval quality, and the no-match case is reported beside it
+    // rather than averaged into it.
+    expect(summary.relevanceCaseCount).toBe(12);
+    expect(summary.meanRecallAtK).toBe(1);
+    expect(summary.meanReciprocalRank).toBe(1);
+    expect(summary.noMatchCaseCount).toBe(1);
+    expect(summary.noMatchSatisfiedCount).toBe(1);
   });
 
   it.each(
@@ -171,7 +244,10 @@ describe('retrieval dataset v1: the real provider over every case', () => {
   it('the no-match case invents no candidate', async () => {
     const entry = retrievalSuiteV1().find((candidate) => candidate.id === 'rc-10-no-match');
     expect(entry).toBeDefined();
-    expect((await runCase(entry as RetrievalCase)).retrievedBlockIds).toEqual([]);
+    const metrics = await runCase(entry as RetrievalCase);
+    expect(metrics.retrievedBlockIds).toEqual([]);
+    expect(metrics.kind).toBe('no-match');
+    if (metrics.kind === 'no-match') expect(metrics.emptyResultSatisfied).toBe(true);
   });
 
   it('the equal-score case is decided by the identifier tie-break alone', async () => {

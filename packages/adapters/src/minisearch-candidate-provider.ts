@@ -32,6 +32,13 @@ import MiniSearch from 'minisearch';
  * blocks cannot reach each other, because neither call can see the other's
  * corpus (INV-SCOPE-005, INV-DET-002).
  *
+ * **The search mode is explicit.** Terms are combined with **OR**, matching is
+ * exact — no prefix expansion, no fuzzy matching — one field is indexed, and the
+ * BM25+ parameters are the pinned library defaults restated in this file. Each of
+ * those is also MiniSearch 7.2.0's default, so stating them changes no score;
+ * they are stated because a mode assembled from library defaults is stable only
+ * until the library changes one.
+ *
  * **Only lexical relevance ranks.** `createdAt`, `updatedAt`,
  * `attributes.priority`, `attributes.required`, `attributes.category`,
  * `headingPath`, block metadata, source metadata, source title, source type, and
@@ -45,8 +52,17 @@ import MiniSearch from 'minisearch';
  * (INV-ADAPTER-001, INV-ADAPTER-003).
  */
 
-/** Stable identifier of this provider implementation and its retrieval mode. */
-export const MINISEARCH_CANDIDATE_PROVIDER_ID = 'ctxalloc-minisearch-bm25';
+/**
+ * Stable identifier of this provider implementation and its retrieval mode.
+ *
+ * It says `bm25plus`, not `bm25`, because that is what the library computes. The
+ * identifier is matched exactly by a scoring policy's normalization rule, so a
+ * name that overstated the metric would invite a rule written for plain BM25 to
+ * claim a contract it does not describe. The full detail lives in
+ * {@link MINISEARCH_RETRIEVAL_SCORE_SEMANTICS}; the identifier only has to be
+ * truthful, not exhaustive.
+ */
+export const MINISEARCH_CANDIDATE_PROVIDER_ID = 'ctxalloc-minisearch-bm25plus';
 
 /** The exact pinned retrieval library this provider's scores come from. */
 export const MINISEARCH_LIBRARY_NAME = 'minisearch';
@@ -81,7 +97,9 @@ export const MINISEARCH_CANDIDATE_PROVIDER_VERSION = `1+minisearch@${MINISEARCH_
  *
  * MiniSearch computes a BM25+ score per matched query term over the indexed
  * field and returns their sum **multiplied by the number of matched query
- * terms**. That product is the published value, and this string names it rather
+ * terms**. Terms are combined with OR, so a block matching more of them scores
+ * higher on both factors. That product is the published value, and this string
+ * names it rather
  * than calling it "BM25" or "relevance": it is neither plain BM25 nor a
  * similarity, it is unbounded above, its scale moves with corpus statistics, and
  * it is comparable only among results of one query over one corpus.
@@ -106,8 +124,10 @@ export const MINISEARCH_CANDIDATE_PROVIDER_CONFIG_SCHEMA_VERSION = 1;
  * query-expansion model, semantic weight, hybrid weight, endpoint, API key,
  * index path, or scratch directory, because this provider performs none of those
  * things and a field that configured one would advertise behavior that does not
- * exist. There is no fuzzy or prefix option either: v1 is plain term relevance,
- * and turning on expansion would quietly change what a score means (DEC-041).
+ * exist. There is no fuzzy, prefix, term-combination, or BM25-tuning option
+ * either: v1 is exact term relevance combined with OR, fixed by the adapter, and
+ * making any of it configurable would let one deployment's score mean something
+ * different from another's under one `providerVersion` (DEC-041).
  *
  * `maxCandidates` is a **retrieval bound**, not a token budget. It caps how many
  * wrappers are proposed, chosen strictly by lexical rank. The provider never
@@ -140,10 +160,19 @@ export type MiniSearchCandidateProviderErrorCode =
  * The single error this adapter raises.
  *
  * It carries a stable code and, where one exists, the exact block identifier at
- * fault — a project-owned value the caller already holds. It deliberately
- * carries no raw query, no block content, no source content, no library error,
- * no library result payload, no stack from the dependency, and no path: a
- * retrieval failure must not become the thing that discloses the corpus
+ * fault. `blockId` is **only ever a value read from the caller's own request
+ * corpus** — never a string the dependency produced. An identifier a search
+ * result carries that the request corpus does not contain is by definition not a
+ * project-owned block identifier, and on malformed or hostile library output it
+ * could be arbitrary attacker-influenced data; publishing it here would put
+ * dependency-controlled content into a public field documented as
+ * caller-owned. Such failures therefore leave `blockId` empty, and the raw
+ * identifier is copied nowhere at all — not into the message, the code, the
+ * blockId, or any other field (DEC-041).
+ *
+ * It deliberately carries no raw query, no block content, no source content, no
+ * library error, no library result payload, no stack from the dependency, and no
+ * path: a retrieval failure must not become the thing that discloses the corpus
  * (INV-SEC-001, INV-ADAPTER-001).
  *
  * There is no cleanup failure code, because there is nothing to clean up: the
@@ -211,12 +240,91 @@ function invalidRequest(message: string, blockId = ''): MiniSearchCandidateProvi
   );
 }
 
-/** Reads one own data property without invoking an accessor or a prototype value. */
-function ownDataProperty(value: unknown, key: string): unknown {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  if (descriptor === undefined || !('value' in descriptor)) return undefined;
-  return descriptor.value;
+/* -------------------------------------------------------------------------- */
+/* Guarded inspection                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Adapter-side inspection is **total**: no runtime exception escapes it.
+ *
+ * Everything this adapter looks at is untrusted at run time — the configuration,
+ * the request, its blocks, and the dependency's own search output. Any of them
+ * may be a `Proxy` whose `ownKeys` or `getOwnPropertyDescriptor` trap throws, or
+ * an object whose properties are throwing accessors. A bare `Object.keys`,
+ * destructuring, or descriptor read would then let a raw `TypeError` — or a
+ * message the inspected value chose — escape as this adapter's failure, which is
+ * exactly what the Phase 16 and Phase 17 boundaries established must not happen
+ * (INV-ADAPTER-001, INV-ADAPTER-003, INV-SEC-001).
+ *
+ * Every reflective operation therefore goes through one of the helpers below,
+ * each of which reports failure as data. A reflective failure becomes a
+ * project-owned error whose code names *where* it happened — configuration,
+ * request, or dependency result — and whose message is fixed. Nothing the
+ * inspected value said is ever copied.
+ *
+ * Accessors are never invoked deliberately. An own accessor is reported as
+ * `absent` rather than read: invoking it would run code chosen by the value
+ * under inspection, and every field this adapter needs is plain data.
+ */
+
+/** One guarded property read: present data, deliberately-absent, or reflection failed. */
+type Inspected =
+  | { readonly kind: 'value'; readonly value: unknown }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'failed' };
+
+const ABSENT: Inspected = { kind: 'absent' };
+const FAILED: Inspected = { kind: 'failed' };
+
+/**
+ * Reads one own **data** property without invoking an accessor.
+ *
+ * A missing property and an own accessor both report `absent`, because neither
+ * yields a value this adapter is willing to read. A throwing trap reports
+ * `failed`, so the caller can raise the right project-owned code rather than
+ * letting the trap's own error escape.
+ */
+function tryOwnDataProperty(value: unknown, key: string): Inspected {
+  if (typeof value !== 'object' || value === null) return ABSENT;
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(value, key);
+  } catch {
+    return FAILED;
+  }
+  if (descriptor === undefined || !('value' in descriptor)) return ABSENT;
+  return { kind: 'value', value: descriptor.value };
+}
+
+/** Own enumerable string keys, or `null` when the `ownKeys` trap threw. */
+function tryOwnEnumerableKeys(value: object): readonly string[] | null {
+  try {
+    return Object.keys(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A defensive copy of an array's spine, or `null` when reading it threw.
+ *
+ * `Array.isArray` is also true of a `Proxy` around an array, whose length and
+ * element reads run code the adapter does not own. Taking the spine once, behind
+ * a guard, means every later iteration walks a plain array.
+ */
+function tryReadArrayItems(value: unknown): readonly unknown[] | null {
+  if (!Array.isArray(value)) return null;
+  try {
+    const length: unknown = (value as { length: unknown }).length;
+    if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return null;
+    const items: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      items.push((value as readonly unknown[])[index]);
+    }
+    return items;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -234,21 +342,44 @@ function ownDataProperty(value: unknown, key: string): unknown {
  * UTF-8 encoding, so a query containing one describes text no corpus can hold
  * (INV-BLOCK-007).
  */
-function validateRequest(request: unknown): CandidateProviderRequest {
+/** One guarded read that fails the request when reflection throws. */
+function requestField(value: unknown, key: string, label: string): unknown {
+  const inspected = tryOwnDataProperty(value, key);
+  if (inspected.kind === 'failed') {
+    throw invalidRequest(`MiniSearchCandidateProvider could not inspect the request ${label}.`);
+  }
+  return inspected.kind === 'value' ? inspected.value : undefined;
+}
+
+/**
+ * The validated request, and the exact query and corpus this call will use.
+ *
+ * The two values are returned rather than re-read later. Reading a property of
+ * an untrusted object twice would let a `Proxy` answer differently each time, so
+ * everything downstream works from what was inspected here once.
+ */
+interface ValidatedRequest {
+  readonly query: string;
+  readonly blocks: readonly unknown[];
+}
+
+function validateRequest(request: unknown): ValidatedRequest {
   if (typeof request !== 'object' || request === null || Array.isArray(request)) {
     throw invalidRequest('MiniSearchCandidateProvider request must be an object.');
   }
 
-  const unknownKeys = Object.keys(request)
-    .filter((key) => !REQUEST_KEYS.includes(key))
-    .sort();
+  const keys = tryOwnEnumerableKeys(request);
+  if (keys === null) {
+    throw invalidRequest('MiniSearchCandidateProvider could not inspect the request fields.');
+  }
+  const unknownKeys = keys.filter((key) => !REQUEST_KEYS.includes(key)).sort();
   if (unknownKeys.length > 0) {
     throw invalidRequest(
       `MiniSearchCandidateProvider request has unknown field(s): ${unknownKeys.join(', ')}.`,
     );
   }
 
-  const query = ownDataProperty(request, 'query');
+  const query = requestField(request, 'query', 'query');
   if (typeof query !== 'string') {
     throw invalidRequest('MiniSearchCandidateProvider request query must be a string.');
   }
@@ -256,21 +387,21 @@ function validateRequest(request: unknown): CandidateProviderRequest {
     throw invalidRequest('MiniSearchCandidateProvider request query must be well-formed UTF-16.');
   }
 
-  const blocks = ownDataProperty(request, 'blocks');
-  if (!Array.isArray(blocks)) {
-    throw invalidRequest('MiniSearchCandidateProvider request blocks must be an array.');
+  const blocks = tryReadArrayItems(requestField(request, 'blocks', 'blocks'));
+  if (blocks === null) {
+    throw invalidRequest('MiniSearchCandidateProvider request blocks must be a readable array.');
   }
-  const sourceDocuments = ownDataProperty(request, 'sourceDocuments');
+  const sourceDocuments = requestField(request, 'sourceDocuments', 'sourceDocuments');
   if (!Array.isArray(sourceDocuments)) {
     throw invalidRequest('MiniSearchCandidateProvider request sourceDocuments must be an array.');
   }
 
-  const scope = ownDataProperty(request, 'scope');
+  const scope = requestField(request, 'scope', 'scope');
   if (typeof scope !== 'object' || scope === null || Array.isArray(scope)) {
     throw invalidRequest('MiniSearchCandidateProvider request scope must be an object.');
   }
   for (const field of ['tenantId', 'workspaceId'] as const) {
-    const value = ownDataProperty(scope, field);
+    const value = requestField(scope, field, `scope ${field}`);
     if (typeof value !== 'string' || value.trim().length === 0) {
       throw invalidRequest(
         `MiniSearchCandidateProvider request scope ${field} must not be empty or whitespace-only.`,
@@ -278,7 +409,7 @@ function validateRequest(request: unknown): CandidateProviderRequest {
     }
   }
 
-  return request as CandidateProviderRequest;
+  return { query, blocks };
 }
 
 export class MiniSearchCandidateProvider implements CandidateProvider {
@@ -306,9 +437,14 @@ export class MiniSearchCandidateProvider implements CandidateProvider {
       );
     }
 
-    const unknownKeys = Object.keys(config)
-      .filter((key) => !CONFIG_KEYS.includes(key))
-      .sort();
+    const keys = tryOwnEnumerableKeys(config);
+    if (keys === null) {
+      throw new MiniSearchCandidateProviderError(
+        'MINISEARCH_CANDIDATE_PROVIDER_INVALID_CONFIG',
+        'MiniSearchCandidateProvider could not inspect the configuration fields.',
+      );
+    }
+    const unknownKeys = keys.filter((key) => !CONFIG_KEYS.includes(key)).sort();
     if (unknownKeys.length > 0) {
       throw new MiniSearchCandidateProviderError(
         'MINISEARCH_CANDIDATE_PROVIDER_INVALID_CONFIG',
@@ -316,7 +452,20 @@ export class MiniSearchCandidateProvider implements CandidateProvider {
       );
     }
 
-    const { schemaVersion, maxCandidates } = config as Partial<MiniSearchCandidateProviderConfig>;
+    // Guarded reads rather than destructuring: destructuring would invoke a
+    // getter, and a configuration object is untrusted at run time.
+    const read = (key: string): unknown => {
+      const inspected = tryOwnDataProperty(config, key);
+      if (inspected.kind === 'failed') {
+        throw new MiniSearchCandidateProviderError(
+          'MINISEARCH_CANDIDATE_PROVIDER_INVALID_CONFIG',
+          `MiniSearchCandidateProvider could not inspect the configuration field ${key}.`,
+        );
+      }
+      return inspected.kind === 'value' ? inspected.value : undefined;
+    };
+    const schemaVersion = read('schemaVersion');
+    const maxCandidates = read('maxCandidates');
 
     if (schemaVersion !== MINISEARCH_CANDIDATE_PROVIDER_CONFIG_SCHEMA_VERSION) {
       throw new MiniSearchCandidateProviderError(
@@ -376,21 +525,20 @@ export class MiniSearchCandidateProvider implements CandidateProvider {
 
     const corpus = documentsOf(validated.blocks);
     const index = buildIndex(corpus.documents);
-    const results = search(index, validated.query);
 
-    return this.#wrap(results, corpus.byId);
+    // Results are resolved against the request corpus inside `search`, so
+    // nothing downstream — including any public error — can carry an identifier
+    // the dependency invented.
+    return this.#wrap(search(index, validated.query, corpus.byId));
   }
 
   /**
-   * Resolves every result to its request block, orders them, truncates to the
-   * bound, and wraps the exact blocks.
+   * Orders the resolved results, truncates to the bound, and wraps the exact
+   * blocks.
    *
-   * **Resolution happens before ordering and before truncation.** Every result
-   * the library returned is looked up, so an identifier the corpus does not
-   * contain fails the call even when it would have fallen outside the bound.
-   * Checking only the survivors would let a fabricated identifier pass whenever
-   * it ranked low, and a fabricated block is exactly the failure this boundary
-   * exists to prevent (INV-PROV-001, INV-ADAPTER-003).
+   * Every result reaching here has already been resolved to a request block by
+   * `search`, so this method cannot encounter — or report — an identifier the
+   * corpus does not contain.
    *
    * Ordering is imposed here rather than inherited. MiniSearch sorts by score
    * descending, but equal scores keep the order the documents were added in, so
@@ -405,22 +553,7 @@ export class MiniSearchCandidateProvider implements CandidateProvider {
    * ranking. The schema imposes no convention, so this one is stated rather than
    * assumed.
    */
-  #wrap(
-    results: readonly ScoredResult[],
-    byId: ReadonlyMap<string, ContextBlock>,
-  ): readonly CandidateBlock[] {
-    const resolved = results.map((result) => {
-      const block = byId.get(result.id);
-      if (block === undefined) {
-        throw new MiniSearchCandidateProviderError(
-          'MINISEARCH_CANDIDATE_PROVIDER_UNKNOWN_RESULT_BLOCK',
-          'MiniSearchCandidateProvider received a result identifier that the request corpus does not contain.',
-          result.id,
-        );
-      }
-      return { id: result.id, score: result.score, block };
-    });
-
+  #wrap(resolved: ResolvedResult[]): readonly CandidateBlock[] {
     resolved.sort((left, right) => right.score - left.score || compareCodeUnits(left.id, right.id));
 
     // The block is carried by reference, unchanged. Nothing is copied, rebuilt,
@@ -462,7 +595,7 @@ export class MiniSearchCandidateProvider implements CandidateProvider {
  * would turn two distinct blocks into one and lose the other without a word
  * (INV-BLOCK-002, INV-ADAPTER-003).
  */
-function documentsOf(blocks: readonly ContextBlock[]): {
+function documentsOf(blocks: readonly unknown[]): {
   readonly documents: readonly RetrievalDocument[];
   readonly byId: ReadonlyMap<string, ContextBlock>;
 } {
@@ -470,13 +603,28 @@ function documentsOf(blocks: readonly ContextBlock[]): {
   const documents: RetrievalDocument[] = [];
 
   for (const block of blocks) {
-    const id = ownDataProperty(block, 'id');
+    const inspectedId = tryOwnDataProperty(block, 'id');
+    if (inspectedId.kind === 'failed') {
+      throw invalidRequest(
+        'MiniSearchCandidateProvider could not inspect the id of a request block.',
+      );
+    }
+    const id = inspectedId.kind === 'value' ? inspectedId.value : undefined;
     if (typeof id !== 'string' || id.length === 0) {
       throw invalidRequest(
         'MiniSearchCandidateProvider request blocks must each carry a non-empty string id.',
       );
     }
-    const content = ownDataProperty(block, 'content');
+    const inspectedContent = tryOwnDataProperty(block, 'content');
+    if (inspectedContent.kind === 'failed') {
+      // The identifier is already a value read from the caller's own corpus, so
+      // reporting it here discloses nothing the caller does not hold.
+      throw invalidRequest(
+        'MiniSearchCandidateProvider could not inspect the content of a request block.',
+        id,
+      );
+    }
+    const content = inspectedContent.kind === 'value' ? inspectedContent.value : undefined;
     if (typeof content !== 'string') {
       throw invalidRequest(
         'MiniSearchCandidateProvider request blocks must each carry string content.',
@@ -490,7 +638,7 @@ function documentsOf(blocks: readonly ContextBlock[]): {
         id,
       );
     }
-    byId.set(id, block);
+    byId.set(id, block as ContextBlock);
     // Exactly the block's own content, with no CtxAlloc normalization: no
     // lowercasing, no whitespace collapsing, no Markdown stripping, no Unicode
     // normalization, and no heading, title, path, or metadata prefix. The
@@ -531,32 +679,67 @@ function buildIndex(documents: readonly RetrievalDocument[]): MiniSearch<Retriev
   }
 }
 
-/** One validated library result: an identifier from this corpus and a finite score. */
-interface ScoredResult {
+/** One search result already resolved to the request block it names. */
+interface ResolvedResult {
   readonly id: string;
   readonly score: number;
+  readonly block: ContextBlock;
 }
 
 /**
- * Runs the plain lexical query and validates every result before it is used.
+ * The exact search options this provider uses, stated rather than inherited.
  *
- * **The search mode is v1 and explicit.** Prefix expansion and fuzzy matching
- * are both off — they are MiniSearch's defaults, and they are named here so a
- * future default change cannot quietly turn this provider into an approximate
- * matcher. No boost, no field weighting, no filter, no combination operator, and
- * no BM25 parameter override: the score is the library's documented default
- * BM25+ behavior, which is what {@link MINISEARCH_RETRIEVAL_SCORE_SEMANTICS}
- * names.
+ * Every one of these is also MiniSearch 7.2.0's own default, so passing them
+ * changes no score and no ranking — a golden test proves the results are
+ * identical to the implicit form. They are written out because Phase 18 promises
+ * a **stable, explicit retrieval mode**, and a mode assembled from library
+ * defaults is only stable until the library changes one (DEC-041).
  *
- * The result array is library output, so it is data rather than something to
- * trust: an identifier that is not a string and a score that is not a finite
- * number are rejected explicitly rather than coerced, because either would
- * travel into a trace as a measurement (INV-SCORE-004, INV-ADAPTER-003).
+ * * `combineWith: 'OR'` — a multi-term query matches a block containing *any*
+ *   term, and a block containing more of them simply scores higher. The earlier
+ *   claim that this provider used "no combination operator" was false: one was
+ *   always in effect, silently inherited. AND is deliberately not used; it would
+ *   make a longer query retrieve strictly less, which is not what a relevance
+ *   ranking is for.
+ * * `prefix: false`, `fuzzy: false` — exact terms only. Either would turn this
+ *   into an approximate matcher and change what a score means.
+ * * `bm25` — the pinned 7.2.0 defaults, restated so the metric named by
+ *   {@link MINISEARCH_RETRIEVAL_SCORE_SEMANTICS} is fixed by this file and not
+ *   only by the dependency pin.
+ *
+ * No boost, no field weighting, no filter: one field, exact `block.content`.
  */
-function search(index: MiniSearch<RetrievalDocument>, query: string): readonly ScoredResult[] {
+const SEARCH_OPTIONS = {
+  combineWith: 'OR',
+  prefix: false,
+  fuzzy: false,
+  bm25: { k: 1.2, b: 0.7, d: 0.5 },
+} as const;
+
+/**
+ * Runs the plain lexical query and resolves every result to a request block.
+ *
+ * **Resolution happens here, before any public error can carry an identifier.**
+ * The result array is library output: on malformed or hostile output an
+ * identifier could be arbitrary data, and it is by definition not a project-owned
+ * block identifier unless the request corpus contains it. So an unknown or
+ * unreadable identifier fails with an empty `blockId` and is copied nowhere,
+ * while a score problem can name its block only because the identifier has
+ * already been proved to come from the caller's own corpus (DEC-041,
+ * INV-SEC-001, INV-PROV-001).
+ *
+ * Nothing is coerced. An identifier that is not a string and a score that is not
+ * a finite number are rejected explicitly, because either would travel into a
+ * trace as a measurement (INV-SCORE-004, INV-ADAPTER-003).
+ */
+function search(
+  index: MiniSearch<RetrievalDocument>,
+  query: string,
+  byId: ReadonlyMap<string, ContextBlock>,
+): ResolvedResult[] {
   let raw: unknown;
   try {
-    raw = index.search(query, { prefix: false, fuzzy: false });
+    raw = index.search(query, SEARCH_OPTIONS);
   } catch {
     throw new MiniSearchCandidateProviderError(
       'MINISEARCH_CANDIDATE_PROVIDER_SEARCH_FAILED',
@@ -564,22 +747,44 @@ function search(index: MiniSearch<RetrievalDocument>, query: string): readonly S
     );
   }
 
-  if (!Array.isArray(raw)) {
+  const items = tryReadArrayItems(raw);
+  if (items === null) {
     throw new MiniSearchCandidateProviderError(
       'MINISEARCH_CANDIDATE_PROVIDER_SEARCH_FAILED',
-      'MiniSearchCandidateProvider received a search result that is not an array.',
+      'MiniSearchCandidateProvider received a search result that is not a readable array.',
     );
   }
 
-  return raw.map((entry): ScoredResult => {
-    const id = ownDataProperty(entry, 'id');
-    if (typeof id !== 'string' || id.length === 0) {
+  const unknownResult = (): MiniSearchCandidateProviderError =>
+    new MiniSearchCandidateProviderError(
+      'MINISEARCH_CANDIDATE_PROVIDER_UNKNOWN_RESULT_BLOCK',
+      'MiniSearchCandidateProvider received a search result that does not identify a block of the request corpus.',
+    );
+
+  return items.map((entry): ResolvedResult => {
+    const inspectedId = tryOwnDataProperty(entry, 'id');
+    if (inspectedId.kind === 'failed') {
       throw new MiniSearchCandidateProviderError(
-        'MINISEARCH_CANDIDATE_PROVIDER_UNKNOWN_RESULT_BLOCK',
-        'MiniSearchCandidateProvider received a search result with no usable block identifier.',
+        'MINISEARCH_CANDIDATE_PROVIDER_SEARCH_FAILED',
+        'MiniSearchCandidateProvider could not inspect a search result.',
       );
     }
-    const score = ownDataProperty(entry, 'score');
+    const id = inspectedId.kind === 'value' ? inspectedId.value : undefined;
+    if (typeof id !== 'string' || id.length === 0) throw unknownResult();
+
+    // The identifier becomes reportable only once the corpus vouches for it.
+    const block = byId.get(id);
+    if (block === undefined) throw unknownResult();
+
+    const inspectedScore = tryOwnDataProperty(entry, 'score');
+    if (inspectedScore.kind === 'failed') {
+      throw new MiniSearchCandidateProviderError(
+        'MINISEARCH_CANDIDATE_PROVIDER_INVALID_RETRIEVAL_SCORE',
+        'MiniSearchCandidateProvider could not inspect the score of a search result.',
+        id,
+      );
+    }
+    const score = inspectedScore.kind === 'value' ? inspectedScore.value : undefined;
     if (typeof score !== 'number' || !Number.isFinite(score)) {
       throw new MiniSearchCandidateProviderError(
         'MINISEARCH_CANDIDATE_PROVIDER_INVALID_RETRIEVAL_SCORE',
@@ -587,6 +792,6 @@ function search(index: MiniSearch<RetrievalDocument>, query: string): readonly S
         id,
       );
     }
-    return { id, score };
+    return { id, score, block };
   });
 }

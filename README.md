@@ -63,11 +63,18 @@ local files
   -> CompilationResult + settled trace
 ```
 
+Its search mode is stated rather than inherited: terms are combined with **OR**,
+matching is exact, and the BM25+ parameters are the library's pinned defaults
+written out in the adapter — none of which changes a score, all of which stops a
+future library default from quietly changing one.
+
 The provider's score is published for what it is — the library's BM25+ sum times
-the number of matched query terms, unbounded and comparable only within one query
-— and never as a compiler score: the compiler normalizes it only through an
-explicit policy rule and decides inclusion itself. Retrieval proposes; the
-compiler selects. The technology was chosen by a committed spike with hard gates,
+the number of matched query terms, **unbounded above** and comparable only within
+one query — and never as a compiler score: the compiler normalizes it only
+through an explicit policy rule and decides inclusion itself. That rule's bounds
+are a _policy normalization window_, not a claim about the provider's range, so a
+score above them means the policy does not cover that value rather than that
+retrieval malfunctioned. Retrieval proposes; the compiler selects. The technology was chosen by a committed spike with hard gates,
 and the primary candidate it names was rejected on measured evidence
 ([docs/RETRIEVAL_SPIKE.md](./docs/RETRIEVAL_SPIKE.md)).
 

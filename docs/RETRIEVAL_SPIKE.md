@@ -65,7 +65,7 @@ and on its own terms; a technology is not rejected on reading alone.
 | **Hidden state** | **FAIL.** The corpus must be materialized as files inside a globbed directory, and a SQLite database file is mandatory. `enableProductionMode()` plus `getDefaultDbPath()` resolve to a shared cache location; only an explicit `dbPath` avoids it. | **PASS.** The index is an in-memory object built per call from `request.blocks`. No file, no database, no registry, nothing shared between calls. |
 | **Offline lexical mode** | Partial. `searchLex` runs BM25 with no model loaded. But `node-llama-cpp` 3.20.0 is a **hard, non-optional dependency**, as are `better-sqlite3`, `sqlite-vec`, and four native tree-sitter grammars. The lexical path does not need them; installing the package does. | **PASS.** Pure JavaScript, zero dependencies, no model, no native module, no network. |
 | **Deterministic behavior** | Deterministic per corpus, but the query is silently rewritten: `budget OR reticulator` returned **0 hits** where `reticulator` alone returned 1, and `reticulator*` performed prefix expansion. Raw FTS5 operator syntax reaches the query. | **PASS** with one adapter obligation. Scores are reproducible across instances; equal scores keep **insertion order**, so the adapter imposes its own `block.id` tie-break — which Gate 4 explicitly permits. |
-| **Score semantics** | Expressible but not BM25. `searchLex` returns `abs(bm25) / (1 + abs(bm25))`, a transformed value in `[0, 1)`. Publishing it as "BM25" would be untrue. | **PASS.** The returned value is the sum of per-term BM25+ scores multiplied by the number of matched query terms. Unbounded above, finite, positive for any match. Named exactly that: `minisearch-bm25plus-sum-times-matched-query-terms`. |
+| **Score semantics** | Expressible but not BM25. `searchLex` returns `abs(bm25) / (1 + abs(bm25))`, a transformed value in `[0, 1)`. Publishing it as "BM25" would be untrue. | **PASS.** The returned value is the sum of per-term BM25+ scores multiplied by the number of matched query terms. Unbounded above, finite, positive for any match. Named exactly that: `minisearch-bm25plus-sum-times-matched-query-terms`, under provider id `ctxalloc-minisearch-bm25plus`. Being unbounded is what forced the Phase 9 normalization contract to be corrected — see DEC-041. |
 | **CI feasibility** | **FAIL.** `npm install @tobilu/qmd@2.8.3` produced **856 MB** of `node_modules`, of which **662 MB** is prebuilt `@node-llama-cpp` binaries. Native builds are required for `better-sqlite3` and the grammars. | **PASS.** 912 KB installed, no build step, no postinstall script. |
 | **Dependency weight** | 13 runtime dependencies, including an MCP server and a llama.cpp binding, plus five platform-specific optional `sqlite-vec` packages. | 1 package, 0 transitive dependencies. |
 | **Verdict** | **REJECTED** — fails Gates 1, 2, 3, 6, 7, and 8. | **SELECTED** — passes all eight gates. |
@@ -140,10 +140,11 @@ Confirmed by execution against 7.2.0:
 * `search('')` and a whitespace-only query return `[]`; no operator syntax
   exists, so `budget AND`, `-budget`, and `"unclosed` are treated as ordinary
   terms and none of them throws.
-* Defaults are `prefix: false`, `fuzzy: false`, `bm25: { k: 1.2, b: 0.7, d: 0.5 }`,
-  `processTerm: term => term.toLowerCase()`, and
-  `tokenize: text => text.split(/[\n\r\p{Z}\p{P}]+/u)`. The adapter passes
-  `prefix: false, fuzzy: false` explicitly rather than inheriting them.
+* Defaults are `combineWith: 'OR'`, `prefix: false`, `fuzzy: false`,
+  `bm25: { k: 1.2, b: 0.7, d: 0.5 }`, `processTerm: term => term.toLowerCase()`,
+  and `tokenize: text => text.split(/[\n\r\p{Z}\p{P}]+/u)`. The adapter passes
+  the first four explicitly rather than inheriting them; measured against the
+  library run with no options at all, the scores are identical.
 * Cyrillic text tokenizes and matches without any CtxAlloc normalization.
 * `addAll` **throws** on a duplicate identifier, which the adapter pre-empts with
   its own `duplicate_block_id` failure.

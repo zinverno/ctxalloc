@@ -64,11 +64,26 @@ export const CANDIDATE_SCORING_POLICY_SCHEMA_VERSION = 1;
  * value participates in scoring only when a rule states its meaning
  * (INV-SCORE-002).
  *
- * `min` and `max` are the inclusive bounds of the provider's documented range.
- * They are fixed policy input and are never inferred from the candidates in the
- * batch: a batch-relative range would make one candidate's score change when an
- * unrelated candidate is added or removed, which would make compilation depend
- * on retrieval result composition (INV-DET-001).
+ * `min` and `max` are this policy's **normalization window**: the inclusive raw
+ * interval it is prepared to map onto `[0, 1]` for that contract. They are *not*
+ * a claim that the provider can never emit a value outside them, and they are
+ * deliberately not "the provider's documented range" — several real retrievers
+ * have no documented finite maximum at all. A lexical BM25+ score, for one,
+ * grows with term frequency and corpus statistics and is unbounded above, so a
+ * rule that claimed to state its range would be stating something untrue
+ * (DEC-041).
+ *
+ * The window is fixed policy input and is never inferred from the candidates in
+ * the batch: a batch-relative range would make one candidate's score change when
+ * an unrelated candidate is added or removed, which would make compilation
+ * depend on retrieval result composition (INV-DET-001).
+ *
+ * A raw value outside the window is rejected with `retrieval_score_out_of_range`
+ * rather than clamped. The finding is **policy coverage, not provider
+ * invalidity**: the provider may have returned a perfectly valid measurement
+ * that this policy has not declared how to interpret. Widening the window is a
+ * legitimate response; clamping is not, because it would publish a normalized
+ * value the policy never described.
  */
 export interface RetrievalNormalizationRule {
   readonly ruleId: string;
@@ -1175,7 +1190,7 @@ export class CandidateScorer {
           issue(
             'retrieval_score_out_of_range',
             at('value'),
-            `must be within the inclusive range [${String(rule.min)}, ${String(rule.max)}] declared by retrieval rule ${quote(rule.ruleId)}, received ${String(entry.rawValue)}`,
+            `must be within the inclusive normalization window [${String(rule.min)}, ${String(rule.max)}] declared by retrieval rule ${quote(rule.ruleId)}, received ${String(entry.rawValue)}: this scoring policy does not cover that raw value`,
           ),
         );
         continue;
@@ -1192,7 +1207,7 @@ export class CandidateScorer {
           issue(
             'non_finite_score_result',
             at('value'),
-            `normalizing ${String(entry.rawValue)} over the range [${String(rule.min)}, ${String(rule.max)}] declared by retrieval rule ${quote(rule.ruleId)} produced ${String(normalized)}`,
+            `normalizing ${String(entry.rawValue)} over the normalization window [${String(rule.min)}, ${String(rule.max)}] declared by retrieval rule ${quote(rule.ruleId)} produced ${String(normalized)}`,
           ),
         );
         continue;

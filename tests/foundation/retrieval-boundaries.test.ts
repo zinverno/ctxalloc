@@ -150,6 +150,27 @@ describe('INV-DEP-001: the adapter stays below the kernel', () => {
     }
   });
 
+  it('keeps the corrected Phase 9 contract a documentation change only', () => {
+    // Phase 18 corrected what `RetrievalNormalizationRule.min`/`max` assert. It
+    // must not have changed how they are validated or applied: the schema still
+    // requires a finite ordered pair, the linear map is unchanged, and the issue
+    // code is the one that already existed (DEC-041).
+    const scorer = readSource('packages/compiler/src/candidate-scorer.ts');
+    expect(scorer).toContain('normalization window');
+    expect(scorer).not.toContain("the inclusive bounds of the provider's documented range");
+    expect(scorer).toContain("'retrieval_score_out_of_range'");
+    expect(scorer).toContain('.refine((rule) => rule.min < rule.max');
+
+    // The linear map itself, unchanged.
+    expect(scorer).toContain(
+      'return higherIsBetter ? (rawValue - min) / span : (max - rawValue) / span;',
+    );
+    // The out-of-window branch still records an issue and moves on. It must never
+    // substitute a clamped value for the one the policy declined to interpret.
+    expect(scorer).toContain('if (entry.rawValue < rule.min || entry.rawValue > rule.max)');
+    expect(codeOf(scorer)).not.toContain('clamp');
+  });
+
   it('reads no token budget and makes no allocation decision', () => {
     // `maxCandidates` bounds how many wrappers are proposed. It is not a budget,
     // and the provider must never inspect one to decide what to return.

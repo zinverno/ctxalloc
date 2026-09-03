@@ -33,14 +33,26 @@ import { wordTokenizer } from '../adapters/minisearch-fixtures.js';
 const QUERY = 'budget allocation';
 
 /**
+ * A window deliberately narrower than any score this query produces.
+ *
+ * It is not a magic constant standing in for "large": the test measures the
+ * provider's actual highest score and asserts it exceeds this, so the fixture
+ * stays honest if the corpus or the library changes.
+ */
+const NARROW_MAX = 0.5;
+
+/**
  * A concrete rule covering this provider's exact contract.
  *
- * `min` and `max` are **fixed policy input**, never inferred from the batch: a
- * batch-relative range would make one candidate's score change when an unrelated
- * candidate is added, which would make compilation depend on retrieval result
- * composition (INV-DET-001). The upper bound is a policy choice about the range
- * this deployment expects, and the scorer rejects anything outside it rather
- * than clamping.
+ * `min` and `max` are this policy's **normalization window**, not a claim about
+ * the provider's range. MiniSearch's score is unbounded above, so no finite pair
+ * could state one truthfully; the window says only which raw interval this
+ * policy is prepared to interpret (DEC-032 as corrected by DEC-041).
+ *
+ * It is fixed policy input, never inferred from the batch: a batch-relative
+ * window would make one candidate's score change when an unrelated candidate is
+ * added, which would make compilation depend on retrieval result composition
+ * (INV-DET-001). A value outside it rejects rather than clamps.
  */
 function minisearchRule(overrides: Partial<RetrievalNormalizationRule> = {}) {
   return {
@@ -114,11 +126,91 @@ describe('the real provider feeds Phase 9 scoring unchanged', () => {
     expect(() => scoreWith(candidates, scoringPolicy([]))).toThrow();
   });
 
-  it('still rejects a score outside the range the rule declares', async () => {
-    // Nothing is clamped. A value the policy did not expect is a policy problem
+  it('still rejects a score outside the window the rule declares', async () => {
+    // Nothing is clamped. A value the policy did not cover is a policy problem
     // to fix, not a number to quietly squeeze into range (INV-SCORE-004).
     const candidates = await realCandidates();
     expect(() => scoreWith(candidates, scoringPolicy([minisearchRule({ max: 0.0001 })]))).toThrow();
+  });
+});
+
+describe('the normalization window is policy coverage, not a provider range', () => {
+  /**
+   * The contradiction this suite pins.
+   *
+   * `RetrievalNormalizationRule.min` / `max` were once documented as "the
+   * inclusive bounds of the provider's documented range". MiniSearch's score has
+   * no finite documented maximum — it is a BM25+ sum scaled by the matched-term
+   * count — so under that reading no correct rule for this provider could exist,
+   * and every fixture picking a finite `max` was quietly asserting something
+   * untrue.
+   *
+   * The corrected reading (DEC-041) is that the window states which raw interval
+   * *this policy* will normalize. A raw value above it is then an ordinary,
+   * expected outcome: the provider is fine, the policy simply does not cover that
+   * value, and widening the window is the fix.
+   */
+  async function highestRawScore(): Promise<number> {
+    const values = (await realCandidates()).map(
+      (candidate) => candidate.retrieval?.score?.value ?? 0,
+    );
+    return Math.max(...values);
+  }
+
+  it('the provider succeeds and emits a real score above a deliberately narrow window', async () => {
+    // The provider is not asked to stay inside anything. It returns what the
+    // library computed, and this test measures that value rather than assuming
+    // a magnitude.
+    const highest = await highestRawScore();
+    expect(Number.isFinite(highest)).toBe(true);
+    expect(highest).toBeGreaterThan(0);
+    expect(highest).toBeGreaterThan(NARROW_MAX);
+  });
+
+  it('a narrow window rejects that valid score with retrieval_score_out_of_range', async () => {
+    const candidates = await realCandidates();
+    let issueCodes: readonly string[] = [];
+    expect(() => {
+      try {
+        scoreWith(candidates, scoringPolicy([minisearchRule({ min: 0, max: NARROW_MAX })]));
+      } catch (cause) {
+        issueCodes = ((cause as { issues?: readonly { code?: string }[] }).issues ?? []).map(
+          (detail) => detail.code ?? '',
+        );
+        throw cause;
+      }
+    }).toThrow();
+    // The existing issue code, unchanged. What changed is what it means: this
+    // policy does not cover the observed raw value, not that the value is invalid.
+    expect(issueCodes).toContain('retrieval_score_out_of_range');
+  });
+
+  it('widening only the window scores the same exact raw values successfully', async () => {
+    const candidates = await realCandidates();
+    const highest = await highestRawScore();
+
+    // Nothing about the provider, the query, the corpus, or the candidates
+    // changes between the two runs — only the policy's declared window.
+    const scored = scoreWith(
+      candidates,
+      scoringPolicy([minisearchRule({ min: 0, max: Math.ceil(highest) + 1 })]),
+    );
+    expect(scored.candidates.length).toBe(candidates.length);
+    for (const entry of scored.candidates) {
+      expect(entry.score.retrieval).toBeDefined();
+      expect(Number.isFinite(entry.score.total)).toBe(true);
+    }
+  });
+
+  it('the raw provider score is byte-for-byte identical under both windows', async () => {
+    // The adapter never learns which policy will read its output, and this is
+    // the observable proof: widening a window changes the compiler's normalized
+    // value, never the measurement it was derived from.
+    const first = await realCandidates();
+    const second = await realCandidates();
+    expect(second.map((candidate) => candidate.retrieval?.score?.value)).toEqual(
+      first.map((candidate) => candidate.retrieval?.score?.value),
+    );
   });
 });
 
