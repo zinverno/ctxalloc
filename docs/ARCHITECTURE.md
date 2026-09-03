@@ -171,14 +171,24 @@ Initial ports:
 * SourceReader, implemented (DEC-039);
 * TraceStore, future;
 * ControlStore, implemented and read-only (DEC-039);
-* ModelProvider, future;
-* Clock, only when deterministic time behavior requires it; not required so far,
-  because every time-dependent decision takes an explicit reference instant.
+* ModelProvider, implemented for evaluation only (DEC-040);
+* MonotonicClock, implemented for evaluation durations only (DEC-040);
+* TraceStore, future;
+* a general wall Clock, still absent: every time-dependent decision takes an
+  explicit reference instant, so nothing needs one.
 
-The four implemented ports are type-only contracts in `@ctxalloc/ports`. That
+The six implemented ports are type-only contracts in `@ctxalloc/ports`. That
 package has no runtime export and no external dependency; it may reference
 `@ctxalloc/domain` with type-only imports so that a port and an adapter never
 describe one concept in two vocabularies.
+
+`ModelProvider` and `MonotonicClock` are consumed by `@ctxalloc/evaluation` and
+by nothing else. The compiler kernel calls no model and reads no clock, and
+declaring the ports does not change that: a port is a capability offered, not a
+capability every layer may reach for. `ModelProvider` is narrow by design — one
+configured model, one text request, one text result, and no streaming, tools,
+routing, retry, fallback, caching orchestration, or pricing. `MonotonicClock`
+measures elapsed durations only and carries no date semantics.
 
 `ControlStore` declares `listSources` and nothing else. Control-plane writing
 needs its own persistence decision and its own failure semantics, so it arrives
@@ -205,8 +215,11 @@ Implemented:
 
 * `O200kBaseTokenizer` in `@ctxalloc/tokenization` (DEC-027);
 * `NodeFileSourceReader` in `@ctxalloc/adapters` (DEC-039);
-* `FakeTokenizer`, `InMemorySourceReader`, `InMemoryControlStore`, and
-  `FakeCandidateProvider` in `@ctxalloc/testing`.
+* `AnthropicModelProvider` in `@ctxalloc/adapters`, for evaluation only (DEC-040);
+* `SystemMonotonicClock` in `@ctxalloc/adapters` (DEC-040);
+* `FakeTokenizer`, `InMemorySourceReader`, `InMemoryControlStore`,
+  `FakeCandidateProvider`, `FakeModelProvider`, and `FakeMonotonicClock` in
+  `@ctxalloc/testing`.
 
 Future:
 
@@ -215,8 +228,12 @@ Future:
 * InMemoryTraceStore;
 * SQLiteTraceStore;
 * SQLiteControlStore;
-* AnthropicModelProvider;
 * ObsidianVaultSourceReader.
+
+`AnthropicModelProvider` uses Node's built-in `fetch` and adds no provider SDK.
+It reads no environment variable, no configuration file, and no working
+directory: every value is explicit configuration. It is an evaluation adapter,
+not a model gateway.
 
 `@ctxalloc/adapters` depends on `@ctxalloc/ports` only. It deliberately does not
 depend on `@ctxalloc/compiler`: an adapter that could see the kernel would be
@@ -2626,13 +2643,21 @@ SQLite is not the source of truth for an Obsidian vault.
 
 ## 12. Model Provider Boundary
 
-The model provider consumes the compilation result.
+The model provider consumes the compilation result. It is implemented as a
+project-owned port (DEC-040).
 
 ```ts
 interface ModelProvider {
-  complete(request: ModelRequest): Promise<ModelResponse>;
+  readonly id: string;
+  readonly version: string;
+  readonly modelId: string;
+  generate(request: ModelProviderRequest): Promise<ModelProviderResult>;
 }
 ```
+
+The model identity belongs to the provider **instance**, not to a request, so
+one run cannot silently mix two models. The result carries no latency: the
+caller measures duration around the call, through `MonotonicClock`.
 
 The compiler must not:
 
@@ -2644,13 +2669,21 @@ The compiler must not:
 
 Those responsibilities belong to the application or adapter layer.
 
-The MVP supports one provider implementation for evaluation.
+The MVP supports one provider implementation for evaluation:
+`AnthropicModelProvider` (DEC-040). The compiler remains model-free, and only
+`@ctxalloc/evaluation` consumes the port.
 
 ---
 
 ## 13. Evaluation Architecture
 
 The evaluation harness must use the same compiler used by production interfaces.
+
+`EvaluationHarness` is implemented in `@ctxalloc/evaluation` (DEC-040). It
+depends on `@ctxalloc/domain`, `@ctxalloc/ports`, and `@ctxalloc/compiler`, and
+deliberately not on `@ctxalloc/application`: a benchmark case is static data, so
+the measurement stays decoupled from the pipeline that produces what is
+measured.
 
 ```text
 Evaluation Case
@@ -2674,6 +2707,19 @@ Evaluation produces:
 * failure classification.
 
 The benchmark must not use a separate simplified compiler.
+
+The harness owns **one** `Tokenizer` object and gives it to
+`CandidateValidator`, to every baseline measurement, and to `ContextCompiler`,
+so baseline and compiled counts are one vocabulary. Provider-native token usage
+is a second vocabulary and is never combined with it.
+
+Both model calls for one case use the same provider instance, system prompt,
+query, output limit, temperature, and prompt version: only the context differs.
+The versioned prompt belongs to the harness, never to an adapter.
+
+The three baselines — full context, whole-record truncation, and top-k over
+comparable retrieval evidence — are evaluation strategies, not compiler stages.
+None produces a `CompilationId`, and token reduction exists only here.
 
 ---
 

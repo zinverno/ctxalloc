@@ -21,10 +21,17 @@
       "@ctxalloc/application": ["packages/application/src/index.ts"],
       "@ctxalloc/compiler": ["packages/compiler/src/index.ts"],
       "@ctxalloc/domain": ["packages/domain/src/index.ts"],
+      "@ctxalloc/evaluation": ["packages/evaluation/src/index.ts"],
       "@ctxalloc/ports": ["packages/ports/src/index.ts"],
       "@ctxalloc/testing": ["packages/testing/src/index.ts"],
       "@ctxalloc/tokenization": ["packages/tokenization/src/index.ts"]
     }
   },
-  "include": ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": [
+    "packages/*/src/**/*.ts",
+    "apps/*/src/**/*.ts",
+    "benchmarks/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts"
+  ]
 }

@@ -137,61 +137,71 @@ Compiler metrics and retrieval metrics must still be reported separately.
 
 Each evaluation case must use a versioned schema.
 
+`EvaluationCase` is **implemented** at schema version 1 in
+`@ctxalloc/evaluation` (DEC-040).
+
 ```ts id="cd8n2e"
 interface EvaluationCase {
-  id: string;
-  schemaVersion: number;
-  datasetSplit: "development" | "validation" | "regression";
+  readonly schemaVersion: 1;
 
-  scope: Scope;
-  query: string;
+  readonly id: string;
+  readonly datasetSplit: "development" | "validation" | "regression";
 
-  candidates: CandidateBlock[];
-  sourceDocuments: SourceDocument[];
+  /** The exact compiler request, embedded whole. */
+  readonly compilationRequest: CompilationRequest;
 
-  budget: {
-    totalTokens: number;
-    reservedOutputTokens: number;
-    reservedSystemTokens?: number;
-    reservedToolTokens?: number;
-    reservedProtocolTokens?: number;
-  };
+  readonly requiredBlockIds: readonly string[];
+  readonly requiredFacts: readonly EvaluationRequiredFact[];
+  readonly relevantBlockIds: readonly string[];
+  readonly irrelevantBlockIds: readonly string[];
 
-  requiredBlockIds?: string[];
-  requiredFacts?: RequiredFact[];
-  relevantBlockIds?: string[];
-  irrelevantBlockIds?: string[];
-  duplicateGroups?: DuplicateGroup[];
+  readonly expectedCompilationFailure?: ExpectedCompilationFailure;
 
-  expectedFailure?: {
-    code: string;
-  };
+  readonly answerCriteria: readonly AnswerCriterion[];
 
-  answerCriteria?: AnswerCriterion[];
-
-  tags: string[];
+  readonly tags: readonly string[];
 }
 ```
 
-`candidates` are `CandidateBlock` wrappers, and `sourceDocuments` is the explicit
-registry their source references are validated against, because that is what the
-compiler's candidate validation stage actually receives (DEC-030). A case that
-omitted the registry could not be compiled.
+An earlier draft of this section listed `scope`, `query`, `candidates`,
+`sourceDocuments`, and `budget` as case fields. That sketch predated the final
+compiler contract and omitted `referenceTime` and `policy`, so a case built from
+it could not be compiled at all. It is corrected here:
+**`compilationRequest` is the exact `CompilationRequest`**, validated by
+`CompilationRequestValidator`, so scope, query, reference time, candidates, the
+source-document registry, budget, and policy cannot drift from the compiler's own
+contract and no second partial request schema exists to keep in step.
 
-`EvaluationCase` is a specification, not an implemented schema. The evaluation
-harness is a later phase.
+`EvaluationCase.id` is dataset identity; `compilationRequest.id` is request
+identity. They are not required to be equal.
 
-Required facts should have stable identifiers.
+Nothing is defaulted or coerced, and every annotation is cross-checked against
+the case's own candidate corpus: an annotation naming a block the case does not
+contain is a broken answer key.
+
+`ExpectedCompilationFailure` is `{ stage, issueCode }`. A case passes it when
+compilation fails with a `ContextCompilationError` whose stage matches exactly
+and at least one issue carries the exact code; additional issues are allowed.
+
+Required facts have stable identifiers and **OR-of-AND** evidence groups.
 
 ```ts id="nz9zwe"
-interface RequiredFact {
-  id: string;
-  description: string;
-  acceptableEvidence: string[];
-  sourceBlockIds: string[];
-  importance: "critical" | "major" | "minor";
+interface EvaluationRequiredFact {
+  readonly id: string;
+  readonly description: string;
+  readonly importance: "critical" | "major" | "minor";
+
+  /** OR across groups, AND inside one group. */
+  readonly evidenceBlockGroups: readonly (readonly string[])[];
+
+  /** Documentation only. Never a matching rule in v1. */
+  readonly acceptableEvidence: readonly string[];
 }
 ```
+
+The earlier flat `sourceBlockIds` list is corrected: it cannot distinguish
+*either of these blocks proves the fact* from *these blocks together prove it*,
+and the second is exactly the distributed-facts category (6.2).
 
 ---
 
@@ -300,6 +310,17 @@ The same candidates are provided in different permutations.
 
 Every meaningful benchmark must compare CtxAlloc with one or more baselines.
 
+**Implementation status.** Baselines 7.1, 7.2, and 7.3 are implemented in
+`@ctxalloc/evaluation` (DEC-040); 7.4 and 7.5 remain future. Every baseline
+renders through a separately versioned evaluation renderer whose record shape is
+byte-identical to `ContextRenderer` v1, proved by a golden test — so a token
+comparison is a comparison of context and never of two wire formats.
+
+Token counts are **not** monotonic in the number of records: adding one can lower
+the total, because the tokenizer merges across the new boundary. Every prefix
+baseline therefore measures *every* prefix as one complete rendered string and
+takes the longest that fits.
+
 ## 7.1 Full Context Baseline
 
 All valid candidates are rendered without selection.
@@ -316,6 +337,12 @@ Purpose:
 
 Candidates are concatenated in input order and cut at the token budget.
 
+**Implemented** (DEC-040) as **whole-record** truncation: the selection is always
+a prefix of the validated candidate order and a record is never cut in half.
+Slicing through the middle of a rendered record produces a context that is not
+the wire format either side of the comparison uses, so its token count would
+measure a string no system would ever send.
+
 Purpose:
 
 * compare against the simplest budget enforcement strategy.
@@ -323,6 +350,14 @@ Purpose:
 ## 7.3 Top-K Baseline
 
 Candidates are sorted by retrieval or relevance score and included until the budget is exhausted.
+
+**Implemented** (DEC-040), and **applicable only** under one exact retrieval
+contract. Raw scores are compared only when every candidate agrees on
+`providerId`, `providerVersion`, `semantics`, and `higherIsBetter`; rank is a
+weaker fallback needing only one provider and version. Otherwise the baseline
+reports itself inapplicable with reason `incomparable-retrieval-evidence` rather
+than inventing an order — a number built from incomparable evidence looks exactly
+like a real one in a report (INV-SCORE-002).
 
 Purpose:
 
@@ -602,6 +637,16 @@ publish a different quantity under a documented metric's name.
 
 The definitions above are unchanged. They are measured by the evaluation harness
 against the baselines of section 7, not by the compiler (DEC-038).
+
+**Producer: `EvaluationHarness`** (DEC-040). `baselineInputTokens` is the exact
+token count of the full-context baseline (7.1) and of nothing else, measured with
+the same `Tokenizer` the compiler used. The reduction is signed and never
+clamped; the ratio is **absent** when the baseline is empty rather than `NaN` or
+`Infinity`. Comparisons against the truncation and top-k baselines are reported
+beside it, always named, never as "the" token reduction.
+
+Provider-native `usage` counts are a different vocabulary and are never
+subtracted from a CtxAlloc count.
 
 ## 8.9 Budget Utilization
 
@@ -1041,12 +1086,32 @@ answerQualityScore
   = awardedPoints / maximumPoints
 ```
 
+**Implemented v1** (DEC-040) as a deterministic rule-based instance of that
+formula. Each `AnswerCriterion` — `exact`, `contains-all`, `contains-any`, or
+`not-contains` — is binary and earns its whole integer weight or nothing:
+
+```text id="s5t0p9"
+answerQualityScore = earnedWeight / totalWeight        in [0, 1]
+```
+
+There is no regular expression, stemming, fuzzy matching, answer trimming, or
+Unicode normalization; case-insensitive comparison uses the locale-independent
+Unicode default casing. When a case states no criteria the score is **absent** —
+an unscored answer is not a zero-scoring answer. The rubric above remains the
+target shape for a later version; LLM-as-judge stays deferred (12.3).
+
 ## 11.6 Quality Loss
 
 ```text id="gdc13x"
 qualityLoss
   = baselineQualityScore - compiledQualityScore
 ```
+
+**Producer: `EvaluationHarness`** (DEC-040). It is signed and never clamped, and
+it exists only when both scores exist: a failed provider call never becomes a
+zero-scoring answer. A loss **strictly greater** than the run's configured
+`severeQualityLossThreshold` is severe; equality is the boundary the run declared
+acceptable.
 
 Report both:
 
@@ -1361,6 +1426,20 @@ Retrieval metrics must not be combined with compiler metrics into one unexplaine
 
 Performance must be measured separately for each stage.
 
+**Phase 17 scope** (DEC-040). `EvaluationHarness` measures three durations with
+an injected `MonotonicClock` — never a wall clock — and reports them separately:
+compilation latency (17.1), full-baseline model latency, and compiled-context
+model latency (17.6). It derives
+`compiledRequestLatency = compilationLatency + compiledModelLatency`, which is
+deliberately **not** 17.5: Phase 17 uses static candidate cases, so no retrieval
+time is in it. A clock reading that is non-finite, negative, or backwards is a
+harness failure rather than a published negative duration.
+
+Distributions report count, mean, median, p10, p50, p90, p95, p99, minimum, and
+maximum, using one **nearest-rank** percentile method everywhere:
+`rank = clamp(ceil(p * n), 1, n)`, so `median` is exactly `p50`. A metric with no
+observations omits its distribution rather than reporting zeros.
+
 ## 17.1 Compilation Latency
 
 Time from validated request entry to completed compilation result.
@@ -1404,6 +1483,11 @@ Includes:
 * allocation;
 * rendering;
 * trace persistence.
+
+**Not measured in Phase 17.** Benchmark cases carry static candidates, so no
+retrieval happens and no trace is persisted. The harness's
+`compiledRequestLatency` covers compilation plus one model call and must not be
+reported under this name (DEC-040).
 
 ## 17.6 Model Latency
 

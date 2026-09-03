@@ -25,6 +25,7 @@ export default defineConfig({
       '@ctxalloc/application': packageEntry('application'),
       '@ctxalloc/compiler': packageEntry('compiler'),
       '@ctxalloc/domain': packageEntry('domain'),
+      '@ctxalloc/evaluation': packageEntry('evaluation'),
       '@ctxalloc/ports': packageEntry('ports'),
       '@ctxalloc/testing': packageEntry('testing'),
       '@ctxalloc/tokenization': packageEntry('tokenization'),

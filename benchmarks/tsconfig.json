@@ -1,4 +1,9 @@
 {
+  // Type-check program for the benchmark dataset.
+  //
+  // The dataset is TypeScript rather than JSON because every case derives its
+  // content hashes and token counts (DEC-040), so it needs the same strict
+  // settings and the same workspace resolution the tests use. It emits nothing.
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "composite": false,
@@ -6,14 +11,10 @@
     "types": ["node"],
     "baseUrl": "..",
     "paths": {
-      "@ctxalloc/application": ["packages/application/src/index.ts"],
-      "@ctxalloc/adapters": ["packages/adapters/src/index.ts"],
       "@ctxalloc/compiler": ["packages/compiler/src/index.ts"],
       "@ctxalloc/domain": ["packages/domain/src/index.ts"],
       "@ctxalloc/evaluation": ["packages/evaluation/src/index.ts"],
-      "@ctxalloc/ports": ["packages/ports/src/index.ts"],
-      "@ctxalloc/testing": ["packages/testing/src/index.ts"],
-      "@ctxalloc/tokenization": ["packages/tokenization/src/index.ts"]
+      "@ctxalloc/ports": ["packages/ports/src/index.ts"]
     }
   },
   "include": ["**/*.ts"]

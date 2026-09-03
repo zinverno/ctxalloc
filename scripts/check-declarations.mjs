@@ -23,11 +23,15 @@ const DECLARATIONS = [
   'packages/ports/dist/source-reader.d.ts',
   'packages/ports/dist/control-store.d.ts',
   'packages/ports/dist/candidate-provider.d.ts',
+  'packages/ports/dist/model-provider.d.ts',
+  'packages/ports/dist/monotonic-clock.d.ts',
   'packages/testing/dist/index.d.ts',
   'packages/testing/dist/fake-tokenizer.d.ts',
   'packages/testing/dist/in-memory-source-reader.d.ts',
   'packages/testing/dist/in-memory-control-store.d.ts',
   'packages/testing/dist/fake-candidate-provider.d.ts',
+  'packages/testing/dist/fake-model-provider.d.ts',
+  'packages/testing/dist/fake-monotonic-clock.d.ts',
   'packages/tokenization/dist/index.d.ts',
   'packages/tokenization/dist/o200k-base-tokenizer.d.ts',
   'packages/application/dist/index.d.ts',
@@ -39,6 +43,8 @@ const DECLARATIONS = [
   'packages/application/dist/compile-local-context-service.d.ts',
   'packages/adapters/dist/index.d.ts',
   'packages/adapters/dist/node-file-source-reader.d.ts',
+  'packages/adapters/dist/anthropic-model-provider.d.ts',
+  'packages/adapters/dist/system-monotonic-clock.d.ts',
   'packages/domain/dist/index.d.ts',
   'packages/domain/dist/candidate-block.d.ts',
   'packages/domain/dist/block-content-hash.d.ts',
@@ -56,6 +62,14 @@ const DECLARATIONS = [
   'packages/compiler/dist/request-fingerprint.d.ts',
   'packages/compiler/dist/compilation-id.d.ts',
   'packages/compiler/dist/context-compiler.d.ts',
+  'packages/evaluation/dist/index.d.ts',
+  'packages/evaluation/dist/evaluation-case.d.ts',
+  'packages/evaluation/dist/evaluation-run-config.d.ts',
+  'packages/evaluation/dist/evaluation-prompt.d.ts',
+  'packages/evaluation/dist/evaluation-baselines.d.ts',
+  'packages/evaluation/dist/answer-evaluator.d.ts',
+  'packages/evaluation/dist/evaluation-report.d.ts',
+  'packages/evaluation/dist/evaluation-harness.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -169,9 +183,17 @@ const PORT_DECLARATIONS = [
   'packages/ports/dist/source-reader.d.ts',
   'packages/ports/dist/control-store.d.ts',
   'packages/ports/dist/candidate-provider.d.ts',
+  'packages/ports/dist/model-provider.d.ts',
+  'packages/ports/dist/monotonic-clock.d.ts',
 ];
 
 const PORT_FORBIDDEN_TYPES = [
+  'Anthropic',
+  'Response',
+  'Headers',
+  'AbortSignal',
+  'RequestInit',
+  'fetch(',
   'Buffer',
   'Stats',
   'Dirent',
@@ -661,14 +683,15 @@ requireContains('packages/testing/dist/index.d.ts', "} from './in-memory-source-
 requireContains('packages/testing/dist/index.d.ts', "} from './in-memory-control-store.js'");
 requireContains('packages/testing/dist/index.d.ts', "} from './fake-candidate-provider.js'");
 
-// No test double may declare a model provider or a trace store: neither port
-// exists yet, and publishing a fake for one would invite a test to depend on a
-// contract nothing implements.
+// No test double may declare a fake for a port that does not exist. The model
+// provider and the monotonic clock left this list in Phase 17 because both ports
+// are now real and consumed; a trace store is still absent, and publishing a
+// fake for it would invite a test to depend on a contract nothing implements.
 {
   const content = contents.get('packages/testing/dist/index.d.ts');
   if (content !== undefined) {
     const declarations = stripComments(content);
-    for (const absent of ['FakeModelProvider', 'InMemoryTraceStore', 'ModelProvider']) {
+    for (const absent of ['InMemoryTraceStore', 'TraceStore', 'FakeEmbeddingProvider']) {
       if (declarations.includes(absent)) {
         fail(`packages/testing/dist/index.d.ts declares "${absent}"`);
       }
@@ -2254,6 +2277,242 @@ for (const [relativePath, content] of contents) {
     if (specifier.startsWith(INTERNAL_SCOPE)) continue;
     if (isDomain && specifier === 'zod') continue;
     fail(`${relativePath} exposes an external type from "${specifier}"`);
+  }
+}
+
+// The two Phase 17 ports keep their documented shapes (DEC-040). Both are
+// type-only, so the entry point must re-export them as types.
+requireContains('packages/ports/dist/model-provider.d.ts', 'interface ModelProviderRequest');
+requireContains('packages/ports/dist/model-provider.d.ts', 'readonly systemPrompt: string;');
+requireContains('packages/ports/dist/model-provider.d.ts', 'readonly userPrompt: string;');
+requireContains('packages/ports/dist/model-provider.d.ts', 'readonly maxOutputTokens: number;');
+requireContains('packages/ports/dist/model-provider.d.ts', 'readonly temperature: number;');
+requireContains('packages/ports/dist/model-provider.d.ts', 'interface ModelProviderUsage');
+requireContains('packages/ports/dist/model-provider.d.ts', 'readonly inputTokens?: number;');
+requireContains('packages/ports/dist/model-provider.d.ts', 'readonly outputTokens?: number;');
+requireContains('packages/ports/dist/model-provider.d.ts', 'interface ModelProviderResult');
+requireContains('packages/ports/dist/model-provider.d.ts', 'readonly outputText: string;');
+requireContains('packages/ports/dist/model-provider.d.ts', 'interface ModelProvider');
+requireContains('packages/ports/dist/model-provider.d.ts', 'readonly modelId: string;');
+requireContains(
+  'packages/ports/dist/model-provider.d.ts',
+  'generate(request: ModelProviderRequest): Promise<ModelProviderResult>;',
+);
+requireContains('packages/ports/dist/monotonic-clock.d.ts', 'interface MonotonicClock');
+requireContains('packages/ports/dist/monotonic-clock.d.ts', 'nowMilliseconds(): number;');
+requireContains(
+  'packages/ports/dist/index.d.ts',
+  "export type { ModelProvider, ModelProviderRequest, ModelProviderResult, ModelProviderUsage, } from './model-provider.js'",
+);
+requireContains(
+  'packages/ports/dist/index.d.ts',
+  "export type { MonotonicClock } from './monotonic-clock.js'",
+);
+
+// The model port stays narrow: no streaming, tools, routing, retry, pricing, or
+// per-request model identity, and no latency (the caller measures that).
+{
+  const content = contents.get('packages/ports/dist/model-provider.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const forbidden of ['stream', 'tools', 'retry', 'fallback', 'price', 'cost', 'latency']) {
+      if (declarations.includes(forbidden)) {
+        fail(`packages/ports/dist/model-provider.d.ts declares "${forbidden}"`);
+      }
+    }
+  }
+}
+
+// The clock port carries no date semantics at all.
+{
+  const content = contents.get('packages/ports/dist/monotonic-clock.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const forbidden of ['Date', 'Timestamp', 'timezone']) {
+      if (declarations.includes(forbidden)) {
+        fail(`packages/ports/dist/monotonic-clock.d.ts declares "${forbidden}"`);
+      }
+    }
+  }
+}
+
+// The real model adapter implements the port, keeps its config explicit, and
+// publishes a project-owned error with stable codes (DEC-040).
+requireContains(
+  'packages/adapters/dist/anthropic-model-provider.d.ts',
+  'class AnthropicModelProvider implements ModelProvider',
+);
+requireContains(
+  'packages/adapters/dist/anthropic-model-provider.d.ts',
+  'interface AnthropicModelProviderConfig',
+);
+for (const field of [
+  'readonly apiKey: string;',
+  'readonly modelId: string;',
+  'readonly apiVersion: string;',
+  'readonly baseUrl: string;',
+  'readonly timeoutMs: number;',
+]) {
+  requireContains('packages/adapters/dist/anthropic-model-provider.d.ts', field);
+}
+requireContains(
+  'packages/adapters/dist/anthropic-model-provider.d.ts',
+  'constructor(config: unknown);',
+);
+requireContains(
+  'packages/adapters/dist/anthropic-model-provider.d.ts',
+  'class AnthropicModelProviderError extends Error',
+);
+requireContains(
+  'packages/adapters/dist/anthropic-model-provider.d.ts',
+  'type AnthropicModelProviderErrorCode',
+);
+requireContains(
+  'packages/adapters/dist/anthropic-model-provider.d.ts',
+  'ANTHROPIC_MODEL_PROVIDER_ID = "ctxalloc-anthropic-messages"',
+);
+requireContains('packages/adapters/dist/system-monotonic-clock.d.ts', 'class SystemMonotonicClock');
+requireContains('packages/adapters/dist/system-monotonic-clock.d.ts', 'nowMilliseconds(): number;');
+requireContains('packages/adapters/dist/index.d.ts', "} from './anthropic-model-provider.js'");
+requireContains('packages/adapters/dist/index.d.ts', "} from './system-monotonic-clock.js'");
+
+// No runtime web or Node type leaks out of the adapters (INV-ADAPTER-001).
+{
+  const ADAPTER_FORBIDDEN_TYPES = [
+    'Response',
+    'Headers',
+    'RequestInit',
+    'AbortSignal',
+    'AbortController',
+    '=> Error',
+    ': Error',
+    'Buffer',
+    'node:',
+  ];
+  for (const relativePath of [
+    'packages/adapters/dist/index.d.ts',
+    'packages/adapters/dist/anthropic-model-provider.d.ts',
+    'packages/adapters/dist/system-monotonic-clock.d.ts',
+  ]) {
+    const content = contents.get(relativePath);
+    if (content === undefined) continue;
+    const declarations = stripComments(content);
+    for (const type of ADAPTER_FORBIDDEN_TYPES) {
+      if (declarations.includes(type)) {
+        fail(`${relativePath} exposes the forbidden type "${type}"`);
+      }
+    }
+  }
+}
+
+// The two new test doubles implement the ports they stand in for.
+requireContains(
+  'packages/testing/dist/fake-model-provider.d.ts',
+  'class FakeModelProvider implements ModelProvider',
+);
+requireContains(
+  'packages/testing/dist/fake-model-provider.d.ts',
+  'get calls(): readonly ModelProviderRequest[];',
+);
+requireContains(
+  'packages/testing/dist/fake-monotonic-clock.d.ts',
+  'class FakeMonotonicClock implements MonotonicClock',
+);
+requireContains('packages/testing/dist/index.d.ts', "} from './fake-model-provider.js'");
+requireContains('packages/testing/dist/index.d.ts', "} from './fake-monotonic-clock.js'");
+
+// The evaluation harness publishes its schemas, its identities, its errors, and
+// its result and report contracts (DEC-040).
+requireContains('packages/evaluation/dist/evaluation-case.d.ts', 'EVALUATION_CASE_SCHEMA_VERSION');
+requireContains('packages/evaluation/dist/evaluation-case.d.ts', 'interface EvaluationCase');
+requireContains(
+  'packages/evaluation/dist/evaluation-case.d.ts',
+  'readonly compilationRequest: CompilationRequest;',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-case.d.ts',
+  'interface EvaluationRequiredFact',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-case.d.ts',
+  'readonly evidenceBlockGroups: readonly (readonly string[])[];',
+);
+requireContains('packages/evaluation/dist/evaluation-case.d.ts', 'type AnswerCriterion');
+requireContains(
+  'packages/evaluation/dist/evaluation-case.d.ts',
+  'interface ExpectedCompilationFailure',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-case.d.ts',
+  'class EvaluationCaseValidationError extends Error',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-run-config.d.ts',
+  'interface EvaluationRunConfig',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-run-config.d.ts',
+  'readonly determinismRepeats: number;',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-prompt.d.ts',
+  'EVALUATION_PROMPT_ID = "ctxalloc-eval-prompt"',
+);
+requireContains('packages/evaluation/dist/evaluation-prompt.d.ts', 'EVALUATION_PROMPT_VERSION');
+requireContains(
+  'packages/evaluation/dist/evaluation-baselines.d.ts',
+  'EVALUATION_BASELINE_RENDERER_ID = "ctxalloc-eval-jsonl"',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-baselines.d.ts',
+  'type EvaluationBaselineResult',
+);
+requireContains('packages/evaluation/dist/evaluation-report.d.ts', 'interface EvaluationReport');
+requireContains(
+  'packages/evaluation/dist/evaluation-report.d.ts',
+  'interface EvaluationCaseResult',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-report.d.ts',
+  'interface EvaluationDistribution',
+);
+requireContains('packages/evaluation/dist/evaluation-harness.d.ts', 'class EvaluationHarness');
+requireContains(
+  'packages/evaluation/dist/evaluation-harness.d.ts',
+  'class EvaluationHarnessError extends Error',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-harness.d.ts',
+  'runCase(runConfig: unknown, evaluationCase: unknown): Promise<EvaluationCaseResult>;',
+);
+requireContains(
+  'packages/evaluation/dist/evaluation-harness.d.ts',
+  'runSuite(runConfig: unknown, cases: readonly unknown[]): Promise<EvaluationReport>;',
+);
+
+// Evaluation mechanics stay private: a caller depending on one would be
+// depending on an implementation detail rather than a contract.
+{
+  const content = contents.get('packages/evaluation/dist/index.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const internal of [
+      'canonicalJson',
+      'compareCodeUnits',
+      'domainSeparatedHash',
+      'summarize',
+      'hashReport',
+      'renderBaselineContext',
+      'buildFullContextBaseline',
+      'buildTruncationBaseline',
+      'buildTopKBaseline',
+      'AnthropicResponse',
+      'Anthropic',
+    ]) {
+      if (declarations.includes(internal)) {
+        fail(`packages/evaluation/dist/index.d.ts exports the internal "${internal}"`);
+      }
+    }
   }
 }
 
