@@ -262,6 +262,11 @@ function invalidRequest(message: string, blockId = ''): MiniSearchCandidateProvi
  * exactly what the Phase 16 and Phase 17 boundaries established must not happen
  * (INV-ADAPTER-001, INV-ADAPTER-003, INV-SEC-001).
  *
+ * A **revoked** `Proxy` is the sharpest case: it is `typeof "object"` and not
+ * `null`, so it reaches every structural check here, and it refuses *every*
+ * reflective operation — including `Array.isArray`, which looks passive but
+ * unwraps a proxy to reach its target.
+ *
  * Every reflective operation therefore goes through one of the helpers below,
  * each of which reports failure as data. A reflective failure becomes a
  * project-owned error whose code names *where* it happened — configuration,
@@ -308,6 +313,38 @@ function tryOwnDataProperty(value: unknown, key: string): Inspected {
   return { kind: 'value', value: descriptor.value };
 }
 
+/**
+ * Whether `value` is an array, or `null` when even that cannot be determined.
+ *
+ * `Array.isArray` looks passive and almost always is, but the specification's
+ * `IsArray` unwraps a `Proxy` to reach its target, and on a **revoked** proxy
+ * that throws:
+ *
+ * ```text
+ * const { proxy, revoke } = Proxy.revocable([], {});
+ * revoke();
+ * Array.isArray(proxy);
+ * // TypeError: Cannot perform 'IsArray' on a proxy that has been revoked
+ * ```
+ *
+ * On Node 22 this holds for an **object-target** revoked proxy too, so it is not
+ * a quirk of array-backed ones. A revoked proxy is an ordinary value for a caller
+ * to hold — it is `typeof "object"` and not `null` — so it reaches every one of
+ * this adapter's structural checks, and an unguarded call there would let a raw
+ * `TypeError`, with the engine's own wording, escape as this adapter's failure.
+ *
+ * The question is answered **only** this way. Probing the value some other way to
+ * decide whether it is an array would mean inspecting a value that has already
+ * refused to be inspected.
+ */
+function tryIsArray(value: unknown): boolean | null {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return null;
+  }
+}
+
 /** Own enumerable string keys, or `null` when the `ownKeys` trap threw. */
 function tryOwnEnumerableKeys(value: object): readonly string[] | null {
   try {
@@ -345,7 +382,9 @@ function tryOwnEnumerableKeys(value: object): readonly string[] | null {
  * touched exactly once, reflectively.
  */
 function tryReadArrayItems(value: unknown): readonly unknown[] | null {
-  if (!Array.isArray(value)) return null;
+  // A revoked proxy cannot even be asked whether it is an array, and that is an
+  // unreadable array rather than a different kind of failure.
+  if (tryIsArray(value) !== true) return null;
 
   const lengthDescriptor = tryOwnDataProperty(value, 'length');
   if (lengthDescriptor.kind !== 'value') return null;
@@ -373,7 +412,8 @@ function tryReadArrayItems(value: unknown): readonly unknown[] | null {
  * never invokes anything; a throwing trap answers `false`, and the caller has
  * already decided what an unreadable descriptor means.
  */
-function hasOwnAccessor(value: object, key: string): boolean {
+function hasOwnAccessor(value: unknown, key: string): boolean {
+  if (typeof value !== 'object' || value === null) return false;
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return descriptor !== undefined && !('value' in descriptor);
@@ -419,7 +459,7 @@ interface ValidatedRequest {
 }
 
 function validateRequest(request: unknown): ValidatedRequest {
-  if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+  if (typeof request !== 'object' || request === null || tryIsArray(request) !== false) {
     throw invalidRequest('MiniSearchCandidateProvider request must be an object.');
   }
 
@@ -447,12 +487,12 @@ function validateRequest(request: unknown): ValidatedRequest {
     throw invalidRequest('MiniSearchCandidateProvider request blocks must be a readable array.');
   }
   const sourceDocuments = requestField(request, 'sourceDocuments', 'sourceDocuments');
-  if (!Array.isArray(sourceDocuments)) {
+  if (tryIsArray(sourceDocuments) !== true) {
     throw invalidRequest('MiniSearchCandidateProvider request sourceDocuments must be an array.');
   }
 
   const scope = requestField(request, 'scope', 'scope');
-  if (typeof scope !== 'object' || scope === null || Array.isArray(scope)) {
+  if (typeof scope !== 'object' || scope === null || tryIsArray(scope) !== false) {
     throw invalidRequest('MiniSearchCandidateProvider request scope must be an object.');
   }
   for (const field of ['tenantId', 'workspaceId'] as const) {
@@ -485,7 +525,7 @@ export class MiniSearchCandidateProvider implements CandidateProvider {
    * @throws {MiniSearchCandidateProviderError} when the configuration is not usable.
    */
   constructor(config: unknown) {
-    if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    if (typeof config !== 'object' || config === null || tryIsArray(config) !== false) {
       throw new MiniSearchCandidateProviderError(
         'MINISEARCH_CANDIDATE_PROVIDER_INVALID_CONFIG',
         'MiniSearchCandidateProvider configuration must be an object.',

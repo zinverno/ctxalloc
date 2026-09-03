@@ -396,6 +396,142 @@ describe('array inspection is passive: no accessor and no get trap ever runs', (
   });
 });
 
+describe('a revoked Proxy cannot leak a native TypeError', () => {
+  /**
+   * The sharpest hostile value, and the last unguarded path.
+   *
+   * A revoked proxy is `typeof "object"` and not `null`, so it reaches every
+   * structural check the adapter performs — and it refuses *every* reflective
+   * operation, including `Array.isArray`, which looks passive but unwraps a proxy
+   * to reach its target:
+   *
+   * ```text
+   * const { proxy, revoke } = Proxy.revocable([], {});
+   * revoke();
+   * Array.isArray(proxy);
+   * // TypeError: Cannot perform 'IsArray' on a proxy that has been revoked
+   * ```
+   *
+   * The engine's own wording is what must not escape, so every assertion below
+   * checks for it by name rather than only checking the error type.
+   */
+
+  /** The exact substring Node uses, which no project-owned error may carry. */
+  const NATIVE_ISARRAY_MESSAGE = 'has been revoked';
+
+  function revoked(target: object): unknown {
+    const { proxy, revoke } = Proxy.revocable(target, {});
+    revoke();
+    return proxy;
+  }
+
+  function assertNoNativeText(error: unknown): void {
+    const owned = error as MiniSearchCandidateProviderError;
+    expect(owned.message).not.toContain(NATIVE_ISARRAY_MESSAGE);
+    expect(owned.message).not.toContain('IsArray');
+    expect(owned.message).not.toContain('TypeError');
+  }
+
+  it.each([
+    ['an array target', [] as object],
+    ['an object target', {} as object],
+  ])('pins that Array.isArray throws on a revoked proxy with %s', (_label, target) => {
+    // Pinned rather than assumed: on this Node version an object-target revoked
+    // proxy throws too, so the guard cannot be scoped to array-backed ones.
+    const proxy = revoked(target);
+    expect(typeof proxy).toBe('object');
+    expect(proxy).not.toBeNull();
+    expect(() => Array.isArray(proxy)).toThrow(TypeError);
+  });
+
+  it.each([
+    ['an array target', [] as object],
+    ['an object target', {} as object],
+  ])('rejects a revoked proxy configuration with %s', (_label, target) => {
+    const error = constructionError(revoked(target));
+    expect(error).toBeInstanceOf(MiniSearchCandidateProviderError);
+    expect((error as MiniSearchCandidateProviderError).code).toBe(
+      'MINISEARCH_CANDIDATE_PROVIDER_INVALID_CONFIG',
+    );
+    assertNoNativeText(error);
+  });
+
+  it.each([
+    ['an array target', [] as object],
+    ['an object target', {} as object],
+  ])('rejects a revoked proxy request with %s', async (_label, target) => {
+    const error = await requestError(revoked(target));
+    expect(error).toBeInstanceOf(MiniSearchCandidateProviderError);
+    expect((error as MiniSearchCandidateProviderError).code).toBe(
+      'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST',
+    );
+    assertNoNativeText(error);
+  });
+
+  it('rejects revoked-proxy blocks through the unreadable-array path', async () => {
+    // This is the array-kind guard inside the spine snapshot: without it,
+    // `Array.isArray` on the corpus throws the native TypeError straight out.
+    const request = {
+      ...providerRequest({ query: 'budget', blocks: CORPUS }),
+      blocks: revoked([]),
+    };
+    const error = await requestError(request);
+    assertProjectOwned(error, 'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST');
+    assertNoNativeText(error);
+  });
+
+  it('rejects revoked-proxy sourceDocuments', async () => {
+    const request = {
+      ...providerRequest({ query: 'budget', blocks: CORPUS }),
+      sourceDocuments: revoked([]),
+    };
+    const error = await requestError(request);
+    assertProjectOwned(error, 'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST');
+    assertNoNativeText(error);
+  });
+
+  it('rejects a revoked-proxy scope', async () => {
+    const request = {
+      ...providerRequest({ query: 'budget', blocks: CORPUS }),
+      scope: revoked({}),
+    };
+    const error = await requestError(request);
+    assertProjectOwned(error, 'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST');
+    assertNoNativeText(error);
+  });
+
+  it('reports a revoked-proxy search result as a search failure', async () => {
+    // Two guards can catch this — the `try` around the library call and the
+    // array-kind guard on the result root — and which one fires depends on
+    // whether anything touches the value on the way back. The contract is the
+    // outcome, not the route: a project-owned `SEARCH_FAILED` carrying none of
+    // the engine's wording.
+    vi.spyOn(MiniSearch.prototype, 'search').mockReturnValue(revoked([]) as never);
+    try {
+      const error = await requestError(providerRequest({ query: 'reticulator', blocks: CORPUS }));
+      assertProjectOwned(error, 'MINISEARCH_CANDIDATE_PROVIDER_SEARCH_FAILED');
+      assertNoNativeText(error);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('leaves ordinary objects and arrays behaving exactly as before', async () => {
+    // The guard must cost nothing for a well-formed value.
+    const got = await provider().getCandidates(
+      providerRequest({ query: 'reticulator', blocks: CORPUS }),
+    );
+    expect(got.map((candidate) => candidate.block.id)).toEqual(['blk-a']);
+    // A plain array is still rejected as a request, and a plain object is still
+    // rejected as a corpus — the two shape rules the guard replaced.
+    assertProjectOwned(await requestError([]), 'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST');
+    assertProjectOwned(
+      await requestError({ ...providerRequest({ query: 'x', blocks: CORPUS }), blocks: {} }),
+      'MINISEARCH_CANDIDATE_PROVIDER_INVALID_REQUEST',
+    );
+  });
+});
+
 describe('a passive valid request is entirely unaffected by the guards', () => {
   it('still retrieves normally', async () => {
     const got = await provider().getCandidates(
