@@ -2,9 +2,14 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
+    // Baseline context, answer, and report hashes use the Node standard
+    // library. It is the only global environment this package touches, and no
+    // Node type reaches a public declaration (INV-ADAPTER-001).
+    "types": ["node"],
     "rootDir": "src",
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [{ "path": "../domain" }, { "path": "../ports" }, { "path": "../compiler" }]
 }

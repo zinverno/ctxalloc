@@ -843,11 +843,15 @@ Implemented:
 * `InMemoryControlStore` (DEC-039), which filters by exact scope and has no write
   API;
 * `InMemorySourceReader` (DEC-039), which maps an exact locator to exact content
-  and resolves no path.
+  and resolves no path;
+* `FakeModelProvider` (DEC-040), which answers only from its script: it reads no
+  query, inspects no context, generates no text, and invents no token usage;
+* `FakeMonotonicClock` (DEC-040), which returns only the readings it was given
+  and fails explicitly when they run out.
 
 Future:
 
-* `FakeModelProvider`, which arrives with the `ModelProvider` port it stands in
+* a trace-store double, which arrives with the `TraceStore` port it stands in
   for.
 
 These implementations allow the complete compiler and local application suite to run without external infrastructure. A test double must never contain product logic: a fake that scored candidates would be retrieval logic living in the test package.
@@ -910,8 +914,10 @@ The first implementation sequence is:
 1. static benchmark fixtures;
 2. `FakeCandidateProvider` — **implemented** (DEC-039), behind the implemented
    `CandidateProvider` port;
-3. technical spike for real retrieval — future;
-4. one selected real retrieval provider — future.
+3. static benchmark fixtures — **implemented** (DEC-040), under
+   `benchmarks/evaluation/v1/`;
+4. technical spike for real retrieval — future;
+5. one selected real retrieval provider — future.
 
 The port is in place, so a real provider replaces the fake without changing the
 application service or the compiler.
@@ -930,53 +936,68 @@ The MVP must not integrate both QMD and Qdrant.
 
 ### 3.13 Single Model Provider
 
-The MVP may include one model provider for end-to-end evaluation.
+**Implemented** (DEC-040): `AnthropicModelProvider`, behind the project-owned
+`ModelProvider` port, for evaluation only.
 
 The model provider is outside the compiler kernel.
 
-Requirements:
+Requirements, all met:
 
 * one configured provider;
-* one configured model;
-* structured token usage capture when available;
-* request and response latency;
-* provider failure handling;
-* no automatic model routing.
+* one configured model, owned by the provider instance rather than by a request;
+* structured token usage capture when available, kept in its own vocabulary and
+  never combined with CtxAlloc tokenizer counts;
+* request and response latency, measured by the caller through `MonotonicClock`
+  rather than reported by the provider;
+* provider failure handling through a project-owned error that republishes no
+  key, prompt, context, response body, or provider message;
+* no automatic model routing, retry, fallback, streaming, or tool use.
 
-The compiler must remain fully testable without the provider.
+The adapter uses Node's built-in `fetch` and adds no provider SDK. It reads no
+environment variable, no configuration file, and no working directory.
+
+The compiler remains fully testable without the provider, and CI runs the whole
+benchmark with model execution disabled.
 
 ---
 
 ### 3.14 Evaluation Harness
 
-The MVP includes an evaluation harness that compares:
+**Implemented** (DEC-040): `EvaluationHarness` in `@ctxalloc/evaluation`, with a
+versioned benchmark dataset under `benchmarks/evaluation/v1/`.
 
-* full-context baseline;
-* compiled-context result.
+It compares the compiled context against three explicit baselines:
 
-Each evaluation case may define:
+* full context — every validated candidate wrapper, duplicates repeated;
+* truncation — the longest whole-record prefix of input order that fits;
+* top-k — the longest fitting prefix of a retrieval ranking, offered only when
+  the evidence is genuinely comparable.
 
-* query;
-* candidate blocks;
-* required facts;
-* required blocks;
-* irrelevant blocks;
-* budget;
-* expected exclusions;
-* answer evaluation criteria.
+An evaluation case embeds the exact `CompilationRequest` whole, so scope, query,
+reference time, candidates, source documents, budget, and policy cannot drift
+from the compiler contract. Beside it a case states its answer key: required
+blocks, required facts as OR-of-AND evidence groups, relevant and irrelevant
+blocks, an optional expected compilation failure, deterministic answer criteria,
+and tags.
 
-The harness must measure:
+The harness measures:
 
-* original tokens;
-* compiled tokens;
-* token reduction;
-* required-block recall;
-* required-fact preservation;
-* answer quality;
-* compilation latency;
-* total request latency;
-* budget violations;
-* determinism failures.
+* full-baseline input tokens, compiled tokens, and their signed difference and
+  ratio;
+* required-block recall, weighted and critical required-fact coverage,
+  relevant-block recall, and irrelevant-block exclusion;
+* answer quality and quality loss, from deterministic rule-based criteria;
+* compilation latency, each model call's latency, and their sum for the compiled
+  path;
+* budget violations, determinism failures, expected-failure accuracy, and
+  provider failures.
+
+Every metric whose denominator does not exist is reported as **absent**, never as
+zero. Reports carry hashes, identities, counts, and metric values — never a raw
+query, source content, context, prompt, or model answer.
+
+Not claimed by this phase: the MVP acceptance targets in `METRICS.md`. A
+benchmark that runs is not a benchmark that has passed.
 
 ---
 

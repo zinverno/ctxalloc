@@ -76,7 +76,20 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
-  packages/evaluation: {}
+  packages/evaluation:
+    dependencies:
+      '@ctxalloc/compiler':
+        specifier: workspace:*
+        version: link:../compiler
+      '@ctxalloc/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@ctxalloc/ports':
+        specifier: workspace:*
+        version: link:../ports
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/ports:
     dependencies:

@@ -85,6 +85,7 @@ A newer decision has replaced the previous one.
 | DEC-037 | Record deterministic privacy-minimized trace snapshots without changing decisions | Accepted |
 | DEC-038 | Settle the compiler by exact render measurement, safe eviction, and a bounded exhaustive selection search | Accepted |
 | DEC-039 | Complete the first local source-to-compilation vertical slice through explicit ports | Accepted |
+| DEC-040 | Evaluate context compilation against explicit baselines outside the compiler | Accepted |
 
 ---
 
@@ -4277,6 +4278,312 @@ ARCHITECTURE changes: section 3.3 marks the four implemented ports; 3.4 marks th
 MVP_SCOPE changes: 3.9 marks `FakeCandidateProvider` and `InMemoryControlStore` implemented and adds `InMemorySourceReader`; 3.10 marks Markdown, plain text, and conversation implemented; 3.12 marks the fake provider implemented and keeps real retrieval future.
 
 **The local vertical slice is complete. The product is not.** Real retrieval, model execution and evaluation, SQLite and every other persistence, control-plane writes, trace persistence, the CLI, the HTTP API, file watching, and document conversion all remain later phases.
+
+---
+
+## DEC-040: Evaluate Context Compilation Against Explicit Baselines Outside the Compiler
+
+### Status
+
+Accepted
+
+### Decision
+
+Phase 15 completed the compiler kernel (DEC-038) and Phase 16 completed the first local source-to-compilation slice (DEC-039). Neither answers the product question: **does CtxAlloc preserve what matters while spending fewer tokens than the obvious alternatives?**
+
+Phase 17 answers it with a versioned benchmark suite that runs offline, and optionally against one real configured model.
+
+```text id="ev17a"
+EvaluationCase
+  -> case validation
+  -> CandidateValidator (the batch every baseline is built from)
+  -> full-context / truncation / top-k baselines
+  -> ContextCompiler.compile(request)
+  -> determinism repeats
+  -> context-preservation and token metrics
+  -> two ModelProvider calls differing only by context
+  -> rule-based answer scoring
+  -> EvaluationCaseResult / EvaluationReport
+```
+
+`@ctxalloc/evaluation` becomes active. It depends on `@ctxalloc/domain`, `@ctxalloc/ports`, and `@ctxalloc/compiler`, and deliberately **not** on `@ctxalloc/application`: a benchmark case is static data, so nothing here needs a source reader, a chunker, or a candidate provider, and depending on the application layer to compile static cases would couple the measurement to the pipeline that produces the thing measured. The dependency allowlist is narrowed to match.
+
+**The compiler is unchanged.** No model is called from inside it, no clock is read, nothing is added to `CompilationResult`, and token reduction exists only here. No new external dependency is added; the evaluation package reuses the repository's already-pinned `zod` for its runtime schemas.
+
+### An Evaluation Case Wraps the Real Compilation Request
+
+METRICS 4 sketched an `EvaluationCase` with its own `scope`, `query`, `candidates`, `sourceDocuments`, and `budget`. That sketch predates the final compiler contract and omits `referenceTime` and `policy` outright, so a case built from it could not be compiled at all.
+
+It is corrected rather than reproduced. `EvaluationCase.compilationRequest` **is** the exact `CompilationRequest`, embedded whole and validated by `CompilationRequestValidator`, so scope, query, reference time, candidates, source documents, budget, and policy cannot drift from the compiler's own contract and no second, partial request schema exists to keep in step (INV-DEP-003).
+
+The two identifiers stay separate. `EvaluationCase.id` is dataset identity — what a report row is called and how cases are ordered — while `compilationRequest.id` is the caller's request identity, which participates in the compilation fingerprint. Forcing them equal would make renaming a benchmark case change the compilation it describes.
+
+Nothing is defaulted or coerced, and every annotation is cross-checked against the case's own candidate corpus: an annotation naming a block the case does not contain is a broken answer key, and a benchmark run against a broken answer key reports a number that means nothing.
+
+**Wanted and unwanted are exclusive, and required-fact evidence is wanted.** A block named by `requiredFacts[i].evidenceBlockGroups[g][b]` is wanted for exactly the reason a `requiredBlockIds` entry is: the case says the compiled context needs it. Listing it in `irrelevantBlockIds` as well makes the benchmark reward opposite decisions about one block — including it raises weighted fact coverage and lowers the irrelevant-exclusion rate, excluding it does the reverse — so no compilation can score well on both. That is rejected with `conflicting_annotation`, pointing at the exact evidence occurrence, and **never repaired**: nothing is removed from `irrelevantBlockIds` and nothing is added to `relevantBlockIds` or `requiredBlockIds` on the author's behalf. Evidence merely absent from `relevantBlockIds` stays legal; the rule is about contradiction, not completeness.
+
+**Criterion weights must add up exactly.** Each weight is individually a positive safe integer, but a sum of safe integers need not be one, and `earnedWeight / totalWeight` stops being the score the case describes once exact integer arithmetic ends. Validation checks the running total *before* each addition, so the unsafe value is never computed and then inspected.
+
+### Required-Fact Evidence Is OR-of-AND Block Groups
+
+The METRICS draft modelled evidence as one flat `sourceBlockIds` list. That cannot distinguish two different situations: *either of these blocks proves the fact*, and *these blocks together prove it*. Both occur in a real benchmark — the second is the whole point of the distributed-facts category — and a flat list silently scores one of them wrong.
+
+`EvaluationRequiredFact.evidenceBlockGroups` is therefore a list of groups:
+
+```text id="ev17b"
+preserved(fact)
+  = any group for which every block id is in the final included set
+```
+
+OR across groups, AND inside a group. A group is non-empty, a block is not repeated inside one, and two groups equal after canonical block-id ordering are rejected — `[a, b]` and `[b, a]` name one conjunction, and keeping both would count one alternative twice.
+
+`acceptableEvidence` stays documentation for whoever maintains the case. It is **not** a matching rule in v1: searching the compiled context or the model's answer for those strings is a different measurement wearing this one's name.
+
+Importance weights are fixed by schema v1 — `critical = 3`, `major = 2`, `minor = 1` — rather than configurable per run. A weight that moved between runs would make two weighted-coverage numbers incomparable while still printing them under one name.
+
+### Baselines Are Evaluation Strategies, Not Compiler Stages
+
+A baseline answers *what would have been sent without CtxAlloc?* None of them deduplicates, scores, filters, allocates, orders, corrects, or produces a `CompilationId`, and none lives in the kernel — a compiler with a second, unmeasured selection path would be measuring itself.
+
+**Full context** (METRICS 7.1) renders **every validated candidate wrapper** in validated input order. Exact duplicate wrappers stay repeated: without CtxAlloc nothing deduplicates them, and collapsing them here would quietly credit the baseline with the compiler's own deduplication and shrink every reported saving. It may exceed the compilation budget, which is allowed — it is a comparison point, not a compilation that has to fit.
+
+**Truncation** (METRICS 7.2) is the longest **whole-record** prefix of that order which fits `availableInputTokens`. "Whole-record" is a deliberate implementation decision under the `Tokenizer` port, not an approximation of byte-level truncation: slicing through the middle of a JSON record produces a context that is not the wire format either side of the comparison uses, and its token count would measure a string no system would ever send.
+
+**Top-k** (METRICS 7.3) is the longest fitting prefix of a deterministic retrieval ranking, and it is offered **only** under one exact contract. Raw scores are compared only when every wrapper agrees on `providerId`, `providerVersion`, `semantics`, and `higherIsBetter`; a cosine similarity rises with relevance while a distance falls, and normalizing them together would invent a comparison the evidence does not support (INV-SCORE-002). Rank is the weaker fallback and needs only one provider and version, because a rank is an ordering the provider already committed to. Ties break by rank when both compared wrappers carry one, then by block identifier over UTF-16 code units. When neither contract holds the baseline reports `applicable: false` with reason `incomparable-retrieval-evidence` rather than inventing an order — a number built from incomparable evidence looks exactly like a real one in a report.
+
+### Every Prefix Is Measured, Because Tokenization Is Not Monotonic
+
+Adding a record to a rendered string can *lower* its token count: the tokenizer merges across the boundary the new record introduces. Both prefix baselines therefore render and measure **every** prefix as one complete string and take the longest that fits.
+
+Stopping at the first over-budget prefix, or summing per-record costs, would both silently under-fill a baseline and make it look better than it is. The regression is direct: a tokenizer for which a two-record prefix is over budget and a three-record prefix fits, and a baseline that seats all three.
+
+### The Evaluation Baseline Renderer Is Separately Versioned
+
+Baselines render through `ctxalloc-eval-jsonl` v1, whose record shape matches `ContextRenderer` v1 exactly. The compiler's renderer is deliberately **not** exported for the harness to borrow: it is a private detail of how the kernel renders, and publishing it would freeze an implementation a later rendering-policy version has to be free to change (INV-ADAPTER-001).
+
+Drift is closed where it matters instead. A golden test compiles a selection through the real kernel and requires the baseline renderer to reproduce `compiledContext` byte for byte, so a token comparison is a comparison of *context* and never of two wire formats.
+
+### Token Reduction Exists Only in Evaluation
+
+```text id="ev17c"
+baselineInputTokens  = fullContextBaseline.contextTokens
+tokenReduction       = baselineInputTokens - compiledTokens
+tokenReductionRatio  = tokenReduction / baselineInputTokens
+```
+
+`baselineInputTokens` is the full-context baseline's exact token count and nothing else: not `candidateTokens`, not `canonicalContentTokens`, not `availableInputTokens`, and not `totalTokens`. Publishing one of those under this name would be a reporting error rather than an approximation (METRICS 8.7).
+
+The reduction is signed and never clamped — a compilation that renders more than the whole candidate set is a real and reportable outcome. The ratio is **absent** when the baseline is empty, because dividing by zero would publish `NaN` or `Infinity` under a percentage's name. Comparisons against the truncation and top-k baselines are reported beside it, always named, never as "the" token reduction.
+
+`CompilationResult` gains nothing. The kernel has never seen a baseline, so a reduction field on it would be a number the kernel cannot compute.
+
+### One CtxAlloc Tokenizer, and a Separate Provider Vocabulary
+
+The harness owns a single `Tokenizer` object and gives it to `CandidateValidator`, to every baseline measurement, and to `ContextCompiler`. It does not accept a pre-built validator or compiler: a compiler configured with a different tokenizer would make `baselineInputTokens` and `compiledTokens` counts of two different vocabularies, and their difference would be arithmetic on incomparable numbers (METRICS 8.6).
+
+Provider-native `usage` is a **different** vocabulary and keeps its own names — `providerInputTokens`, `providerOutputTokens`. Nothing subtracts a CtxAlloc count from a provider count: the provider's input count also includes the system prompt and the message framing, so the difference would not be rendering overhead or token reduction. An absent usage value stays absent rather than being estimated.
+
+**Every evaluation-owned token count is validated.** The `Tokenizer` port is an external boundary, and a baseline count is both a published measurement and the thing that decides whether a prefix fits. One internal helper wraps every measurement: it calls the tokenizer exactly once, catches whatever it throws, and requires a non-negative safe integer with no coercion, rounding, or clamping. A throwing tokenizer, a `NaN`, an `Infinity`, a negative, a fractional, or an out-of-range count becomes one `EvaluationHarnessError` with issue code `tokenizer_failed` and a fixed message that carries neither the tokenizer's wording nor the measured text (INV-BUDGET-005, INV-SEC-001). A negative count is not merely cosmetic: it would make any prefix "fit" any budget. The compiler's own token validation is unchanged, and the evaluation layer no longer publishes weaker numbers than the compiler would accept.
+
+### The Model Sits Outside the Compiler
+
+`ModelProvider` is a narrow project-owned port: one configured model, one text request, one text result. No streaming, tools, function calling, routing, retry, fallback model, prompt-caching orchestration, or pricing — each is a product decision with its own failure semantics, and adding one would start turning CtxAlloc into a model gateway. Model identity belongs to the provider **instance**, not to a request, so one run cannot silently mix two models and call the difference a context effect. Latency is absent from the result: the caller measures it.
+
+`MonotonicClock` is the second new port: finite, non-negative, non-decreasing milliseconds for **durations only**. It has no date semantics, and no general wall clock is added — the run's execution date stays explicit caller data, exactly as `CompilationRequest.referenceTime` does (INV-DET-004).
+
+One real adapter implements the model port: `AnthropicModelProvider`, over the Anthropic Messages HTTP API through Node's built-in `fetch`. No SDK is added — the request is four fields and the response is a small JSON document, and a dependency would put an SDK type one careless export away from the port.
+
+The adapter **reads no environment**: not `ANTHROPIC_API_KEY`, no configuration file, no working directory. Every value is explicit configuration, validated strictly with exact keys and no defaults. HTTPS is required except on the loopback addresses, where a local stub server can be used without weakening production transport. Credentials, a query, or a fragment in the base URL are rejected.
+
+Nothing leaks from a failure. The API key, the headers, the prompts, the context, the response body, the provider's own error text, and the generated output all stay inside; an `AnthropicModelProviderError` carries a stable code, one fixed message, and — for an HTTP error — the status code, which names the class of problem without quoting anything (INV-SEC-001). A timeout is an `AbortController` abort reported as a project-owned timeout, and nothing is retried automatically.
+
+**Redirects are refused before transmission.** The adapter sets `redirect: "error"`; `fetch` would otherwise follow one by default. A 307 or 308 preserves the method and the body, so an endpoint replying `Location: <other origin>` would have the runtime re-send the `x-api-key` header, the system prompt, and the whole user prompt to a destination the caller never authorized. The configured endpoint is an **authorization boundary**, and a benchmark adapter has no reason to discover another one — so same-origin, cross-origin, loopback, and HTTPS-to-HTTP redirects are all refused alike. Validating a redirect after the fact would be too late: by then the request has already gone, and the `Location` value is itself not disclosed.
+
+**The timeout bound matches Node's actual timer primitive.** `setTimeout` stores its delay as a signed 32-bit value and silently replaces anything larger with `1`. `timeoutMs` is therefore required to be a safe integer between `1` and `2_147_483_647`, and a larger value is rejected rather than clamped: accepting `2_147_483_648` would abort the request after about a millisecond while the configuration says it waits for twenty-four days, and clamping would substitute a timeout the caller did not configure. The bound is a property of the primitive the adapter uses, so it belongs in the adapter's own validation.
+
+### A Provider Result Is Validated Before It Becomes a Measurement
+
+`ModelProvider` is an injected runtime port, so what it resolves with is data from outside the evaluation package no matter how the shipped adapter behaves. A TypeScript interface is erased at run time and constrains only code compiled against it, and the harness immediately hashes, scores, counts, and publishes what it gets back — so an unchecked result turns malformed provider data into benchmark numbers.
+
+Every successful call is therefore validated against schema v1 before anything is hashed, scored, or projected into a report: `schemaVersion` exactly `1`; `outputText` a well-formed UTF-16 string, empty allowed and preserved exactly; `usage` an optional strict object whose present counts are non-negative safe integers; `providerRequestId`, `stopReason`, and `actualModelId` non-empty well-formed strings when present; unknown fields rejected. Nothing is coerced, defaulted, or repaired.
+
+A resolved-but-invalid result is a **call failure**, reported exactly like a call that did not return: `MODEL_PROVIDER_INVALID_RESULT`, no score, no answer hash, no provider usage, and no quality comparison. An invalid baseline result also means the compiled call is not attempted, because a comparison that cannot be made is not worth a second paid call. Neither the malformed content nor any validator detail appears in the failure (INV-SEC-001).
+
+Reading the result is total: a hostile implementation may return a `Proxy` whose traps throw, so every read is guarded and the validator returns a fresh plain object. Nothing downstream reads a provider-controlled property a second time, so a getter cannot return one value to the validator and another to the report.
+
+An injected provider's own capability and identity are validated at **construction**: a non-null object with a `generate` function and non-blank, well-formed `id`, `version`, and `modelId`. A reflective failure while reading any of them is the same `invalid_harness_configuration` error, and no provider-controlled value is quoted in it. The identity is captured once at that point and used for every later report field, so a provider whose `modelId` changes between the run and the report cannot make a report name a model that produced nothing.
+
+**Failure ownership is decided by origin, never by a thrown value's class.** `EvaluationHarnessError` is exported, so an injected provider can construct one — or forge an object whose prototype makes `instanceof` true — and a `catch` that classified by class would then let a provider select an internal issue code such as `clock_failed`, skip the provider-call-failed result state entirely, and have its own message rethrown as the harness's own. The port places no restriction on what a rejected promise carries, so that is a legal provider rather than an exotic one, and the guard was a confused deputy.
+
+The structure decides instead. One model call now reads the start clock, calls `generate()` inside a `catch` that wraps **nothing else**, and reads the end clock and validates the result afterwards. A `clock_failed` can therefore only originate in this class's own call into the clock, and every value the provider catch sees — a real `EvaluationHarnessError`, an `Error`, a `Proxy`, a primitive — is a provider failure by construction, whatever it claims to be. The call returns a discriminated outcome (`{ok: true, measured}` or `{ok: false, failureCode}`), so a provider failure has no path to a `throw` at all. No public error type is added.
+
+**Failure-code inspection is non-throwing.** Describing a provider failure must not become a second failure: a property descriptor read consults a trap a `Proxy` may throw from. It is guarded, an accessor is still never invoked, nothing walks the value's prototype chain any more, and anything unreadable or not shaped like a machine-readable constant becomes the opaque `provider_call_failed`.
+
+### The Harness Owns the Prompt, and Both Calls Differ Only by Context
+
+`ctxalloc-eval-prompt` v1 builds one deterministic JSON object with exactly two keys, in the fixed order `context`, then `query`:
+
+```text id="ev17d"
+{"context":<exact context>,"query":<exact query>}
+```
+
+No instruction text, no delimiter, no commentary. Framing belongs in the system prompt, which comes from `EvaluationRunConfig` so a run states it explicitly. If an adapter chose the framing, changing the adapter would change every historical benchmark number with no record of it.
+
+For one case both model calls use the same provider instance, identity, system prompt, query, output limit, temperature, and prompt version. **Only the context differs**, the full baseline is called first and the compiled context second, and the order is recorded. This is regression-tested directly.
+
+A provider failure is a failure. A baseline failure and a compiled failure are distinct result states, neither becomes an answer score of zero, and a failed pair is excluded from the quality aggregate and counted separately — a model that could not be reached said nothing about the context, and scoring silence as a wrong answer would blame the compiler for an outage.
+
+`callOrder` records the calls **attempted**, not planned: empty when no model ran, `["full-baseline"]` when the baseline call failed and the compiled call therefore never happened, and both entries otherwise. A two-entry order published after a failed baseline call would be a false audit record of a call that did not occur.
+
+**A quality loss requires one concrete model.** `actualModelId` is recorded rather than checked against the configured identifier, because a provider may legitimately resolve an alias to a concrete version. But when both calls report a concrete model and the two **differ**, two experimental variables changed — the context and the model — and the difference between the answers is no longer a context effect. Both call results and both scores stay published; `qualityLoss` and `severeQualityLoss` are withheld, `qualityComparisonIssue: "actual-model-mismatch"` is recorded on the case, and the suite report counts it under `modelIdentityMismatches` so a blocked comparison cannot be mistaken for an unscored one. When one or both identifiers are absent, the provider-instance contract stands and the comparison proceeds.
+
+### Answer Evaluation Is Deterministic and Rule-Based
+
+v1 has four criteria kinds — `exact`, `contains-all`, `contains-any`, `not-contains` — each binary, each earning its whole integer weight or nothing:
+
+```text id="ev17e"
+answerQualityScore = earnedWeight / totalWeight        in [0, 1]
+qualityLoss        = baselineScore - compiledScore
+```
+
+This is a deterministic awarded-points implementation of METRICS 11.5. There is no regular expression, no stemming, no fuzzy matching, no trimming of the answer, and no Unicode normalization; each would let a criterion match text the model did not write. Case-insensitive comparison uses `String.prototype.toLowerCase()`, the locale-independent Unicode default — `toLocaleLowerCase` would fold `I` differently under a Turkish locale and make one criterion pass on one machine and fail on another (INV-DET-002).
+
+`qualityLoss` is signed and never clamped, and a loss **strictly greater** than `severeQualityLossThreshold` is severe: equality is the boundary the run declared acceptable. When a case states no criteria the score is **absent** and so is the loss — an unscored answer is not a zero-scoring answer, and emitting `0` would drag every aggregate down with a measurement nobody made.
+
+LLM-as-judge is deferred (METRICS 12.3). It would make the benchmark's own measurement depend on a model's output, and a quality regression could then be the judge changing its mind rather than the context getting worse.
+
+### Compiler Determinism Excludes Model Output and Latency
+
+`determinismRepeats` compilations run per case, the first being the primary result. Every repeat is compared against the first by an exact canonical projection of the **whole** compiler result — identifier, compiled context, included blocks, usage, and settled trace — with nothing excluded. Latency is not part of `CompilationResult`, so it cannot make two identical compilations look different. A structured failure is compared the same way, so a deterministic failure repeats cleanly and a case that succeeds once and fails once is recorded as a determinism failure rather than as one of the two outcomes.
+
+The model is never called for a repeat: paying for a compiler check the model has no part in would be pure waste. No permutation testing enters the public harness API — the compiler's own permutation regressions remain the source of truth — though a benchmark case may still exercise one.
+
+### Latency Is Measured Around Operations, and a Bad Clock Is a Failure
+
+```text id="ev17f"
+start = clock.nowMilliseconds()
+end   = clock.nowMilliseconds()
+duration = end - start
+```
+
+The clock's own identity is validated and snapshotted at construction, exactly as the provider's is and for the same reason: a report names the clock its latencies were measured with, so a clock must not be able to measure under one identity and be credited under another, or throw from an `id` getter after every measurement has already succeeded. A non-object, a missing `nowMilliseconds`, a blank or malformed `id` or `version`, or a reflective failure reading any of them is an `invalid_harness_configuration` error with a fixed message that quotes no clock-controlled value. The report uses the snapshot and never re-reads the clock.
+
+Every reading must be a finite non-negative number, and the port's non-decreasing rule is enforced across **one instance's whole stream of readings**, not inside each measured pair. Checking only `end >= start` per operation would accept a clock reading `0, 10, 5, 15`: both intervals look sound, yet the same instance lost five milliseconds between them, and every duration measured afterwards describes a timeline that did not happen. Each reading is therefore compared against the previously *accepted* one — a rejected value never becomes the baseline for the next check — and a decrease is an `EvaluationHarnessError` with issue code `clock_failed`, raised at the reading itself, before any measurement built on it can be published. Equal successive readings are legal: the contract is non-decreasing, so a clock coarser than the operation reports a zero duration rather than an impossible one. The rule lives in one place, so the per-pair checks are gone rather than restated. A clock that **throws** — an adapter exception, or a test double running out of readings — is wrapped into the same failure with a fixed message, so no dependency's wording escapes the port boundary (INV-ADAPTER-003).
+
+Compilation latency, full-baseline model latency, and compiled-context model latency are measured separately, and `compiledRequestLatency = compilationLatency + compiledModelLatency` is derived. That is deliberately **not** METRICS 17.5 complete context-preparation latency: Phase 17 uses static candidate cases, so no retrieval time is in it.
+
+**A derived or aggregated latency can never be published as a non-finite number.** Arithmetic over finite doubles is not closed, so both the derived sum and an aggregate mean are guarded. A derived request latency that is not finite is a `clock_failed` failure rather than a published `Infinity`, and is never clamped, because clamping states a specific wrong number.
+
+That guard is a **defensive invariant, not a reachable failure** under the current topology: one harness reads one globally non-decreasing clock, and the compilation and compiled-model intervals it adds are disjoint spans of that single finite timeline, so their sum cannot exceed the clock's own total span. It is kept because the reasoning depends on the composition staying that way — a second clock, an overlapping measurement, or a duration arriving from a future code path would each break it silently — and because an unreachable check costs one comparison.
+
+The mean is a different matter and is genuinely reachable, because an aggregate's observations need not come from one clock run: the intermediate sum can overflow even when the mean itself is perfectly representable — `[MAX_VALUE, MAX_VALUE]` averages to `MAX_VALUE`, but does not add up to a double. Distributions therefore compute their mean with the online update `mean_k = mean_(k-1) + (x_k / k - mean_(k-1) / k)`, whose running value stays inside the range of the observations and therefore cannot overflow; the ordinary case is at least as accurate as dividing an exact sum, so no existing distribution changes.
+
+### Expected Failures Are Their Own Result State
+
+A case may predict a compilation failure by stage and issue code. It passes when compilation fails with a `ContextCompilationError` whose stage matches exactly and at least one of whose issues carries the exact code; additional issues are allowed, because a request can be wrong in more than one way. A success, or a different failure, fails the check.
+
+Such a case calls no model, contributes to `expectedFailureAccuracy`, and is excluded from the token-reduction and answer-quality aggregates. No zero recall, reduction, or quality is invented for it. When `CandidateValidator` rejects the batch before any baseline can be built, that failure is valid expected-failure evidence and no baseline is built from an invalid batch.
+
+### The Suite Report Carries No Content
+
+A case result and a report carry measurements, identities, hashes, issue codes, latencies, and provider token usage — never a raw query, source document, candidate content, compiled context, baseline context, model prompt, model answer, API key, or provider error body. A benchmark report is the artefact most likely to be pasted into a ticket or committed, and a type that *could* carry source content is a type that eventually does (INV-SEC-001).
+
+Raw text is available only through `EvaluationCaseDetails`, an in-memory single-case result the suite report never embeds. Compiler issue **messages** are not carried either: codes route a failure, while messages legitimately quote request values.
+
+Baseline context hashes, answer hashes, and the report identity hash are domain-separated SHA-256, so a baseline hash and an answer hash of the same text are different values.
+
+Cases are validated first, ordered by identifier over UTF-16 code units, and a repeated identifier is rejected rather than silently overwritten. Distributions report count, mean, median, p10, p50, p90, p95, p99, minimum, and maximum, with one percentile method used everywhere — **nearest-rank** over ascending values:
+
+```text id="ev17g"
+rank  = clamp(ceil(p * n), 1, n)
+value = sorted[rank - 1]
+```
+
+`median` is exactly `p50` under this definition, so both names describe one value. Two conventions in one report would make two numbers that look comparable disagree by construction. A metric with no observations omits its distribution entirely rather than reporting zeros, and no value is ever `NaN` or `Infinity`.
+
+Reports are not persisted in Phase 17.
+
+### The Benchmark Dataset Is a Versioned Repository Artefact
+
+`benchmarks/evaluation/v1/` holds thirteen cases, one per required category (METRICS 6.1-6.13). It lives outside `tests/` so the dataset is something a reader can inspect, a run can be pointed at, and a later phase can persist — not a private detail of one suite.
+
+The fixtures are TypeScript rather than checked-in JSON for one reason: a case carries a `normalizedContentHash` and a `tokenCount` that `CandidateValidator` recomputes and rejects if they disagree. A hand-written hash goes stale the first time a fixture's text changes, and a hand-written token count is correct for one tokenizer only. Both are derived — the hash by the domain's own canonical helper, the count by the tokenizer the run will use — so construction is deterministic and offline, and two builds are byte-identical.
+
+CI runs the whole dataset with model execution **disabled**, and the answer-evaluation paths with `FakeModelProvider`. No paid model call is made by any test.
+
+### Alternatives Considered
+
+**Reproduce the METRICS 4 sketch as the implemented schema.** Rejected: it predates the compiler contract, omits `referenceTime` and `policy`, and would create a second partial request schema free to drift from the real one.
+
+**Keep `sourceBlockIds` as a flat evidence list.** Rejected: it cannot express "these blocks together", which is exactly the distributed-facts category.
+
+**Make the importance weights configurable per run.** Rejected: two weighted-coverage numbers from two runs would be incomparable while printing under one name.
+
+**Deduplicate the full-context baseline.** Rejected: it would credit the baseline with the compiler's own deduplication and shrink every reported saving.
+
+**Truncate by bytes or tokens through the middle of a record.** Rejected: the resulting context is not the wire format either side uses, so its token count measures a string nothing would send.
+
+**Stop at the first over-budget prefix.** Rejected: token counts are not monotonic in the number of records, so a longer prefix can fit where a shorter one did not.
+
+**Normalize provider scores so top-k always applies.** Rejected: it invents a comparison the evidence does not support, and the invented number is indistinguishable from a real one in a report.
+
+**Use the compiler's `CandidateScore` for top-k.** Rejected: that is CtxAlloc's own scoring, so the baseline would be comparing the compiler against itself.
+
+**Export `renderOrderedCandidates` for the harness.** Rejected: it would turn a compiler internal into a published contract. A golden byte-equality test closes the drift risk instead.
+
+**Put `tokenReduction` on `CompilationResult`.** Rejected: the kernel has never seen a baseline and cannot compute it.
+
+**Compare provider `usage.input_tokens` with `compiledTokens`.** Rejected: two vocabularies, and the provider count includes the system prompt and message framing.
+
+**Let the adapter own the prompt template.** Rejected: changing the adapter would change every historical benchmark number, and a second adapter's numbers would not be comparable with the first's.
+
+**Read `ANTHROPIC_API_KEY` from the environment.** Rejected: a benchmark could then be pointed elsewhere without its report saying so. A future CLI is where an environment becomes explicit configuration.
+
+**Add the Anthropic SDK.** Rejected: four request fields and a small JSON response do not need one, and an SDK type would be one careless export away from the port.
+
+**Retry a failed model call inside the adapter.** Rejected: a benchmark that silently retried would measure a latency nobody experienced.
+
+**Score a failed provider call as zero.** Rejected: it would blame the compiler for an outage.
+
+**Implement LLM-as-judge now.** Rejected: the benchmark's own measurement would depend on a model's output, and a regression could be the judge changing its mind.
+
+**Add a general `Clock` port over `Date.now`.** Rejected: nothing needs one, and a wall clock reachable from a component is exactly what ends determinism.
+
+**Include model latency or output in the determinism comparison.** Rejected: neither is part of `CompilationResult`, and both would make identical compilations look different.
+
+**Put raw answers in the suite report.** Rejected: a report is the artefact most likely to be shared, and hashes identify an answer without disclosing it.
+
+**Interpolate percentiles.** Rejected: one method, defined once, is what makes two reported numbers comparable. Nearest-rank also keeps `median` exactly equal to `p50`.
+
+**Depend on `@ctxalloc/application` to build cases.** Rejected: a benchmark case is static data, and the dependency would couple the measurement to the pipeline that produces what is measured.
+
+### Consequences
+
+`@ctxalloc/ports` gains `ModelProvider`, `ModelProviderRequest`, `ModelProviderResult`, `ModelProviderUsage`, and `MonotonicClock`. It still has **no runtime export**, and no HTTP, `fetch`, or provider type appears in it.
+
+`@ctxalloc/adapters` gains `AnthropicModelProvider` with its configuration, its project-owned error and error-code union, and its identity constants, plus `SystemMonotonicClock`. The model adapter refuses HTTP redirects. It still depends on `@ctxalloc/ports` alone, and no `Response`, `Headers`, `AbortSignal`, `AbortController`, `Buffer`, or `node:` type reaches a public declaration.
+
+`@ctxalloc/testing` gains `FakeModelProvider` and `FakeMonotonicClock` with their configuration and failure errors. Neither derives anything from its input: the model double answers only from its script and invents no token usage, and the clock double returns only the sequence it was given and fails explicitly when exhausted.
+
+`@ctxalloc/evaluation` becomes active with `EvaluationCase` and its validation, `EvaluationRequiredFact`, `AnswerCriterion`, `ExpectedCompilationFailure`, `EvaluationRunConfig`, the versioned prompt builder, the baseline contracts and renderer identity, the rule-based answer evaluator, `EvaluationCaseResult`, `EvaluationCaseDetails`, `EvaluationReport`, `EvaluationHarness`, and two project-owned errors. Its canonical serializer, percentile helper, hash preimage helpers, baseline builders, token-measurement helper, mean helper, and model-result validator are package-internal and are not exported.
+
+`benchmarks/evaluation/v1/` is added as a versioned dataset of thirteen cases.
+
+**No new external dependency is added.** The evaluation package reuses the repository's already-pinned `zod`.
+
+`ContextCompiler` and every stage it composes, `CompileLocalContextService`, `MarkdownChunker`, `TextChunker`, `ConversationChunker`, the request fingerprint, the compilation identifier, and trace privacy are **unchanged in behavior**.
+
+The Phase 16 kernel limitation stands unchanged: a cyclic, accessor-bearing, or `Proxy`-bearing candidate value can still make the domain's recursive `JsonValueSchema` fail with a raw runtime error after the provenance boundary declines to inspect it (DEC-039). Evaluation fixtures are passive JSON domain data, and Phase 17 does not touch Phase 7 domain validation.
+
+INVARIANTS changes: implementation status only, no guarantee is weakened.
+
+ARCHITECTURE changes: 3.3 marks `ModelProvider` and `MonotonicClock` implemented; 3.4 marks `AnthropicModelProvider` and `SystemMonotonicClock` implemented; the model stays after the compiler and the compiler stays model-free; real retrieval remains future.
+
+MVP_SCOPE changes: 3.9 marks `FakeModelProvider` implemented; 3.13 marks the single model provider implemented for evaluation; 3.14 marks the evaluation harness implemented; 3.12 keeps real retrieval future, as do the CLI, the HTTP API, and persistence.
+
+METRICS changes: section 4 records the implemented `EvaluationCase` v1 and the corrected `RequiredFact`; section 7 records the implemented baselines; sections 8.7 and 8.8 name `EvaluationHarness` as their producer; 11.5 records the rule-based v1 score; section 17 records the Phase 17 latency scope.
+
+**The harness exists. The acceptance gates are not claimed.** A benchmark that runs is not a benchmark that has passed: MVP targets in METRICS remain unmet until a real run reports them. Real retrieval, persistence, the CLI, the HTTP API, pricing and cost, LLM-as-judge, and multi-model routing all remain later phases.
 
 ---
 

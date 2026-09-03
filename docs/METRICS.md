@@ -137,61 +137,81 @@ Compiler metrics and retrieval metrics must still be reported separately.
 
 Each evaluation case must use a versioned schema.
 
+`EvaluationCase` is **implemented** at schema version 1 in
+`@ctxalloc/evaluation` (DEC-040).
+
 ```ts id="cd8n2e"
 interface EvaluationCase {
-  id: string;
-  schemaVersion: number;
-  datasetSplit: "development" | "validation" | "regression";
+  readonly schemaVersion: 1;
 
-  scope: Scope;
-  query: string;
+  readonly id: string;
+  readonly datasetSplit: "development" | "validation" | "regression";
 
-  candidates: CandidateBlock[];
-  sourceDocuments: SourceDocument[];
+  /** The exact compiler request, embedded whole. */
+  readonly compilationRequest: CompilationRequest;
 
-  budget: {
-    totalTokens: number;
-    reservedOutputTokens: number;
-    reservedSystemTokens?: number;
-    reservedToolTokens?: number;
-    reservedProtocolTokens?: number;
-  };
+  readonly requiredBlockIds: readonly string[];
+  readonly requiredFacts: readonly EvaluationRequiredFact[];
+  readonly relevantBlockIds: readonly string[];
+  readonly irrelevantBlockIds: readonly string[];
 
-  requiredBlockIds?: string[];
-  requiredFacts?: RequiredFact[];
-  relevantBlockIds?: string[];
-  irrelevantBlockIds?: string[];
-  duplicateGroups?: DuplicateGroup[];
+  readonly expectedCompilationFailure?: ExpectedCompilationFailure;
 
-  expectedFailure?: {
-    code: string;
-  };
+  readonly answerCriteria: readonly AnswerCriterion[];
 
-  answerCriteria?: AnswerCriterion[];
-
-  tags: string[];
+  readonly tags: readonly string[];
 }
 ```
 
-`candidates` are `CandidateBlock` wrappers, and `sourceDocuments` is the explicit
-registry their source references are validated against, because that is what the
-compiler's candidate validation stage actually receives (DEC-030). A case that
-omitted the registry could not be compiled.
+An earlier draft of this section listed `scope`, `query`, `candidates`,
+`sourceDocuments`, and `budget` as case fields. That sketch predated the final
+compiler contract and omitted `referenceTime` and `policy`, so a case built from
+it could not be compiled at all. It is corrected here:
+**`compilationRequest` is the exact `CompilationRequest`**, validated by
+`CompilationRequestValidator`, so scope, query, reference time, candidates, the
+source-document registry, budget, and policy cannot drift from the compiler's own
+contract and no second partial request schema exists to keep in step.
 
-`EvaluationCase` is a specification, not an implemented schema. The evaluation
-harness is a later phase.
+`EvaluationCase.id` is dataset identity; `compilationRequest.id` is request
+identity. They are not required to be equal.
 
-Required facts should have stable identifiers.
+Nothing is defaulted or coerced, and every annotation is cross-checked against
+the case's own candidate corpus: an annotation naming a block the case does not
+contain is a broken answer key.
+
+`ExpectedCompilationFailure` is `{ stage, issueCode }`. A case passes it when
+compilation fails with a `ContextCompilationError` whose stage matches exactly
+and at least one issue carries the exact code; additional issues are allowed.
+
+Required facts have stable identifiers and **OR-of-AND** evidence groups.
 
 ```ts id="nz9zwe"
-interface RequiredFact {
-  id: string;
-  description: string;
-  acceptableEvidence: string[];
-  sourceBlockIds: string[];
-  importance: "critical" | "major" | "minor";
+interface EvaluationRequiredFact {
+  readonly id: string;
+  readonly description: string;
+  readonly importance: "critical" | "major" | "minor";
+
+  /** OR across groups, AND inside one group. */
+  readonly evidenceBlockGroups: readonly (readonly string[])[];
+
+  /** Documentation only. Never a matching rule in v1. */
+  readonly acceptableEvidence: readonly string[];
 }
 ```
+
+The earlier flat `sourceBlockIds` list is corrected: it cannot distinguish
+*either of these blocks proves the fact* from *these blocks together prove it*,
+and the second is exactly the distributed-facts category (6.2).
+
+A block named in `evidenceBlockGroups` must not also appear in
+`irrelevantBlockIds`. The two annotations state opposite expectations about the
+same block — it must survive to prove the fact, and it should have been dropped
+as noise — so preservation and noise-rejection would be measured against
+contradictory ground truth. Case validation rejects the case with
+`conflicting_annotation`, pointing at the exact
+`requiredFacts[i].evidenceBlockGroups[g][b]` position. The case is never
+repaired by dropping one side: which annotation the author meant is not
+something the harness can infer.
 
 ---
 
@@ -300,6 +320,27 @@ The same candidates are provided in different permutations.
 
 Every meaningful benchmark must compare CtxAlloc with one or more baselines.
 
+**Implementation status.** Baselines 7.1, 7.2, and 7.3 are implemented in
+`@ctxalloc/evaluation` (DEC-040); 7.4 and 7.5 remain future. Every baseline
+renders through a separately versioned evaluation renderer whose record shape is
+byte-identical to `ContextRenderer` v1, proved by a golden test — so a token
+comparison is a comparison of context and never of two wire formats.
+
+Token counts are **not** monotonic in the number of records: adding one can lower
+the total, because the tokenizer merges across the new boundary. Every prefix
+baseline therefore measures *every* prefix as one complete rendered string and
+takes the longest that fits.
+
+Every baseline token count passes through one project-owned measurement helper.
+The `Tokenizer` port is an external boundary, so the helper calls it exactly
+once per measurement, converts any throw into a project-owned failure, and
+accepts only a non-negative safe integer: nothing is coerced, rounded, or
+clamped. `NaN` would invalidate `baselineInputTokens` and every aggregate built
+on it, and a negative count would make a prefix "fit" any budget. A rejected
+measurement surfaces as an `EvaluationHarnessError` with issue code
+`tokenizer_failed`, carrying no dependency wording and no measured text
+(INV-BUDGET-005, INV-SEC-001).
+
 ## 7.1 Full Context Baseline
 
 All valid candidates are rendered without selection.
@@ -316,6 +357,12 @@ Purpose:
 
 Candidates are concatenated in input order and cut at the token budget.
 
+**Implemented** (DEC-040) as **whole-record** truncation: the selection is always
+a prefix of the validated candidate order and a record is never cut in half.
+Slicing through the middle of a rendered record produces a context that is not
+the wire format either side of the comparison uses, so its token count would
+measure a string no system would ever send.
+
 Purpose:
 
 * compare against the simplest budget enforcement strategy.
@@ -323,6 +370,14 @@ Purpose:
 ## 7.3 Top-K Baseline
 
 Candidates are sorted by retrieval or relevance score and included until the budget is exhausted.
+
+**Implemented** (DEC-040), and **applicable only** under one exact retrieval
+contract. Raw scores are compared only when every candidate agrees on
+`providerId`, `providerVersion`, `semantics`, and `higherIsBetter`; rank is a
+weaker fallback needing only one provider and version. Otherwise the baseline
+reports itself inapplicable with reason `incomparable-retrieval-evidence` rather
+than inventing an order — a number built from incomparable evidence looks exactly
+like a real one in a report (INV-SCORE-002).
 
 Purpose:
 
@@ -602,6 +657,19 @@ publish a different quantity under a documented metric's name.
 
 The definitions above are unchanged. They are measured by the evaluation harness
 against the baselines of section 7, not by the compiler (DEC-038).
+
+**Producer: `EvaluationHarness`** (DEC-040). `baselineInputTokens` is the exact
+token count of the full-context baseline (7.1) and of nothing else, measured with
+the same `Tokenizer` the compiler used. The reduction is signed and never
+clamped; the ratio is **absent** when the baseline is empty rather than `NaN` or
+`Infinity`. Comparisons against the truncation and top-k baselines are reported
+beside it, always named, never as "the" token reduction.
+
+Provider-native `usage` counts are a different vocabulary and are never
+subtracted from a CtxAlloc count. They are also validated before they are
+published: a `ModelProvider` is an injected runtime port, and a count that is
+`NaN`, infinite, negative, fractional, or beyond the safe integer range is a
+failed call rather than a reported measurement (11.6).
 
 ## 8.9 Budget Utilization
 
@@ -1041,12 +1109,57 @@ answerQualityScore
   = awardedPoints / maximumPoints
 ```
 
+**Implemented v1** (DEC-040) as a deterministic rule-based instance of that
+formula. Each `AnswerCriterion` — `exact`, `contains-all`, `contains-any`, or
+`not-contains` — is binary and earns its whole integer weight or nothing:
+
+```text id="s5t0p9"
+answerQualityScore = earnedWeight / totalWeight        in [0, 1]
+```
+
+There is no regular expression, stemming, fuzzy matching, answer trimming, or
+Unicode normalization; case-insensitive comparison uses the locale-independent
+Unicode default casing. When a case states no criteria the score is **absent** —
+an unscored answer is not a zero-scoring answer. Case validation checks the
+running **total** of the criterion weights with overflow-safe addition before
+summing, not only each individual weight: once a total leaves the safe integer
+range the divisor stops being exact and every score computed from it is
+approximate. A case whose weights cannot total exactly is rejected. The rubric above remains the
+target shape for a later version; LLM-as-judge stays deferred (12.3).
+
 ## 11.6 Quality Loss
 
 ```text id="gdc13x"
 qualityLoss
   = baselineQualityScore - compiledQualityScore
 ```
+
+**Producer: `EvaluationHarness`** (DEC-040). It is signed and never clamped, and
+it exists only when both scores exist: a failed provider call never becomes a
+zero-scoring answer. A loss **strictly greater** than the run's configured
+`severeQualityLossThreshold` is severe; equality is the boundary the run declared
+acceptable.
+
+The comparison requires two valid results. A `ModelProvider` is an injected
+runtime port, so a resolved result is validated against its schema before
+anything is hashed, scored, or counted; a result that fails validation is a call
+failure with the code `MODEL_PROVIDER_INVALID_RESULT` — no score, no answer hash,
+no usage, and no loss — and an invalid **baseline** result means the compiled
+call is not attempted at all.
+
+The comparison also requires that the two calls were served by the same model.
+When both calls report an `actualModelId` and the two differ, both call results
+and both scores are still published, but `qualityLoss` and `severeQualityLoss`
+are **absent** and the case records
+`qualityComparisonIssue: "actual-model-mismatch"`; the report counts such cases
+as `modelIdentityMismatches`. A difference between two models is not a
+difference between two contexts, and publishing it as quality loss would
+attribute a model change to CtxAlloc.
+
+`callOrder` records the calls that were **attempted**, not the calls that were
+planned: it is empty when model execution is disabled or the case was skipped,
+holds the full baseline alone when that call failed, and holds both calls
+otherwise.
 
 Report both:
 
@@ -1361,6 +1474,46 @@ Retrieval metrics must not be combined with compiler metrics into one unexplaine
 
 Performance must be measured separately for each stage.
 
+**Phase 17 scope** (DEC-040). `EvaluationHarness` measures three durations with
+an injected `MonotonicClock` — never a wall clock — and reports them separately:
+compilation latency (17.1), full-baseline model latency, and compiled-context
+model latency (17.6). It derives
+`compiledRequestLatency = compilationLatency + compiledModelLatency`, which is
+deliberately **not** 17.5: Phase 17 uses static candidate cases, so no retrieval
+time is in it. A clock reading that is non-finite or negative is a harness
+failure rather than a published impossible duration, and a clock that *throws* is
+the same failure: it surfaces as an `EvaluationHarnessError` with issue code
+`clock_failed` and a fixed message, never as a raw platform error escaping the
+harness.
+
+The port's non-decreasing rule is enforced across **one instance's whole stream
+of readings**, not inside each measured pair. A clock reading `0, 10, 5, 15`
+gives two intervals that each look sound while the instance itself lost five
+milliseconds between them, so every reading is compared against the previously
+accepted one and a decrease is `clock_failed` at that reading — before anything
+built on it is published. Equal successive readings are legal: the contract is
+non-decreasing, so a clock coarser than the operation reports a zero duration.
+
+`compiledRequestLatency` is likewise rejected as `clock_failed` when the sum is
+not finite, and is never clamped. That check is a **defensive invariant rather
+than a reachable failure**: one harness reads one globally non-decreasing clock,
+and the two intervals it adds are disjoint spans of that single finite timeline,
+so their sum cannot exceed the clock's own span. It is kept because the reasoning
+depends on the composition staying that way.
+
+An aggregate mean is a different matter, and its overflow is genuinely
+reachable, because a distribution's observations need not come from one clock
+run. Distributions therefore compute their mean with an online update rather
+than a raw sum, because a sum can overflow on the way to a mean that is
+perfectly representable — `[MAX_VALUE, MAX_VALUE]` averages to `MAX_VALUE` but
+does not add up to a double. No distribution ever publishes `NaN` or `Infinity`,
+so no report hash is taken over one.
+
+Distributions report count, mean, median, p10, p50, p90, p95, p99, minimum, and
+maximum, using one **nearest-rank** percentile method everywhere:
+`rank = clamp(ceil(p * n), 1, n)`, so `median` is exactly `p50`. A metric with no
+observations omits its distribution rather than reporting zeros.
+
 ## 17.1 Compilation Latency
 
 Time from validated request entry to completed compilation result.
@@ -1404,6 +1557,11 @@ Includes:
 * allocation;
 * rendering;
 * trace persistence.
+
+**Not measured in Phase 17.** Benchmark cases carry static candidates, so no
+retrieval happens and no trace is persisted. The harness's
+`compiledRequestLatency` covers compilation plus one model call and must not be
+reported under this name (DEC-040).
 
 ## 17.6 Model Latency
 

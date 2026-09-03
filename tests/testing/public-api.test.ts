@@ -34,10 +34,17 @@ function readSource(relativePath: string): string {
 }
 
 describe('@ctxalloc/testing public API', () => {
-  it('exports the four doubles and their error types from the package entry point', () => {
+  it('exports the six doubles and their error types from the package entry point', () => {
     expect(Object.keys(testing).sort()).toEqual([
       'FakeCandidateProvider',
       'FakeCandidateProviderError',
+      'FakeModelProvider',
+      'FakeModelProviderConfigurationError',
+      'FakeModelProviderScriptedFailureError',
+      'FakeModelProviderUnscriptedCallError',
+      'FakeMonotonicClock',
+      'FakeMonotonicClockConfigurationError',
+      'FakeMonotonicClockExhaustedError',
       'FakeTokenizer',
       'FakeTokenizerConfigurationError',
       'FakeTokenizerUnknownTextError',
@@ -49,8 +56,12 @@ describe('@ctxalloc/testing public API', () => {
     ]);
   });
 
-  it('exports no model provider, because no ModelProvider port exists yet', () => {
-    for (const name of ['FakeModelProvider', 'InMemoryTraceStore', 'FakeClock']) {
+  it('exports a double only for a port that exists', () => {
+    // `FakeModelProvider` and `FakeMonotonicClock` arrived with their ports in
+    // Phase 17. A trace store and a general wall clock still have no port, and a
+    // fake for one would invite a test to depend on a contract nothing
+    // implements (DEC-040).
+    for (const name of ['InMemoryTraceStore', 'FakeTraceStore', 'FakeClock', 'FakeWallClock']) {
       expect(Object.keys(testing), `exports ${name}`).not.toContain(name);
     }
   });

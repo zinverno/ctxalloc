@@ -10,6 +10,8 @@ const PORT_FILES = [
   'packages/ports/src/source-reader.ts',
   'packages/ports/src/control-store.ts',
   'packages/ports/src/candidate-provider.ts',
+  'packages/ports/src/model-provider.ts',
+  'packages/ports/src/monotonic-clock.ts',
 ] as const;
 
 interface Manifest {
@@ -43,7 +45,7 @@ describe('@ctxalloc/ports public API', () => {
     expect(Object.keys(ports)).toEqual([]);
   });
 
-  it('exports exactly the four contracts that have a consumer', () => {
+  it('exports exactly the contracts that have a consumer', () => {
     const entry = readSource('packages/ports/src/index.ts');
     const exported = [...entry.matchAll(/export type \{(?<names>[^}]+)\} from/g)]
       .flatMap((match) => (match.groups?.names ?? '').split(','))
@@ -54,6 +56,11 @@ describe('@ctxalloc/ports public API', () => {
       'CandidateProvider',
       'CandidateProviderRequest',
       'ControlStore',
+      'ModelProvider',
+      'ModelProviderRequest',
+      'ModelProviderResult',
+      'ModelProviderUsage',
+      'MonotonicClock',
       'SourceReadRequest',
       'SourceReadResult',
       'SourceReader',
@@ -64,16 +71,21 @@ describe('@ctxalloc/ports public API', () => {
   });
 
   it('defines no speculative port for this phase', () => {
+    // `ModelProvider` and `MonotonicClock` left this list in Phase 17 because the
+    // evaluation harness consumes them. A general wall clock stays absent:
+    // nothing needs one, and a `Date.now` abstraction reachable from a component
+    // is exactly what ends determinism (INV-DET-004).
     const entry = readSource('packages/ports/src/index.ts');
     for (const name of [
       'TraceStore',
-      'ModelProvider',
-      'Clock',
+      'Clock,',
+      'WallClock',
       'DocumentConverter',
       'EmbeddingProvider',
       'TelemetrySink',
       'JobQueue',
       'ObjectStore',
+      'EvaluationStore',
     ]) {
       expect(entry, `declares ${name}`).not.toContain(`${name},`);
     }
@@ -177,6 +189,50 @@ describe('@ctxalloc/ports public API', () => {
       'CompilationRequest',
       'Tokenizer',
     ]) {
+      expect(declarations, `names ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it('DEC-040: keeps the model provider text-only, one model per instance', () => {
+    const source = readSource('packages/ports/src/model-provider.ts');
+    expect(source).toContain('readonly systemPrompt: string;');
+    expect(source).toContain('readonly userPrompt: string;');
+    expect(source).toContain('readonly maxOutputTokens: number;');
+    expect(source).toContain('readonly temperature: number;');
+    expect(source).toContain('readonly modelId: string;');
+    expect(source).toContain(
+      'generate(request: ModelProviderRequest): Promise<ModelProviderResult>;',
+    );
+
+    const declarations = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    // No streaming, no tools, no routing, no retry, no pricing, no latency, and
+    // no per-request model identity: each would be a different product.
+    for (const forbidden of [
+      'stream',
+      'tools',
+      'toolChoice',
+      'retry',
+      'fallback',
+      'price',
+      'cost',
+      'latency',
+      'AbortSignal',
+      'Response',
+      'Headers',
+      'fetch',
+      'anthropic',
+      'Anthropic',
+    ]) {
+      expect(declarations, `names ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it('DEC-040: keeps the monotonic clock free of any date semantics', () => {
+    const source = readSource('packages/ports/src/monotonic-clock.ts');
+    expect(source).toContain('nowMilliseconds(): number;');
+
+    const declarations = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    for (const forbidden of ['Date', 'Timestamp', 'timezone', 'epoch', 'wallClock']) {
       expect(declarations, `names ${forbidden}`).not.toContain(forbidden);
     }
   });

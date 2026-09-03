@@ -9,39 +9,70 @@ or agent framework.
 
 ## Status
 
-Phase 16 — **the compiler kernel is complete, and so is the first local
-source-to-compilation slice**.
+Phase 17 — **the compiler kernel is complete, the first local
+source-to-compilation slice is complete, and the evaluation harness is
+complete**.
 
 `ContextCompiler` composes the kernel stages, settles the rendered budget, and
-returns a `CompilationResult` (Phase 15). `CompileLocalContextService` now
-carries registered local sources into it: the control plane lists them, a source
-reader reads exact text, ingestion and chunking prepare a corpus of Markdown,
+returns a `CompilationResult` (Phase 15). `CompileLocalContextService` carries
+registered local sources into it: the control plane lists them, a source reader
+reads exact text, ingestion and chunking prepare a corpus of Markdown,
 plain-text, and conversation blocks, a candidate provider proposes wrappers, and
-the existing compiler compiles them. Phase 16 adds **no** compiler selection
-behavior.
+the existing compiler compiles them (Phase 16).
+
+`EvaluationHarness` now measures what that is worth. For one benchmark case it
+builds three explicit baselines — full context, whole-record truncation, and
+top-k over comparable retrieval evidence — compiles the real request, measures
+what survived, optionally asks one model the same question twice changing only
+the context, and reports token reduction, context preservation, answer quality
+loss, and latency as **separate** numbers. One real model adapter is available
+for that, and CI runs the whole benchmark with model execution disabled.
+
+Every measurement boundary fails loudly rather than publishing a weaker number:
+the model adapter refuses redirects before a request is transmitted, so an API
+key and a prompt are never re-sent to an unauthorized host, and its timeout is
+bounded by the timer it actually uses; baseline token counts are accepted only
+as non-negative safe integers; a throwing tokenizer or clock becomes a named
+harness failure, one clock instance must never read backwards across the whole
+run rather than merely within a measured pair, and no averaged latency can be
+published as `Infinity`; an injected model provider is checked for identity and
+capability at construction, and every result it resolves with is validated
+before it is hashed, scored, or counted; and quality loss is withheld when the
+two model calls report different actual models.
+
+Phase 17 adds **no** compiler selection behavior. The compiler calls no model and
+reads no clock.
 
 The repository contains the TypeScript monorepo scaffolding from Phase 1
 (workspace structure, strict compiler and linting configuration, test
 infrastructure, package boundaries, boundary checker), the runtime-validated
 domain model in `@ctxalloc/domain` (scope, identifiers, content hash values,
 JSON-safe metadata, source types, source locations, `SourceDocument`,
-`ContextBlock`, `TokenBudget`, and a structured validation API), four
+`ContextBlock`, `TokenBudget`, and a structured validation API), six
 project-owned type-only ports in `@ctxalloc/ports` (`Tokenizer`, `SourceReader`,
-`ControlStore`, `CandidateProvider`), four deterministic test doubles in
-`@ctxalloc/testing` (`FakeTokenizer`, `InMemorySourceReader`,
-`InMemoryControlStore`, `FakeCandidateProvider`) with a reusable tokenizer
-contract test suite, a real offline tokenizer adapter in
-`@ctxalloc/tokenization`, the real local file reader in `@ctxalloc/adapters`, the
-application use cases in `@ctxalloc/application` (source ingestion, Markdown,
-plain-text, and conversation chunking, and the local compilation service), and
-the compiler kernel in `@ctxalloc/compiler`: structural request and policy
-validation plus nine components — `CandidateValidator`, `CandidateDeduplicator`,
-`CandidateScorer`, `CandidateFilter`, `BudgetAllocator`, `ContextOrderer`,
-`ContextRenderer`, the observational `TraceBuilder`, and `ContextCompiler`.
+`ControlStore`, `CandidateProvider`, `ModelProvider`, `MonotonicClock`), six
+deterministic test doubles in `@ctxalloc/testing` (`FakeTokenizer`,
+`InMemorySourceReader`, `InMemoryControlStore`, `FakeCandidateProvider`,
+`FakeModelProvider`, `FakeMonotonicClock`) with a reusable tokenizer contract
+test suite, a real offline tokenizer adapter in `@ctxalloc/tokenization`, the
+real local file reader, model adapter, and monotonic clock in
+`@ctxalloc/adapters`, the application use cases in `@ctxalloc/application`
+(source ingestion, Markdown, plain-text, and conversation chunking, and the local
+compilation service), the compiler kernel in `@ctxalloc/compiler` — structural
+request and policy validation plus nine components: `CandidateValidator`,
+`CandidateDeduplicator`, `CandidateScorer`, `CandidateFilter`, `BudgetAllocator`,
+`ContextOrderer`, `ContextRenderer`, the observational `TraceBuilder`, and
+`ContextCompiler` — and the evaluation harness in `@ctxalloc/evaluation` with a
+versioned benchmark dataset under `benchmarks/evaluation/v1/`.
 
 **The product is not complete.** Real retrieval, persistence and SQLite,
-control-plane writing, trace persistence, the CLI, the HTTP API, model execution,
-and the evaluation harness remain later phases.
+control-plane writing, trace persistence, the CLI, the HTTP API, pricing and
+cost, LLM-as-judge scoring, and multi-model routing remain later phases.
+
+**No benchmark acceptance gate is claimed.** The harness runs; the MVP targets in
+[Metrics](./docs/METRICS.md) remain unmet until a real run reports them. CtxAlloc
+is not a model gateway, has no production retrieval quality result, and is not
+SaaS-ready.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
 `js-tiktoken` (pinned to 1.0.21, see [DEC-027](./docs/DECISIONS.md)). It runs
@@ -691,12 +722,17 @@ Allowed internal dependency direction (enforced by `pnpm check:boundaries`):
 
 ```text
 apps -> application -> compiler -> ports -> domain
-                 adapters -> ports -> domain
+                evaluation -> compiler -> ports -> domain
+                  adapters -> ports -> domain
 ```
 
-`@ctxalloc/adapters` is the only workspace in the local slice that touches a
-filesystem, and it depends on `@ctxalloc/ports` alone: an adapter never sees the
-compiler kernel.
+`@ctxalloc/adapters` is the only workspace that touches a filesystem, a network,
+or a platform clock, and it depends on `@ctxalloc/ports` alone: an adapter never
+sees the compiler kernel.
+
+`@ctxalloc/evaluation` sits above the compiler and deliberately **not** on
+`@ctxalloc/application`: a benchmark case is static data, so the measurement
+stays decoupled from the pipeline that produces what is measured.
 
 ## Documentation
 

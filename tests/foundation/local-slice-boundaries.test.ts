@@ -129,7 +129,7 @@ describe('local slice boundaries: infrastructure stays in the adapter', () => {
   });
 });
 
-describe('local slice boundaries: no Phase 17 to 20 scope creep', () => {
+describe('local slice boundaries: no Phase 18 to 20 scope creep', () => {
   const WORKSPACES = [
     'packages/domain',
     'packages/ports',
@@ -166,12 +166,14 @@ describe('local slice boundaries: no Phase 17 to 20 scope creep', () => {
     }
   });
 
-  it('implements no model provider, retrieval index, trace store, or CLI flow', () => {
+  it('implements no retrieval index, trace store, or CLI flow', () => {
+    // `ModelProvider` left this list in Phase 17: the port and its one adapter
+    // are real, and both serve evaluation only. Retrieval, persistence, the CLI,
+    // and the HTTP API remain later phases (DEC-040).
     for (const workspace of WORKSPACES) {
       for (const { path, code } of sourcesOf(workspace)) {
         const declarations = code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
         for (const forbidden of [
-          'ModelProvider',
           'TraceStore',
           'BM25',
           'embedding',
@@ -181,6 +183,23 @@ describe('local slice boundaries: no Phase 17 to 20 scope creep', () => {
         ]) {
           expect(declarations, `${path} implements ${forbidden}`).not.toContain(forbidden);
         }
+      }
+    }
+  });
+
+  it('keeps the model provider out of every layer that is not evaluation', () => {
+    // The one place a model may be called is the evaluation harness, through the
+    // adapter that implements the port. Nothing in the kernel, the application
+    // slice, or the domain may name it (INV-DEP-002).
+    for (const workspace of [
+      'packages/domain',
+      'packages/compiler',
+      'packages/application',
+      'packages/tokenization',
+    ] as const) {
+      for (const { path, code } of sourcesOf(workspace)) {
+        const declarations = code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+        expect(declarations, `${path} implements ModelProvider`).not.toContain('ModelProvider');
       }
     }
   });

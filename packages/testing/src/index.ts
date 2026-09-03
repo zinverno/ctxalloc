@@ -12,7 +12,10 @@
  * visible rather than silently producing an empty successful result
  * (INV-ADAPTER-003).
  *
- * `FakeModelProvider` is deliberately absent: no `ModelProvider` port exists yet.
+ * `FakeModelProvider` and `FakeMonotonicClock` serve the evaluation harness
+ * (DEC-040). Neither derives anything from its input: the model double answers
+ * only from its script, and the clock double reads only the sequence it was
+ * given.
  */
 
 export {
@@ -20,6 +23,21 @@ export {
   FakeCandidateProviderError,
   type FakeCandidateProviderOptions,
 } from './fake-candidate-provider.js';
+export {
+  FakeModelProvider,
+  FakeModelProviderConfigurationError,
+  FakeModelProviderScriptedFailureError,
+  FakeModelProviderUnscriptedCallError,
+  type FakeModelProviderOptions,
+  type FakeModelProviderOutcome,
+  type FakeModelProviderPromptOutcome,
+} from './fake-model-provider.js';
+export {
+  FakeMonotonicClock,
+  FakeMonotonicClockConfigurationError,
+  FakeMonotonicClockExhaustedError,
+  type FakeMonotonicClockOptions,
+} from './fake-monotonic-clock.js';
 export {
   FakeTokenizer,
   FakeTokenizerConfigurationError,
