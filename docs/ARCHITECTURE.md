@@ -2770,7 +2770,8 @@ The port carries an **envelope**, not a `SettledCompilationTrace`. Naming a
 compiler type here would close a dependency cycle, since the compiler already
 depends inward on the ports; `CompilationTracePersistenceService` in
 `@ctxalloc/application` owns the conversion in both directions, and
-`SettledCompilationTraceValidator` proves a stored record on the way back in
+`SettledCompilationTraceValidator` proves a stored record on the way back in and
+publishes a passive validated snapshot of it rather than the value it was handed
 (INV-BLOCK-005, INV-DEP-003).
 
 Implemented adapters:

@@ -80,10 +80,14 @@ describe('INV-STORE-004: persisted settled traces are validated on the way in', 
     }
   });
 
-  it('publishes the exact stored value, not a rebuilt copy', () => {
+  it('publishes a JSON-equivalent snapshot of the stored value', () => {
     const stored = persisted(correctedTrace());
+    const validated = new SettledCompilationTraceValidator().validate(stored);
 
-    expect(new SettledCompilationTraceValidator().validate(stored)).toBe(stored);
+    // The published record is the snapshot the schema validated, and it carries
+    // the same JSON document: same fields, same values, same order.
+    expect(validated).toEqual(stored);
+    expect(JSON.stringify(validated)).toBe(JSON.stringify(stored));
   });
 
   it('names the schema version it accepts', () => {
@@ -451,13 +455,183 @@ describe('INV-STORE-004: the published value is exactly JSON data', () => {
     expect(error.issues[0]?.message).toContain('sparse');
   });
 
-  it('still accepts an ordinary round-tripped trace unchanged', () => {
+  it('returns a JSON-equivalent snapshot of an ordinary round-tripped trace', () => {
     const trace = correctedTrace();
     const stored = persisted(trace);
+    const validated = new SettledCompilationTraceValidator().validate(stored);
 
-    // The identical object is returned, not a copy, so the published record is
-    // byte-for-byte what was stored.
-    expect(new SettledCompilationTraceValidator().validate(stored)).toBe(stored);
+    // Value fidelity, not reference identity: same fields, same values, same
+    // order, nothing added, dropped, coerced, or recomputed.
+    expect(validated).toEqual(stored);
+    expect(JSON.stringify(validated)).toBe(JSON.stringify(stored));
+  });
+});
+
+/**
+ * The validator publishes the snapshot it validated, never the argument
+ * (INV-BLOCK-005, INV-SEC-001).
+ *
+ * This is the case zero `get` calls *during* validation does not cover. A
+ * `Proxy` can describe honest values through `getOwnPropertyDescriptor` — so the
+ * passive walk validates them without firing a trap — and return different ones
+ * through an ordinary property `get`. If the argument were returned, the first
+ * consumer to read a field would get a value the validator never saw, and a
+ * component would validate one trace and use another:
+ *
+ * ```text
+ * descriptor view: compilationId = "<real>"   gets during walk: 0
+ * consumer read:   compilationId = "<lie>"    gets now: 1
+ * ```
+ */
+/**
+ * `"__proto__"` is a legal JSON key, and the snapshot must carry it as an own
+ * property (INV-BLOCK-005).
+ *
+ * `JSON.parse('{"__proto__":{"x":1}}')` produces an object with an own
+ * enumerable `__proto__` data property. Building the snapshot with
+ * `snapshot[key] = value` would instead find the inherited
+ * `Object.prototype.__proto__` **setter** and run it:
+ *
+ * ```text
+ * input own names:                 [ "__proto__", "a" ]
+ * assignment snapshot own names:   [ "a" ]              prototype mutated: true
+ * defineProperty snapshot names:   [ "__proto__", "a" ] prototype intact:  true
+ * ```
+ *
+ * The field would vanish before the schema ever saw it, so a stored record
+ * carrying an unknown `__proto__` field would be accepted as though it did not
+ * have one — and `strictObject`'s whole point is that a surplus field is
+ * evidence the record came from a different producer.
+ *
+ * The key is not special-cased away. Whether a field with that name is allowed
+ * at a location is the schema's decision.
+ */
+describe('INV-BLOCK-005: an own "__proto__" key survives into the snapshot', () => {
+  /** A record with a genuine own enumerable `__proto__` data property. */
+  function withOwnProto(base: object, value: unknown): unknown {
+    return JSON.parse(
+      JSON.stringify({ ...base, __PLACEHOLDER__: value }).replace(
+        '"__PLACEHOLDER__"',
+        '"__proto__"',
+      ),
+    );
+  }
+
+  it('reaches the schema as an unknown field rather than being silently lost', () => {
+    const stored = withOwnProto(persisted(correctedTrace()) as object, { x: 1 });
+    expect(Object.getOwnPropertyNames(stored)).toContain('__proto__');
+
+    const error = reject(stored);
+
+    // Reported, not dropped: the field the record actually carried is named.
+    expect(error.issues.every((detail) => detail.code === 'invalid_trace')).toBe(true);
+    expect(error.message).toContain('__proto__');
+  });
+
+  it('mutates no prototype and raises no raw error', () => {
+    const stored = withOwnProto(persisted(correctedTrace()) as object, { polluted: true });
+
+    expect(() => reject(stored)).not.toThrow(TypeError);
+    // Neither the input's prototype nor the global one moved.
+    expect(Object.getPrototypeOf(stored as object)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.prototype).toBe(Object.getPrototypeOf({}));
+  });
+
+  it('reports a nested own "__proto__" field on a strict trace object', () => {
+    const stored = persisted(correctedTrace()) as Record<string, unknown>;
+    stored.settlement = withOwnProto(stored.settlement as object, 1);
+
+    const error = reject(stored);
+
+    expect(error.issues.map((detail) => detail.pointer)).toContain('settlement');
+    expect(error.message).toContain('__proto__');
+  });
+
+  it('a valid trace with no such key is unaffected', () => {
+    const stored = persisted(correctedTrace());
+    const validated = new SettledCompilationTraceValidator().validate(stored);
+
+    expect(Object.getPrototypeOf(validated)).toBe(Object.prototype);
+    expect(validated).toEqual(stored);
+  });
+});
+
+describe('INV-BLOCK-005: an accepted hostile Proxy is never the published value', () => {
+  const LIE = 'sha256:'.padEnd(71, 'f');
+
+  /** A settled trace, plus a root Proxy that describes it honestly and lies on `get`. */
+  function hostileRoot(): {
+    readonly target: Record<string, unknown>;
+    readonly proxy: unknown;
+    readonly gets: () => number;
+  } {
+    const target = persisted(correctedTrace()) as Record<string, unknown>;
+    let gets = 0;
+    const proxy = new Proxy(target, {
+      // Reflection is faithful, so the passive walk sees the real record and
+      // accepts it.
+      getOwnPropertyDescriptor: (t, key) => Object.getOwnPropertyDescriptor(t, key),
+      ownKeys: (t) => Reflect.ownKeys(t),
+      getPrototypeOf: (t) => Object.getPrototypeOf(t) as object | null,
+      // Ordinary reads lie.
+      get: (t, key) => {
+        gets += 1;
+        if (key === 'compilationId') return LIE;
+        if (key === 'schemaVersion') return 999;
+        if (key === 'request') return { scope: { tenantId: 'x', workspaceId: 'y' } };
+        return Reflect.get(t, key);
+      },
+    });
+    return { target, proxy, gets: () => gets };
+  }
+
+  it('accepts on the descriptor view without firing the get trap', () => {
+    const { proxy, gets } = hostileRoot();
+
+    expect(() => new SettledCompilationTraceValidator().validate(proxy)).not.toThrow();
+    expect(gets()).toBe(0);
+  });
+
+  it('does not return the Proxy, and its values are the descriptor-validated ones', () => {
+    const { target, proxy, gets } = hostileRoot();
+    const validated = new SettledCompilationTraceValidator().validate(proxy);
+
+    // Everything the production path would do, measured **before** any matcher
+    // runs: vitest's own `not.toBe` diff hint reads the value it is handed, so
+    // asserting identity through a matcher would count the assertion library's
+    // reads as the service's.
+    const isProxy = Object.is(validated, proxy);
+    const publishedId = validated.compilationId;
+    const publishedVersion = validated.schemaVersion;
+    const publishedScope = validated.request.scope;
+    const readsAfterConsuming = gets();
+
+    expect(isProxy).toBe(false);
+    // The real values, not what `get` would have answered.
+    expect(publishedId).toBe(target.compilationId);
+    expect(publishedId).not.toBe(LIE);
+    expect(publishedVersion).toBe(COMPILATION_TRACE_SCHEMA_VERSION);
+    expect(publishedScope).toEqual((target.request as { scope: unknown }).scope);
+    expect(validated).toEqual(target);
+
+    // Validating and then fully consuming the published record never reached
+    // the original value.
+    expect(readsAfterConsuming).toBe(0);
+  });
+
+  it('publishes a record whose repeated reads agree', () => {
+    const { proxy, gets } = hostileRoot();
+    const validated = new SettledCompilationTraceValidator().validate(proxy);
+
+    const first = JSON.stringify(validated);
+    const second = JSON.stringify(validated);
+    const reads = gets();
+
+    // Reading the published record twice yields the same document, which is the
+    // property the return type asserts and the one a `Proxy` can break.
+    expect(first).toBe(second);
+    expect(reads).toBe(0);
   });
 });
 

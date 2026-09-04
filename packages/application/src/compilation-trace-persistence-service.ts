@@ -259,6 +259,11 @@ export class CompilationTracePersistenceService {
       throw cause;
     }
 
+    // `settled` is the validator's **snapshot**, not the argument. Every read
+    // below is against it, and `trace` is never touched again: a `Proxy` can
+    // describe honest values by descriptor and return different ones from a
+    // `get`, so envelopeing the original would let this service store a record
+    // the validator never approved (INV-BLOCK-005).
     const payload = safeParse(JsonObjectSchema, settled);
     if (!payload.ok) {
       throw new CompilationTracePersistenceError(

@@ -317,6 +317,93 @@ describe('INV-BLOCK-005: a stored record is proven before it is published', () =
  * `code` from it could throw, or could run a getter, a store would be able to
  * choose this service's verdict or escape it entirely.
  */
+/**
+ * The service envelopes the validator's snapshot, never its argument
+ * (INV-BLOCK-005, INV-SEC-001).
+ *
+ * A `Proxy` can describe honest values through `getOwnPropertyDescriptor` — so
+ * the validator's passive walk accepts them without firing a trap — and return
+ * different ones through an ordinary property `get`. `#envelope` reads
+ * `compilationId`, `request.scope`, and `schemaVersion` after validating, so if
+ * validation returned the argument those three reads would run the trap and the
+ * service would store a record the validator never approved.
+ */
+describe('INV-BLOCK-005: a hostile trace cannot differ between validation and storage', () => {
+  const LIE_ID = `sha256:${'f'.repeat(64)}`;
+  const LIE_SCOPE = { tenantId: 'attacker', workspaceId: 'elsewhere' };
+
+  /** A real settled trace, and a root Proxy that describes it honestly and lies on `get`. */
+  function hostile(): {
+    readonly trace: SettledCompilationTrace;
+    readonly proxy: unknown;
+    readonly gets: () => number;
+  } {
+    const trace = settled();
+    const target = JSON.parse(JSON.stringify(trace)) as Record<string, unknown>;
+    let gets = 0;
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor: (t, key) => Object.getOwnPropertyDescriptor(t, key),
+      ownKeys: (t) => Reflect.ownKeys(t),
+      getPrototypeOf: (t) => Object.getPrototypeOf(t) as object | null,
+      get: (t, key) => {
+        gets += 1;
+        if (key === 'compilationId') return LIE_ID;
+        if (key === 'schemaVersion') return 999;
+        if (key === 'request') return { scope: LIE_SCOPE };
+        return Reflect.get(t, key);
+      },
+    });
+    return { trace, proxy, gets: () => gets };
+  }
+
+  it('stores the descriptor-validated values and never fires the get trap', async () => {
+    const { trace, proxy, gets } = hostile();
+    const store = new InMemoryTraceStore();
+
+    await new CompilationTracePersistenceService(store).store(proxy);
+    const readsAfterStore = gets();
+
+    const stored = await store.getTrace(scopeOf(trace), trace.compilationId);
+    expect(stored).not.toBeNull();
+    // The envelope carries what the descriptors said, not what `get` answered.
+    expect(stored?.compilationId).toBe(trace.compilationId);
+    expect(stored?.compilationId).not.toBe(LIE_ID);
+    expect(stored?.scope).toEqual(scopeOf(trace));
+    expect(stored?.scope).not.toEqual(LIE_SCOPE);
+    expect(stored?.traceSchemaVersion).toBe(trace.schemaVersion);
+    // Nothing in the service path read through the original value.
+    expect(readsAfterStore).toBe(0);
+  });
+
+  it('the stored payload is the real trace, and reads back as it', async () => {
+    const { trace, proxy, gets } = hostile();
+    const store = new InMemoryTraceStore();
+    const service = new CompilationTracePersistenceService(store);
+
+    await service.store(proxy);
+    const loaded = await service.get(scopeOf(trace), trace.compilationId);
+    const reads = gets();
+
+    expect(loaded).toEqual(trace);
+    expect(JSON.stringify(loaded)).not.toContain(LIE_ID);
+    expect(JSON.stringify(loaded)).not.toContain('attacker');
+    expect(reads).toBe(0);
+  });
+
+  it('a lying get value never reaches the store under any key', async () => {
+    const { proxy, gets } = hostile();
+    const store = scriptedStore(null);
+
+    await new CompilationTracePersistenceService(store).store(proxy);
+    const reads = gets();
+
+    expect(store.written).toHaveLength(1);
+    expect(JSON.stringify(store.written[0])).not.toContain(LIE_ID);
+    expect(JSON.stringify(store.written[0])).not.toContain('attacker');
+    expect(reads).toBe(0);
+  });
+});
+
 describe('INV-ADAPTER-001: a hostile rejection cannot escape or choose the verdict', () => {
   const CANARY = 'ctxalloc-trace-store-canary';
 

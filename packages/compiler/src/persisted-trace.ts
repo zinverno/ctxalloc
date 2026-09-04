@@ -185,6 +185,31 @@ function tryOwnDescriptor(value: object, key: string): DescriptorRead {
   return descriptor === undefined ? { kind: 'absent' } : { kind: 'descriptor', descriptor };
 }
 
+/**
+ * Adds one own enumerable data property to a snapshot under construction.
+ *
+ * `snapshot[key] = value` is wrong here, and wrong in a way that loses data
+ * silently. `"__proto__"` is a legal JSON key, and `JSON.parse` defines it as an
+ * ordinary own property — but plain assignment finds the inherited
+ * `Object.prototype.__proto__` **setter** and runs it, so the snapshot's
+ * prototype changes and the own key never appears. A stored record carrying that
+ * field would then be validated as though it did not have it, and `strictObject`
+ * would accept a record with an unknown field it never saw.
+ *
+ * `Object.defineProperty` creates the own property directly and runs no setter,
+ * for every key without special-casing any of them. Whether a field named
+ * `__proto__` is allowed at a given location is the schema's decision, not this
+ * function's (INV-BLOCK-005).
+ */
+function defineOwn(snapshot: object, key: string, value: unknown): void {
+  Object.defineProperty(snapshot, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
 /** Whether `key` is the canonical spelling of an index below `length`. */
 function isIndexKey(key: string, length: number): boolean {
   const index = Number(key);
@@ -207,41 +232,29 @@ function isIndexKey(key: string, length: number): boolean {
  * is a record claiming *there is a priority, and it is nothing*. JSON has no
  * such value, so a record carrying one did not come from a serialized trace.
  *
- * The check is what makes it safe for {@link SettledCompilationTraceValidator}
- * to publish the **caller's own value** after validating it, rather than a
- * rebuilt copy. Returning the supplied value is the stronger guarantee for a
- * persisted record: what a consumer reads is byte-for-byte what was stored,
- * including property order, and no rebuild step can quietly alter it.
+ * The walk **builds the value that is published**: a plain snapshot assembled
+ * from the own data properties it read, in the order it read them. That snapshot
+ * is what the schema validates and what {@link SettledCompilationTraceValidator}
+ * returns, so the value a consumer holds is exactly the JSON data this function
+ * proved — not the arbitrary runtime object it was handed.
  *
- * Because the value is published rather than rebuilt, "is JSON data" has to be
- * exact rather than approximate. Three rules therefore go beyond what a
- * serializer would notice:
+ * Because a snapshot is published, "is JSON data" has to be exact rather than
+ * approximate. Three rules therefore go beyond what a serializer would notice,
+ * so that the snapshot and its source describe the same document:
  *
- * - A **non-enumerable** own property of a plain object is rejected.
- *   `JSON.stringify` ignores it, so a rebuilt copy would not have it — but the
- *   returned value does, and a consumer reading that field would see data no
- *   serialization of this record contains.
+ * - A **non-enumerable** own property of a plain object is rejected. It is a
+ *   field of the source that the snapshot would not carry and that
+ *   `JSON.stringify` would not write, so the two would describe different
+ *   documents.
  * - An array's **own string properties other than its elements and `length`**
- *   are rejected, for the same reason: JSON drops them and the returned array
- *   keeps them.
- * - A **sparse** array is rejected. `JSON.stringify` writes a hole as `null`, so
- *   the returned array would not equal the data any serialization of it
- *   describes, and a consumer iterating it would see `undefined` where the
- *   stored document says `null`.
+ *   are rejected, for the same reason: JSON drops them and so does the snapshot.
+ * - A **sparse** array is rejected. `JSON.stringify` writes a hole as `null` and
+ *   the snapshot would copy it as `undefined`, so neither agrees with the source.
  *
- * The walk also **builds a plain snapshot** of everything it reads, and that
- * snapshot — never the caller's value — is what the schema is run against. Zod
- * reads properties the ordinary way, so validating the original directly would
- * run a `Proxy` `get` trap after the passive pass had carefully avoided one. The
- * snapshot is assembled from own data descriptors in their own order, so it
- * serializes identically to the value it was taken from.
- *
- * One residue is worth naming rather than glossing: a `Proxy` can report one
- * value through `getOwnPropertyDescriptor` and a different one through `get`,
- * and no platform-neutral check can detect that. This validator proves what the
- * descriptors say and publishes the caller's value, so what it proved is *the
- * record's own data properties* — which is exactly what a serializer would have
- * written, and exactly what a stored record is.
+ * Validating the snapshot rather than the original also keeps zod out of the
+ * untrusted value: zod reads properties the ordinary way, so running it against
+ * the original would fire a `Proxy` `get` trap the passive pass had carefully
+ * avoided.
  */
 function collectNonJsonSafe(
   value: unknown,
@@ -314,8 +327,7 @@ function collectNonJsonSafeObject(
 ): unknown {
   // A `null`-prototype source must not become an `Object.prototype` snapshot:
   // the two behave differently on exactly the key a stored record can carry.
-  const snapshot: Record<string, unknown> =
-    prototype === null ? (Object.create(null) as Record<string, unknown>) : {};
+  const snapshot: object = prototype === null ? Object.create(null) : {};
 
   for (const key of names) {
     const read = tryOwnDescriptor(record, key);
@@ -345,7 +357,7 @@ function collectNonJsonSafeObject(
     }
     const child = collectNonJsonSafe(descriptor.value, childPath, seen, issues);
     if (issues.length > 0) return undefined;
-    snapshot[key] = child;
+    defineOwn(snapshot, key, child);
   }
   return snapshot;
 }
@@ -782,48 +794,98 @@ export class SettledCompilationTraceValidator {
   readonly supportedSchemaVersion = COMPILATION_TRACE_SCHEMA_VERSION;
 
   /**
-   * Returns the supplied value, proven to be a `SettledCompilationTrace`.
+   * Returns a **passive validated snapshot** of the supplied record, proven to be
+   * a `SettledCompilationTrace`.
    *
-   * The **same** value is returned, not a copy: for a persisted record, what a
-   * consumer reads must be exactly what was stored, and a rebuild step is an
-   * opportunity to differ from it. That is sound because the record's own data
-   * properties are first proven to be passive JSON — no accessor, no cycle, no
-   * class instance, no symbol key, no non-enumerable property, no hole, no
-   * `undefined`-valued property — and the schema is then run against a plain
-   * snapshot of exactly those properties, so nothing in validation reads through
-   * the value itself.
+   * The returned value is not the argument. It is the plain snapshot the passive
+   * walk assembled from the record's own enumerable JSON data — the exact value
+   * the schema was run against — and it is JSON-equivalent to the input: same
+   * fields, same values, same order, no field added, dropped, coerced, or
+   * recomputed. Nothing is re-scored, re-rendered, or re-totalled; a trace whose
+   * stored numbers contradict each other comes back contradicting itself.
+   *
+   * Returning the argument would make the assertion unsound. A `Proxy` can
+   * describe honest values through `getOwnPropertyDescriptor` — so the passive
+   * walk validates them without ever firing a trap — and return different ones
+   * through an ordinary property `get`. The first consumer to read a field would
+   * then get a value the validator never saw, so the component would validate
+   * one trace and use another. Zero `get` calls *during* validation does not fix
+   * that; only publishing what was validated does (INV-BLOCK-005, INV-SEC-001).
+   *
+   * Value fidelity is what a persisted record needs, and reference identity is
+   * not part of this contract: a caller must consume the returned snapshot.
    *
    * @throws {PersistedCompilationTraceError} when the value is not one.
    */
   validate(input: unknown): SettledCompilationTrace {
-    assertSettledCompilationTrace(input);
-    // The assertion above proved the shape of `input` **itself**: `strictObject`
-    // rejects an unknown key rather than stripping it, and the passive-JSON
-    // check proved every read is a stable data property. Publishing the caller's
-    // value is therefore the exact record, not a reconstruction of it.
-    return input;
+    return validatedSnapshotOf(input);
   }
 }
 
 /**
- * Narrows one value to a settled trace, or throws with the reason it is not.
+ * Every path at which the snapshot carries an own `"__proto__"` key.
  *
- * It is an assertion rather than a boolean guard because the *reason* is the
- * product: a caller reading a stored record needs to know whether it was
- * malformed, written by an unsupported schema version, or an unsettled snapshot,
- * and a `false` says none of those (INV-ADAPTER-003).
+ * The snapshot is plain, trusted data by the time this runs, so the walk is an
+ * ordinary recursion with no guarding needed.
+ *
+ * It exists because the schema is **structurally blind** to that one key. Zod's
+ * unrecognized-key scan skips `"__proto__"` outright — it builds its result by
+ * assignment into a plain object, so carrying the key through would run the
+ * inherited prototype setter — which means `strictObject` reports every unknown
+ * field except this one. `"__proto__"` is a legal JSON key and no field of the
+ * trace schema is named that, so an own one is an unknown field at every
+ * location, and reporting it here is what makes *an unknown field is rejected
+ * rather than quietly dropped* true for all of them.
+ *
+ * This is not a rule about the key being dangerous. Nothing is deleted, no
+ * prototype is written, and the snapshot carried the key faithfully up to this
+ * point; the finding is the same `invalid_trace` the schema would have raised if
+ * it could see it.
+ */
+function ownProtoKeyPaths(
+  value: unknown,
+  path: readonly (string | number)[],
+  found: (readonly (string | number)[])[],
+): void {
+  if (typeof value !== 'object' || value === null) return;
+  if (Array.isArray(value)) {
+    value.forEach((element, index) => {
+      ownProtoKeyPaths(element, [...path, index], found);
+    });
+    return;
+  }
+  for (const key of Object.getOwnPropertyNames(value)) {
+    if (key === '__proto__') found.push(path);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor !== undefined && 'value' in descriptor) {
+      ownProtoKeyPaths(descriptor.value, [...path, key], found);
+    }
+  }
+}
+
+/**
+ * Proves one value is a settled trace and returns the validated snapshot of it,
+ * or throws with the reason it is not.
+ *
+ * It throws rather than answering `false` because the *reason* is the product: a
+ * caller reading a stored record needs to know whether it was malformed, written
+ * by an unsupported schema version, or an unsettled snapshot, and a `false` says
+ * none of those (INV-ADAPTER-003).
  *
  * `schemaVersion` and `settled` are inspected before the schema runs so that an
  * old or unsettled record gets the finding that actually describes it. Under the
  * full schema both would surface as a literal mismatch on one field among
  * however many others failed, and *this trace is from a schema version this
- * build does not support* would be buried in a list (INV-STORE-004).
+ * build does not support* would be buried in a list (INV-STORE-004). Both are
+ * read from the **snapshot**, so a hostile value cannot answer one thing here
+ * and another to the schema.
  */
-function assertSettledCompilationTrace(input: unknown): asserts input is SettledCompilationTrace {
+function validatedSnapshotOf(input: unknown): SettledCompilationTrace {
   const jsonIssues: ValidationIssue[] = [];
-  // The snapshot is a plain rebuild of everything the passive walk read. Every
-  // check below runs against it, so no property read after this line can reach a
-  // `Proxy` `get` trap or an installed getter — including the ones zod performs.
+  // The snapshot is a plain rebuild of everything the passive walk read, and it
+  // is also what this function returns. Every check below runs against it, so no
+  // property read after this line can reach a `Proxy` `get` trap or an installed
+  // getter — neither the ones zod performs nor the ones a consumer would.
   const snapshot = collectNonJsonSafe(input, [], new Set<object>(), jsonIssues);
   if (jsonIssues.length > 0) {
     throw new PersistedCompilationTraceError(jsonIssues);
@@ -859,4 +921,26 @@ function assertSettledCompilationTrace(input: unknown): asserts input is Settled
       })),
     );
   }
+
+  // One unknown field the schema cannot see for itself.
+  const protoPaths: (readonly (string | number)[])[] = [];
+  ownProtoKeyPaths(snapshot, [], protoPaths);
+  if (protoPaths.length > 0) {
+    throw new PersistedCompilationTraceError(
+      protoPaths.map((at) =>
+        issue(
+          at,
+          'must not carry the unrecognized key "__proto__"',
+          'invalid_trace' satisfies PersistedCompilationTraceIssueCode,
+        ),
+      ),
+    );
+  }
+
+  // The snapshot is published, not `parsed.value`. `strictObject` rejects an
+  // unknown key rather than stripping one, so the two carry the same fields —
+  // but the snapshot is the value this module built from observed own data,
+  // and routing the result through a validation library's output would make
+  // that library's construction choices part of the persisted record.
+  return snapshot as SettledCompilationTrace;
 }
