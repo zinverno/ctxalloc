@@ -14,6 +14,7 @@ import {
 } from '@ctxalloc/domain';
 import type { StoredCompilationTraceRecord, TraceStore } from '@ctxalloc/ports';
 import { z } from 'zod';
+import { tryReadOwnDataProperty } from './canonical-record.js';
 import { issue } from './chunking-primitives.js';
 import { validatePort } from './local-source-pipeline.js';
 
@@ -126,12 +127,23 @@ const StoredRecordSchema = z.strictObject({
 const TRACE_CONFLICT_CODE = 'TRACE_CONFLICT';
 const INVALID_STORED_DATA_CODE = 'INVALID_STORED_DATA';
 
-/** Reads one own string data property without invoking an accessor. */
+/**
+ * The stable machine code of a rejected store operation, if it has one.
+ *
+ * The read is both passive and **total**. A rejected `TraceStore` may reject
+ * with any JavaScript value, including a `Proxy` whose
+ * `getOwnPropertyDescriptor` trap throws or a value carrying an accessor named
+ * `code`. `tryReadOwnDataProperty` reports an accessor as absent rather than
+ * invoking it and reports a throwing trap as absent rather than letting it
+ * escape, so a store can neither run code inside this service's failure path nor
+ * replace its verdict with a raw `TypeError` (INV-ADAPTER-001, INV-SEC-001).
+ *
+ * An unreadable code is the same answer as no code: the generic dependency
+ * failure below.
+ */
 function ownCode(cause: unknown): string | null {
-  if (typeof cause !== 'object' || cause === null) return null;
-  const descriptor = Object.getOwnPropertyDescriptor(cause, 'code');
-  if (descriptor === undefined || !('value' in descriptor)) return null;
-  return typeof descriptor.value === 'string' ? descriptor.value : null;
+  const code = tryReadOwnDataProperty(cause, 'code');
+  return typeof code === 'string' ? code : null;
 }
 
 /**

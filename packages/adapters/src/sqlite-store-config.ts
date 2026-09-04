@@ -1,4 +1,5 @@
 import { isAbsolute } from 'node:path';
+import { ownDataValue, tryIsArray, tryOwnEnumerableKeys } from './passive-inspection.js';
 
 /**
  * The explicit configuration of one local SQLite store, and the internal failure
@@ -80,18 +81,42 @@ export class SQLiteStoreFailure extends Error {
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 /**
+ * A literal NUL, built from its code point.
+ *
+ * Written this way on purpose. The obvious spelling of this check is a string
+ * literal, and a backslash that loses its escaping — in a rewrite, a copy, a
+ * generated file — turns `'\u0000'` into the ordinary six-character text
+ * `\u0000`, which no real path contains and which therefore makes the check
+ * pass on every input including one carrying an actual NUL. A code point cannot
+ * be misread that way.
+ */
+const NUL = String.fromCharCode(0);
+
+/**
  * Validates one store configuration.
  *
  * Exact keys, no coercion, no defaults. The path is required to be a non-blank,
  * well-formed, absolute string carrying no NUL: a lone surrogate would not
  * survive the round trip to a filesystem call unchanged, and a NUL would
  * truncate the name the operating system actually opens.
+ *
+ * Every read is passive and total. The configuration is an `unknown` a caller
+ * supplied, so it may be a `Proxy` whose traps throw or an object whose
+ * `databasePath` is an accessor; a plain `Object.keys` or `config.databasePath`
+ * there would let the value's own error escape as this adapter's failure, and a
+ * getter would run before anything decided whether to trust it. An unreadable
+ * configuration is `INVALID_CONFIG` — the same public code a malformed one gets
+ * (INV-ADAPTER-001, INV-SEC-001).
  */
 export function validateSQLiteLocalStoreConfig(input: unknown): SQLiteLocalStoreConfig {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+  if (typeof input !== 'object' || input === null || tryIsArray(input) !== false) {
     throw new SQLiteStoreFailure('INVALID_CONFIG', 'configuration must be an object');
   }
-  const keys = Object.keys(input).sort();
+  const ownKeys = tryOwnEnumerableKeys(input);
+  if (ownKeys === null) {
+    throw new SQLiteStoreFailure('INVALID_CONFIG', 'configuration could not be inspected');
+  }
+  const keys = [...ownKeys].sort();
   if (keys.length !== 2 || keys[0] !== 'databasePath' || keys[1] !== 'schemaVersion') {
     throw new SQLiteStoreFailure(
       'INVALID_CONFIG',
@@ -99,14 +124,13 @@ export function validateSQLiteLocalStoreConfig(input: unknown): SQLiteLocalStore
     );
   }
 
-  const config = input as { schemaVersion: unknown; databasePath: unknown };
-  if (config.schemaVersion !== SQLITE_LOCAL_STORE_SCHEMA_VERSION) {
+  if (ownDataValue(input, 'schemaVersion') !== SQLITE_LOCAL_STORE_SCHEMA_VERSION) {
     throw new SQLiteStoreFailure(
       'INVALID_CONFIG',
       `configuration schemaVersion must be ${String(SQLITE_LOCAL_STORE_SCHEMA_VERSION)}`,
     );
   }
-  const path = config.databasePath;
+  const path = ownDataValue(input, 'databasePath');
   if (typeof path !== 'string') {
     throw new SQLiteStoreFailure('INVALID_CONFIG', 'databasePath must be a string');
   }
@@ -116,7 +140,7 @@ export function validateSQLiteLocalStoreConfig(input: unknown): SQLiteLocalStore
       'databasePath must not be empty or whitespace-only',
     );
   }
-  if (path.includes('\u0000')) {
+  if (path.includes(NUL)) {
     throw new SQLiteStoreFailure('INVALID_CONFIG', 'databasePath must not contain a NUL character');
   }
   if (LONE_SURROGATE.test(path)) {

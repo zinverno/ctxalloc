@@ -133,6 +133,51 @@ describe('ctxalloc compile: the whole local stack, from files to a persisted tra
     expect(second.traceStored).toBe(true);
   });
 
+  /**
+   * `traceStored: true` is a claim about the audit log, and it must be true.
+   *
+   * A store that decided idempotence from a subset of the row's columns would
+   * answer "already stored" for a row whose scope was corrupted — and the very
+   * next `ctxalloc trace` would refuse that same row. The command would then have
+   * reported a stored trace that cannot be read back (INV-STORE-002).
+   */
+  it('INV-STORE-002: reports failure rather than traceStored when the audit row is corrupt', async () => {
+    const ws = await prepared();
+    const first = await compile(ws);
+
+    // Corrupt only `scope_json`, which the first implementation never compared.
+    const database = new DatabaseSync(ws.databasePath);
+    database.exec("UPDATE ctxalloc_compilation_trace SET scope_json = '{ not json'");
+    database.close();
+
+    const run = await cli(
+      'compile',
+      '--config',
+      ws.configPath,
+      '--request',
+      ws.write('request.json', compilationRequest()),
+    );
+    const envelope = failureOf(run);
+
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stdout).not.toContain('traceStored');
+    expect(envelope.stage).toBe('trace-store');
+    expect(envelope.issues[0]?.code).toBe('invalid_stored_record');
+
+    // And reading it back agrees: the row really is unreadable.
+    const read = await cli(
+      'trace',
+      '--config',
+      ws.configPath,
+      '--scope',
+      ws.write('scope.json', SCOPE),
+      '--id',
+      first.compilationId,
+    );
+    expect(read.exitCode).toBe(1);
+  });
+
   it('publishes no corpus, no candidates, no source metadata, and no raw query', async () => {
     const ws = createWorkspace();
     workspace = ws;

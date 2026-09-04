@@ -6,6 +6,7 @@ import type {
   SourceRegistrationKey,
 } from '@ctxalloc/ports';
 import { z } from 'zod';
+import { tryReadArray, tryReadOwnDataProperty } from './canonical-record.js';
 import { issue } from './chunking-primitives.js';
 import { validatePort } from './local-source-pipeline.js';
 import {
@@ -184,12 +185,23 @@ const SOURCE_CONFLICT_CODE = 'SOURCE_CONFLICT';
 const SOURCE_NOT_FOUND_CODE = 'SOURCE_NOT_FOUND';
 const INVALID_STORED_DATA_CODE = 'INVALID_STORED_DATA';
 
-/** Reads one own string data property without invoking an accessor. */
+/**
+ * The stable machine code of a rejected store operation, if it has one.
+ *
+ * The read is both passive and **total**. A rejected port may reject with any
+ * JavaScript value, including a `Proxy` whose `getOwnPropertyDescriptor` trap
+ * throws or a value carrying an accessor named `code`. `tryReadOwnDataProperty`
+ * reports an accessor as absent rather than invoking it and reports a throwing
+ * trap as absent rather than letting it escape — so a dependency can neither run
+ * code inside this service's failure path nor replace this service's verdict
+ * with a raw `TypeError` of its own wording (INV-ADAPTER-001, INV-SEC-001).
+ *
+ * An unreadable code is the same answer as no code: the generic dependency
+ * failure below.
+ */
 function ownCode(cause: unknown): string | null {
-  if (typeof cause !== 'object' || cause === null) return null;
-  const descriptor = Object.getOwnPropertyDescriptor(cause, 'code');
-  if (descriptor === undefined || !('value' in descriptor)) return null;
-  return typeof descriptor.value === 'string' ? descriptor.value : null;
+  const code = tryReadOwnDataProperty(cause, 'code');
+  return typeof code === 'string' ? code : null;
 }
 
 function dependencyIssue(cause: unknown, path: readonly string[]): ValidationIssue {
@@ -385,11 +397,16 @@ export class LocalSourceRegistryService {
     } catch (cause) {
       throw new LocalSourceRegistryError([dependencyIssue(cause, ['scope'])]);
     }
-    if (!Array.isArray(listed)) {
+    // `Array.isArray` unwraps a `Proxy` to reach its target and throws outright
+    // on a revoked one, and it is true of a proxy whose element reads run store
+    // code. The kind test and the spine are therefore taken together, through own
+    // data descriptors, and everything after this line walks a plain snapshot.
+    const items = tryReadArray(listed);
+    if (items === null) {
       throw new LocalSourceRegistryError([
         issue(
           ['scope'],
-          'listSources must resolve to an array',
+          'listSources must resolve to a readable array',
           'control_store_unavailable' satisfies LocalSourceRegistryIssueCode,
         ),
       ]);
@@ -397,7 +414,7 @@ export class LocalSourceRegistryService {
 
     const issues: ValidationIssue[] = [];
     const registrations: SourceRegistration[] = [];
-    listed.forEach((entry, index) => {
+    items.forEach((entry, index) => {
       const parsed = parseSourceRegistration(entry);
       if (!parsed.ok) {
         for (const detail of parsed.issues) {

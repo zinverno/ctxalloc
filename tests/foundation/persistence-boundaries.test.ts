@@ -268,6 +268,55 @@ describe('ARCHITECTURE 2: apps/cli is the outermost composition root', () => {
   });
 });
 
+/**
+ * The two CLI contracts a later change could quietly undo (DEC-042).
+ *
+ * Both have behavioural tests of their own; these are structural, because both
+ * regressions are one keystroke wide and neither is visible in ordinary use. A
+ * `'utf8'` argument added back to a file read reintroduces replacement decoding,
+ * and an option added to the global vocabulary without a command that reads it
+ * is accepted and silently discarded.
+ */
+describe('DEC-042: the CLI reads bytes and holds each command to an exact option set', () => {
+  it('never decodes an operator file with the replacement decoder', () => {
+    const jsonInput = codeOf(readSource('apps/cli/src/json-input.ts'));
+
+    // `readFileSync(path, 'utf8')` turns an ill-formed byte into U+FFFD and
+    // succeeds, which is a silent edit to the caller's input.
+    expect(jsonInput).not.toMatch(/readFileSync\([^)]*['"]utf8['"]/);
+    expect(jsonInput).toContain('fatal: true');
+    // The BOM decision is explicit rather than inherited from the default.
+    expect(jsonInput).toContain('ignoreBOM');
+  });
+
+  it('reads no operator-supplied file as text anywhere else in the CLI', () => {
+    for (const file of sourceFiles('apps/cli/src')) {
+      // `version.ts` reads this package's own manifest, which is project-owned
+      // build output rather than operator input.
+      if (file === 'commands/version.ts') continue;
+      expect(codeOf(readSource(`apps/cli/src/${file}`)), file).not.toMatch(
+        /readFileSync\([^)]*['"]utf8['"]/,
+      );
+    }
+  });
+
+  it('gives every command and subcommand an entry in the option table', () => {
+    const runCli = readSource('apps/cli/src/run-cli.ts');
+    const code = codeOf(runCli);
+
+    // Every command in the dispatch list has a contract, and so does every
+    // `source` subcommand. A command with no entry would not compile, because
+    // the tables are `satisfies Record<...>` over those exact unions — this
+    // pins the tables themselves being present and consulted.
+    expect(code).toContain('const COMMAND_OPTIONS');
+    expect(code).toContain('const SOURCE_COMMAND_OPTIONS');
+    expect(code).toContain('unexpected_option');
+    for (const command of ['compile', 'trace', 'eval', 'inspect-blocks', 'version']) {
+      expect(code, command).toMatch(new RegExp(`['"]?${command}['"]?:\\s*\\[`));
+    }
+  });
+});
+
 describe('Phase 19 scope: what local persistence deliberately does not add', () => {
   it('adds no HTTP framework or server', () => {
     const manifests = ['apps/cli', 'apps/api', ...INNER_PACKAGES, 'packages/adapters'].map((dir) =>

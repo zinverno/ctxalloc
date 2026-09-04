@@ -52,6 +52,8 @@ export interface Workspace {
   readonly sourceRoot: string;
   /** Writes one JSON input file and returns its path. */
   readonly write: (name: string, value: unknown) => string;
+  /** Writes one input file from raw bytes and returns its path. */
+  readonly writeBytes: (name: string, bytes: Uint8Array) => string;
   readonly dispose: () => void;
 }
 
@@ -200,6 +202,14 @@ export function createWorkspace(config: Record<string, unknown> = cliConfig()): 
     write: (name, value) => {
       const path = join(root, name);
       writeFileSync(path, JSON.stringify(value, null, 2), 'utf8');
+      return path;
+    },
+    // Raw bytes, never a JavaScript string: a fixture written as a string would
+    // already be well-formed UTF-16, so it could not express the byte sequences
+    // the decoder is supposed to refuse.
+    writeBytes: (name, bytes) => {
+      const path = join(root, name);
+      writeFileSync(path, bytes);
       return path;
     },
     dispose: () => {

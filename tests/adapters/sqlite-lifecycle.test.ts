@@ -9,7 +9,7 @@ import {
   SQLiteTraceStore,
   SQLiteTraceStoreError,
 } from '@ctxalloc/adapters';
-import type { SourceRegistration } from '@ctxalloc/ports';
+import type { SourceRegistration, StoredCompilationTraceRecord } from '@ctxalloc/ports';
 import { afterEach, describe, expect, it } from 'vitest';
 
 /**
@@ -99,6 +99,114 @@ describe('SQLite store configuration: strict, explicit, and absolute', () => {
     expect(error.code).toBe('OPEN_FAILED');
     expect(error.message).not.toContain(missingDirectory);
     expect(error.message).not.toContain('ENOENT');
+  });
+
+  /**
+   * A path carrying an actual NUL is `INVALID_CONFIG`, not a driver failure.
+   *
+   * The string is built from its code point rather than written as an escape,
+   * so the test says unambiguously which character it means. A check spelled
+   * with a backslash that lost its escaping tests the six-character text
+   * `\u0000` instead — which no path contains, so the guard passes on every
+   * input, the value reaches the driver, and Node's own `TypeError` about null
+   * bytes is what decides the outcome.
+   */
+  it('INV-ADAPTER-001: rejects a path carrying an actual NUL as INVALID_CONFIG', () => {
+    const withNul = `${databasePath()}${String.fromCharCode(0)}b.sqlite`;
+
+    const control = rejected(() => new SQLiteControlStore(config(withNul)));
+    const trace = rejected(() => new SQLiteTraceStore(config(withNul)));
+
+    // INVALID_CONFIG, never OPEN_FAILED: the configuration was refused before
+    // any file was opened.
+    expect(control.code).toBe('INVALID_CONFIG');
+    expect(trace.code).toBe('INVALID_CONFIG');
+    expect(control.message).toContain('NUL');
+    // Nothing about the driver's own complaint reaches the caller.
+    expect(control.message).not.toContain('null byte');
+    expect(control.message).not.toContain('TypeError');
+    expect(control.message).not.toContain(withNul);
+    // And no file was created for either the whole path or its truncation.
+    expect(existsSync(withNul.split(String.fromCharCode(0))[0] ?? '')).toBe(false);
+  });
+
+  it('accepts the ordinary six-character text "\\u0000" in a path', () => {
+    // A backslash is a legal filename character where this runs, so the literal
+    // text that spells an escape sequence must not be mistaken for a NUL.
+    const spelled = join(directory ?? databasePath().replace(/\/[^/]*$/, ''), 'a\\u0000b.sqlite');
+    const store = new SQLiteControlStore(config(spelled));
+    try {
+      expect(existsSync(spelled)).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  /**
+   * The configuration is an `unknown` a caller supplied, so inspecting it must
+   * be total: a hostile value must not be able to choose this adapter's error.
+   */
+  describe('INV-ADAPTER-001: a hostile configuration cannot escape as a raw error', () => {
+    const CANARY = 'ctxalloc-config-canary';
+
+    it.each([
+      [
+        'a revoked proxy',
+        (): unknown => {
+          const { proxy, revoke } = Proxy.revocable({}, {});
+          revoke();
+          return proxy;
+        },
+      ],
+      [
+        'a throwing ownKeys trap',
+        (): unknown =>
+          new Proxy(
+            {},
+            {
+              ownKeys: (): never => {
+                throw new Error(CANARY);
+              },
+            },
+          ),
+      ],
+      [
+        'a throwing getOwnPropertyDescriptor trap',
+        (): unknown =>
+          new Proxy(
+            { schemaVersion: 1, databasePath: '/tmp/a.sqlite' },
+            {
+              getOwnPropertyDescriptor: (): never => {
+                throw new Error(CANARY);
+              },
+            },
+          ),
+      ],
+    ])('reports %s as INVALID_CONFIG', (_label, build) => {
+      const control = rejected(() => new SQLiteControlStore(build()));
+      const trace = rejected(() => new SQLiteTraceStore(build()));
+
+      expect(control.code).toBe('INVALID_CONFIG');
+      expect(trace.code).toBe('INVALID_CONFIG');
+      expect(control.message).not.toContain(CANARY);
+      expect(trace.message).not.toContain(CANARY);
+    });
+
+    it('never invokes an accessor on the configuration', () => {
+      let reads = 0;
+      const hostile = {
+        schemaVersion: 1,
+        get databasePath(): string {
+          reads += 1;
+          return '/tmp/a.sqlite';
+        },
+      };
+
+      // The getter is reported as absent rather than run, so the path is not a
+      // string and the configuration is refused.
+      expect(rejected(() => new SQLiteControlStore(hostile)).code).toBe('INVALID_CONFIG');
+      expect(reads).toBe(0);
+    });
   });
 });
 
@@ -514,6 +622,260 @@ describe('INV-BLOCK-005: a corrupted row is a named failure, never a partial rec
       expect(message).not.toContain('UPDATE');
     } finally {
       reader.close();
+    }
+  });
+});
+
+/**
+ * The SQLite-specific half of the title contract.
+ *
+ * The shared `ControlStore` contract already proves both implementations
+ * round-trip every string the existing `SourceRegistration` schema accepts.
+ * These tests pin the mechanism, because the failure this guards against is
+ * silent: a raw `TEXT` binding accepts a lone surrogate, stores it, and hands
+ * back `U+FFFD` — so an assertion that only compared "the title came back"
+ * against a store that rewrote it would still have to see the substitution to
+ * catch it (INV-STORE-002).
+ */
+describe('SQLite title storage is lossless for the existing string contract', () => {
+  async function stored(title: string): Promise<{
+    readonly listed: SourceRegistration | undefined;
+    readonly column: unknown;
+  }> {
+    const path = databasePath();
+    const store = new SQLiteControlStore(config(path));
+    let listed: SourceRegistration | undefined;
+    try {
+      await store.registerSource(registration({ title } as Partial<SourceRegistration>));
+      [listed] = await store.listSources(SCOPE);
+    } finally {
+      store.close();
+    }
+
+    const database = new DatabaseSync(path);
+    const row: unknown = database
+      .prepare('SELECT title_json FROM ctxalloc_source_registration')
+      .get();
+    database.close();
+    return { listed, column: (row as { title_json: unknown }).title_json };
+  }
+
+  it('stores a lone surrogate as an ASCII escape and returns the exact code unit', async () => {
+    const { listed, column } = await stored('\uD800');
+
+    // The column never carries the malformed code unit itself.
+    expect(column).toBe('"\\ud800"');
+    expect(typeof column === 'string' && column.includes('\uFFFD')).toBe(false);
+    // And the value comes back exactly, with no substitution.
+    expect(listed?.title).toBe('\uD800');
+    expect(listed?.title?.charCodeAt(0)).toBe(0xd800);
+    expect(listed?.title).not.toContain('\uFFFD');
+  });
+
+  it('stores the empty string as a JSON string, distinct from an absent title', async () => {
+    const { listed, column } = await stored('');
+
+    expect(column).toBe('""');
+    expect(listed?.title).toBe('');
+    expect(listed !== undefined && 'title' in listed).toBe(true);
+  });
+
+  it('stores an absent title as NULL', async () => {
+    const path = databasePath();
+    const store = new SQLiteControlStore(config(path));
+    try {
+      await store.registerSource(registration());
+    } finally {
+      store.close();
+    }
+
+    const database = new DatabaseSync(path);
+    const row: unknown = database
+      .prepare('SELECT title_json FROM ctxalloc_source_registration')
+      .get();
+    database.close();
+    expect((row as { title_json: unknown }).title_json).toBeNull();
+  });
+
+  it('rejects a stored title that is not a JSON string', async () => {
+    const path = databasePath();
+    const store = new SQLiteControlStore(config(path));
+    await store.registerSource(registration({ title: 'ok' } as Partial<SourceRegistration>));
+    store.close();
+
+    const database = new DatabaseSync(path);
+    database.exec("UPDATE ctxalloc_source_registration SET title_json = '7'");
+    database.close();
+
+    const reader = new SQLiteControlStore(config(path));
+    try {
+      await expect(reader.listSources(SCOPE)).rejects.toMatchObject({
+        code: 'INVALID_STORED_DATA',
+      });
+    } finally {
+      reader.close();
+    }
+  });
+});
+
+/**
+ * `putTrace` decides idempotent-versus-conflict against a **validated** stored
+ * record, never against raw column text (INV-ADAPTER-004, INV-STORE-002).
+ *
+ * Two failures follow from doing it the other way, and both are tested here.
+ * Comparing text alone lets a corrupted row pass as "already stored", so a
+ * caller is told an audit record exists that a later read rejects. And comparing
+ * text alone calls two spellings of the same JSON a conflict, even though the
+ * store's own contract says equality is canonical.
+ */
+describe('INV-ADAPTER-004: the existing trace row is validated before idempotence', () => {
+  const ID = `sha256:${'1'.repeat(64)}`;
+
+  function record(overrides: Record<string, unknown> = {}): StoredCompilationTraceRecord {
+    return {
+      schemaVersion: 1,
+      scope: SCOPE,
+      compilationId: ID,
+      traceSchemaVersion: 2,
+      payload: { settled: true, groups: [{ id: 'block:a', tokens: 12 }], nested: { b: 1, a: 2 } },
+      ...overrides,
+    } as StoredCompilationTraceRecord;
+  }
+
+  /** Stores the record, mutates the row directly, and returns a fresh store. */
+  async function withCorruptedRow(sql: string): Promise<{
+    readonly store: SQLiteTraceStore;
+    readonly path: string;
+    readonly before: unknown;
+  }> {
+    const path = databasePath();
+    const first = new SQLiteTraceStore(config(path));
+    await first.putTrace(record());
+    first.close();
+
+    const database = new DatabaseSync(path);
+    database.exec(sql);
+    const before: unknown = database.prepare('SELECT * FROM ctxalloc_compilation_trace').get();
+    database.close();
+
+    return { store: new SQLiteTraceStore(config(path)), path, before };
+  }
+
+  /** The row exactly as it stands on disk. */
+  function rowOf(path: string): unknown {
+    const database = new DatabaseSync(path);
+    const row: unknown = database.prepare('SELECT * FROM ctxalloc_compilation_trace').get();
+    database.close();
+    return row;
+  }
+
+  it('reports a corrupted scope_json as INVALID_STORED_DATA rather than succeeding', async () => {
+    const { store, path, before } = await withCorruptedRow(
+      "UPDATE ctxalloc_compilation_trace SET scope_json = '{ not json'",
+    );
+    try {
+      // The identical record is written again. Comparing only the columns the
+      // first implementation compared would have ignored `scope_json` entirely
+      // and answered "already stored" — for a row `getTrace` then refuses.
+      await expect(store.putTrace(record())).rejects.toMatchObject({
+        code: 'INVALID_STORED_DATA',
+      });
+      await expect(store.getTrace(SCOPE, ID)).rejects.toMatchObject({
+        code: 'INVALID_STORED_DATA',
+      });
+    } finally {
+      store.close();
+    }
+    // The corrupted row is refused, never repaired.
+    expect(rowOf(path)).toEqual(before);
+  });
+
+  it('reports a scope_json that disagrees with scope_key as INVALID_STORED_DATA', async () => {
+    const { store, path, before } = await withCorruptedRow(
+      `UPDATE ctxalloc_compilation_trace SET scope_json = '{"tenantId":"other","workspaceId":"other"}'`,
+    );
+    try {
+      const error = await store.putTrace(record()).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(SQLiteTraceStoreError);
+      expect((error as SQLiteTraceStoreError).code).toBe('INVALID_STORED_DATA');
+      expect((error as SQLiteTraceStoreError).message).toContain('scope key');
+    } finally {
+      store.close();
+    }
+    expect(rowOf(path)).toEqual(before);
+  });
+
+  it('reports a malformed trace_json as INVALID_STORED_DATA rather than a conflict', async () => {
+    const { store, path, before } = await withCorruptedRow(
+      "UPDATE ctxalloc_compilation_trace SET trace_json = '{ not json'",
+    );
+    try {
+      await expect(store.putTrace(record())).rejects.toMatchObject({
+        code: 'INVALID_STORED_DATA',
+      });
+    } finally {
+      store.close();
+    }
+    expect(rowOf(path)).toEqual(before);
+  });
+
+  it('INV-DET-002: a semantically identical row with reordered keys is idempotent', async () => {
+    // The same JSON data, written with its object keys in a different order.
+    // A store comparing raw column text would call this a conflict.
+    const { store, path } = await withCorruptedRow(
+      `UPDATE ctxalloc_compilation_trace SET trace_json =
+         '{"nested":{"a":2,"b":1},"groups":[{"tokens":12,"id":"block:a"}],"settled":true}'`,
+    );
+    try {
+      await expect(store.putTrace(record())).resolves.toBeUndefined();
+      // Idempotence is not a rewrite: the stored text is left as it was found.
+      expect(await store.getTrace(SCOPE, ID)).toEqual(record());
+    } finally {
+      store.close();
+    }
+    expect((rowOf(path) as { trace_json: string }).trace_json).toContain('"nested":{"a":2,"b":1}');
+  });
+
+  it('a genuinely different payload is still TRACE_CONFLICT', async () => {
+    const path = databasePath();
+    const store = new SQLiteTraceStore(config(path));
+    try {
+      await store.putTrace(record());
+      await expect(
+        store.putTrace(record({ payload: { settled: true, altered: true } })),
+      ).rejects.toMatchObject({ code: 'TRACE_CONFLICT' });
+      expect(await store.getTrace(SCOPE, ID)).toEqual(record());
+    } finally {
+      store.close();
+    }
+  });
+
+  it('a different valid scope under one identifier is TRACE_CONFLICT', async () => {
+    const path = databasePath();
+    const store = new SQLiteTraceStore(config(path));
+    try {
+      await store.putTrace(record());
+      // Same deterministic identifier, different scope. The scope participates
+      // in equality, so this is a contradiction rather than a repeat write.
+      await expect(
+        store.putTrace(record({ scope: { tenantId: 'sqlite', workspaceId: 'elsewhere' } })),
+      ).rejects.toMatchObject({ code: 'TRACE_CONFLICT' });
+      expect(await store.getTrace(SCOPE, ID)).toEqual(record());
+    } finally {
+      store.close();
+    }
+  });
+
+  it('a differing trace schema version under one identifier is TRACE_CONFLICT', async () => {
+    const path = databasePath();
+    const store = new SQLiteTraceStore(config(path));
+    try {
+      await store.putTrace(record());
+      await expect(store.putTrace(record({ traceSchemaVersion: 3 }))).rejects.toMatchObject({
+        code: 'TRACE_CONFLICT',
+      });
+    } finally {
+      store.close();
     }
   });
 });

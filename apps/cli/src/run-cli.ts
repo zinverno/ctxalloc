@@ -58,12 +58,11 @@ export const EXIT_FAILURE = 1;
 export const EXIT_USAGE = 2;
 
 /**
- * The options every command may take.
+ * The complete option vocabulary of the program.
  *
- * `parseArgs` is given the whole set rather than a per-command set, and each
- * command then requires exactly the ones it needs. Declaring an option a command
- * does not use is still a usage error, because the requirement is checked, not
- * merely the parse.
+ * `parseArgs` is given the whole set rather than a per-command set, because it
+ * only has to turn an argument vector into values; *which* of them a command
+ * accepts is decided afterwards, against {@link COMMAND_OPTIONS}.
  */
 const OPTIONS = {
   config: { type: 'string' },
@@ -76,12 +75,50 @@ const OPTIONS = {
   'run-config': { type: 'string' },
 } as const;
 
-type ParsedOptions = Partial<Record<keyof typeof OPTIONS, string>>;
+type OptionName = keyof typeof OPTIONS;
+
+type ParsedOptions = Partial<Record<OptionName, string>>;
+
+/** Every option name, in one fixed order, so a report about them is deterministic. */
+const OPTION_NAMES = Object.keys(OPTIONS) as readonly OptionName[];
 
 /** The commands this build implements, in the order the documentation lists them. */
 const COMMANDS = ['compile', 'trace', 'eval', 'inspect-blocks', 'source', 'version'] as const;
 
 const SOURCE_SUBCOMMANDS = ['add', 'update', 'remove', 'list'] as const;
+
+/**
+ * The exact option contract of each command, and of each `source` subcommand.
+ *
+ * One list per command, and it is **both** the allowed set and the required set.
+ * Two lists would permit a third state — accepted but unused — and that state is
+ * precisely the failure this table exists to prevent. `parseArgs` is strict, so
+ * it rejects an option no command knows; it cannot reject an option that *some
+ * other* command knows, and without this table `ctxalloc version --config x`
+ * parses, `ctxalloc compile --request r --scope s` parses, and in both cases the
+ * option the operator typed is silently discarded. A caller who mistypes one
+ * real option as another real one would then believe a scope or an input
+ * participated in a command that never read it, which is worse than an outright
+ * rejection because nothing in the output says otherwise (INV-DET-001).
+ *
+ * An option a future command needs is added here deliberately, together with the
+ * code that reads it. Accepting one early "for compatibility" would reintroduce
+ * exactly the silently-ignored argument this table forbids.
+ */
+const COMMAND_OPTIONS = {
+  compile: ['config', 'request'],
+  trace: ['config', 'scope', 'id'],
+  eval: ['config', 'case', 'run-config'],
+  'inspect-blocks': ['config', 'scope'],
+  version: [],
+} as const satisfies Record<Exclude<(typeof COMMANDS)[number], 'source'>, readonly OptionName[]>;
+
+const SOURCE_COMMAND_OPTIONS = {
+  add: ['config', 'registration'],
+  update: ['config', 'registration'],
+  remove: ['config', 'key'],
+  list: ['config', 'scope'],
+} as const satisfies Record<(typeof SOURCE_SUBCOMMANDS)[number], readonly OptionName[]>;
 
 /**
  * Runs one invocation.
@@ -131,10 +168,13 @@ async function dispatch(argv: readonly string[]): Promise<unknown> {
         `ctxalloc source requires one of: ${SOURCE_SUBCOMMANDS.join(', ')}`,
       );
     }
-    return runSource(subcommand, parse(tail));
+    return runSource(
+      subcommand,
+      optionsFor(tail, SOURCE_COMMAND_OPTIONS[subcommand], `ctxalloc source ${subcommand}`),
+    );
   }
 
-  const options = parse(rest);
+  const options = optionsFor(rest, COMMAND_OPTIONS[command], `ctxalloc ${command}`);
   switch (command) {
     case 'version':
       return runVersionCommand();
@@ -201,6 +241,40 @@ function runSource(
 }
 
 /**
+ * Parses one command's option vector and holds it to that command's contract.
+ *
+ * Three usage failures, checked in one fixed order so the report does not depend
+ * on which one a caller happens to hit first: an option no command knows, an
+ * option **this** command does not take, and a required option that is missing.
+ *
+ * The middle check is the one `parseArgs` cannot make. `--scope` is a real
+ * option of `trace`, `inspect-blocks`, and `source list`, so a strict parse
+ * accepts it everywhere; only this table knows that `compile` does not read it.
+ */
+function optionsFor(
+  argv: readonly string[],
+  contract: readonly OptionName[],
+  label: string,
+): ParsedOptions {
+  const parsed = parse(argv);
+
+  for (const name of OPTION_NAMES) {
+    if (parsed[name] !== undefined && !contract.includes(name)) {
+      throw usageError(
+        'unexpected_option',
+        name,
+        contract.length === 0
+          ? `${label} takes no options, and --${name} was supplied`
+          : `--${name} is not an option of ${label}: it takes ${contract.map((option) => `--${option}`).join(', ')}`,
+      );
+    }
+  }
+
+  for (const name of contract) require_(parsed, name);
+  return parsed;
+}
+
+/**
  * Parses the option vector.
  *
  * `strict` rejects an unknown option and `allowPositionals: false` rejects a
@@ -227,7 +301,7 @@ function parse(argv: readonly string[]): ParsedOptions {
 }
 
 /** One required option value, or a usage failure naming it. */
-function require_(options: ParsedOptions, name: keyof typeof OPTIONS): string {
+function require_(options: ParsedOptions, name: OptionName): string {
   const value = options[name];
   if (value === undefined || value.length === 0) {
     throw usageError('missing_option', name, `--${name} is required`);

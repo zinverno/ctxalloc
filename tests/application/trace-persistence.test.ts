@@ -309,3 +309,97 @@ describe('INV-BLOCK-005: a stored record is proven before it is published', () =
     );
   });
 });
+
+/**
+ * The failure-code inspection is passive and **total** (INV-ADAPTER-001).
+ *
+ * A rejected `TraceStore` may reject with any JavaScript value. If reading
+ * `code` from it could throw, or could run a getter, a store would be able to
+ * choose this service's verdict or escape it entirely.
+ */
+describe('INV-ADAPTER-001: a hostile rejection cannot escape or choose the verdict', () => {
+  const CANARY = 'ctxalloc-trace-store-canary';
+
+  function rejectingWith(value: unknown): TraceStore {
+    return {
+      id: 'hostile-trace-store',
+      version: '1',
+      putTrace: () => Promise.reject(value),
+      getTrace: () => Promise.reject(value),
+    };
+  }
+
+  async function storeAgainst(store: TraceStore): Promise<CompilationTracePersistenceError> {
+    return failure(() => new CompilationTracePersistenceService(store).store(settled()));
+  }
+
+  it('reports a rejection whose code descriptor throws as a dependency failure', async () => {
+    const hostile = new Proxy(
+      { code: 'TRACE_CONFLICT' },
+      {
+        getOwnPropertyDescriptor: (): never => {
+          throw new Error(CANARY);
+        },
+      },
+    );
+
+    const error = await storeAgainst(rejectingWith(hostile));
+
+    // Not `trace_conflict`: an unreadable code is the same as no code.
+    expect(error.issues[0]?.code).toBe('trace_store_unavailable');
+    expect(error.message).not.toContain(CANARY);
+    expect(JSON.stringify(error.issues)).not.toContain(CANARY);
+  });
+
+  it('reports a rejection that is a revoked proxy as a dependency failure', async () => {
+    const { proxy, revoke } = Proxy.revocable({ code: 'TRACE_CONFLICT' }, {});
+    revoke();
+
+    expect((await storeAgainst(rejectingWith(proxy))).issues[0]?.code).toBe(
+      'trace_store_unavailable',
+    );
+  });
+
+  it('never invokes an accessor named code', async () => {
+    let reads = 0;
+    const hostile = {};
+    Object.defineProperty(hostile, 'code', {
+      get: () => {
+        reads += 1;
+        return 'TRACE_CONFLICT';
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect((await storeAgainst(rejectingWith(hostile))).issues[0]?.code).toBe(
+      'trace_store_unavailable',
+    );
+    expect(reads).toBe(0);
+  });
+
+  it('never uses a get trap on the rejected value', async () => {
+    let gets = 0;
+    const hostile = new Proxy(
+      { code: 'TRACE_CONFLICT' },
+      {
+        get: (target, key) => {
+          // `then` is excluded: rejecting a promise with this value makes the
+          // runtime itself probe for a thenable.
+          if (key !== 'then') gets += 1;
+          return Reflect.get(target, key);
+        },
+      },
+    );
+
+    await storeAgainst(rejectingWith(hostile));
+    expect(gets).toBe(0);
+  });
+
+  it('still honours a genuine project-owned conflict code', async () => {
+    const conflict = new Error('a different trace is already stored');
+    Object.defineProperty(conflict, 'code', { value: 'TRACE_CONFLICT' });
+
+    expect((await storeAgainst(rejectingWith(conflict))).issues[0]?.code).toBe('trace_conflict');
+  });
+});

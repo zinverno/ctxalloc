@@ -562,13 +562,41 @@ describe('tryReadArrayItems', () => {
     expect(tryReadArrayItems([1, , 3])).toEqual([1, undefined, 3]);
   });
 
-  it('returns null when reading the spine throws', () => {
+  it('never consults a get trap, so a hostile one cannot be reached', () => {
+    let gets = 0;
     const host = new Proxy([1, 2], {
       get: (): never => {
+        gets += 1;
+        throw new Error('trap');
+      },
+    });
+
+    // The spine — `length` included — is read through own data descriptors, so
+    // the trap is not merely survived, it is never run. That is the stronger
+    // property: a `get` trap that does *not* throw could otherwise answer
+    // differently on each read or observe that it was consulted.
+    expect(() => tryReadArrayItems(host)).not.toThrow();
+    expect(tryReadArrayItems(host)).toEqual([1, 2]);
+    expect(gets).toBe(0);
+  });
+
+  it('returns null when the descriptor trap throws', () => {
+    const host = new Proxy([1, 2], {
+      getOwnPropertyDescriptor: (): never => {
         throw new Error('trap');
       },
     });
     expect(() => tryReadArrayItems(host)).not.toThrow();
+    expect(tryReadArrayItems(host)).toBeNull();
+  });
+
+  it('returns null when length is not readable as a non-negative integer', () => {
+    const host = new Proxy([1, 2], {
+      getOwnPropertyDescriptor: (target, key) =>
+        key === 'length'
+          ? { value: -1, writable: true, enumerable: false, configurable: false }
+          : Object.getOwnPropertyDescriptor(target, key),
+    });
     expect(tryReadArrayItems(host)).toBeNull();
   });
 });

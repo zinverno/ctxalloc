@@ -115,15 +115,92 @@ function issue(
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Guarded reflection.
+ *
+ * Every helper below reports a reflective failure as data instead of throwing.
+ * The value being inspected is a stored record from a database, a file, or a
+ * message, and in this process it is an arbitrary runtime value: it may be a
+ * `Proxy` whose `getPrototypeOf`, `ownKeys`, or `getOwnPropertyDescriptor` trap
+ * throws, or a **revoked** `Proxy`, which is `typeof "object"` and not `null` —
+ * so it reaches every structural check here — and refuses every reflective
+ * operation, `Array.isArray` included.
+ *
+ * `Object.getPrototypeOf`, `Array.isArray`, `Object.getOwnPropertyNames`,
+ * `Object.getOwnPropertySymbols`, and `Object.getOwnPropertyDescriptor` are all
+ * total on ordinary values and none of them is total on these, so an unguarded
+ * call would let a raw `TypeError` — with the engine's wording, or a message the
+ * inspected value chose — escape as this kernel's validation failure. A value
+ * that cannot be inspected is reported as `not_json_safe`, which is exactly what
+ * it is: a stored record must be passive JSON data, and one that refuses
+ * inspection is not (INV-ADAPTER-001, INV-SEC-001).
+ *
+ * No accessor is invoked and no `get` trap is used anywhere below.
+ */
+
+function tryIsArray(value: unknown): boolean | null {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return null;
+  }
+}
+
+function tryPrototypeOf(value: object): { readonly prototype: unknown } | null {
+  try {
+    return { prototype: Object.getPrototypeOf(value) };
+  } catch {
+    return null;
+  }
+}
+
+function tryOwnNames(value: object): readonly string[] | null {
+  try {
+    return Object.getOwnPropertyNames(value);
+  } catch {
+    return null;
+  }
+}
+
+function tryHasOwnSymbols(value: object): boolean | null {
+  try {
+    return Object.getOwnPropertySymbols(value).length > 0;
+  } catch {
+    return null;
+  }
+}
+
+/** A descriptor, its deliberate absence, or a failure to read it. */
+type DescriptorRead =
+  | { readonly kind: 'descriptor'; readonly descriptor: PropertyDescriptor }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'failed' };
+
+function tryOwnDescriptor(value: object, key: string): DescriptorRead {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(value, key);
+  } catch {
+    return { kind: 'failed' };
+  }
+  return descriptor === undefined ? { kind: 'absent' } : { kind: 'descriptor', descriptor };
+}
+
+/** Whether `key` is the canonical spelling of an index below `length`. */
+function isIndexKey(key: string, length: number): boolean {
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key;
+}
+
+/**
  * The exact JSON-safe structure a persisted trace must already be.
  *
- * Every read below goes through `Object.getOwnPropertyDescriptor`, so an
- * accessor is detected rather than invoked: a getter on an untrusted record can
- * throw, or can return one value to the validator and a different one to the
- * consumer afterwards. A `Proxy`, a class instance, a `Date`, a `Map`, a
- * function, a `symbol`, a `bigint`, a non-finite number, a cycle, and an
- * `undefined`-valued own property are all rejected here rather than at a later
- * stage that would have less to say about them.
+ * Every read goes through a guarded descriptor lookup, so an accessor is
+ * detected rather than invoked: a getter on an untrusted record can throw, or
+ * can return one value to the validator and a different one to the consumer
+ * afterwards. A `Proxy`, a class instance, a `Date`, a `Map`, a function, a
+ * `symbol`, a `bigint`, a non-finite number, a cycle, and an `undefined`-valued
+ * own property are all rejected here rather than at a later stage that would
+ * have less to say about them.
  *
  * Rejecting an `undefined`-valued property matters on its own: an optional trace
  * field is either absent or present with a value, and `{ priority: undefined }`
@@ -135,67 +212,204 @@ function issue(
  * rebuilt copy. Returning the supplied value is the stronger guarantee for a
  * persisted record: what a consumer reads is byte-for-byte what was stored,
  * including property order, and no rebuild step can quietly alter it.
+ *
+ * Because the value is published rather than rebuilt, "is JSON data" has to be
+ * exact rather than approximate. Three rules therefore go beyond what a
+ * serializer would notice:
+ *
+ * - A **non-enumerable** own property of a plain object is rejected.
+ *   `JSON.stringify` ignores it, so a rebuilt copy would not have it — but the
+ *   returned value does, and a consumer reading that field would see data no
+ *   serialization of this record contains.
+ * - An array's **own string properties other than its elements and `length`**
+ *   are rejected, for the same reason: JSON drops them and the returned array
+ *   keeps them.
+ * - A **sparse** array is rejected. `JSON.stringify` writes a hole as `null`, so
+ *   the returned array would not equal the data any serialization of it
+ *   describes, and a consumer iterating it would see `undefined` where the
+ *   stored document says `null`.
+ *
+ * The walk also **builds a plain snapshot** of everything it reads, and that
+ * snapshot — never the caller's value — is what the schema is run against. Zod
+ * reads properties the ordinary way, so validating the original directly would
+ * run a `Proxy` `get` trap after the passive pass had carefully avoided one. The
+ * snapshot is assembled from own data descriptors in their own order, so it
+ * serializes identically to the value it was taken from.
+ *
+ * One residue is worth naming rather than glossing: a `Proxy` can report one
+ * value through `getOwnPropertyDescriptor` and a different one through `get`,
+ * and no platform-neutral check can detect that. This validator proves what the
+ * descriptors say and publishes the caller's value, so what it proved is *the
+ * record's own data properties* — which is exactly what a serializer would have
+ * written, and exactly what a stored record is.
  */
 function collectNonJsonSafe(
   value: unknown,
   path: readonly (string | number)[],
   seen: Set<object>,
   issues: ValidationIssue[],
-): void {
-  if (issues.length > 0) return;
+): unknown {
+  if (issues.length > 0) return undefined;
 
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
       issues.push(issue(path, 'must be a finite number', 'not_json_safe'));
     }
-    return;
+    return value;
   }
   if (typeof value !== 'object') {
     issues.push(issue(path, `must be JSON data, not ${typeof value}`, 'not_json_safe'));
-    return;
+    return undefined;
   }
 
   const record = value as object;
   if (seen.has(record)) {
     issues.push(issue(path, 'must not contain a reference cycle', 'not_json_safe'));
-    return;
+    return undefined;
   }
 
-  const prototype = Object.getPrototypeOf(record);
-  if (Array.isArray(record)) {
-    if (prototype !== Array.prototype) {
+  const isArray = tryIsArray(record);
+  const prototype = isArray === null ? null : tryPrototypeOf(record);
+  const hasSymbols = prototype === null ? null : tryHasOwnSymbols(record);
+  const names = hasSymbols === null ? null : tryOwnNames(record);
+  if (isArray === null || prototype === null || hasSymbols === null || names === null) {
+    // The value refused to be inspected. Nothing it said is repeated: a hostile
+    // value chooses its own error message, and this one is the kernel's.
+    issues.push(issue(path, 'must be a value that can be inspected as JSON', 'not_json_safe'));
+    return undefined;
+  }
+
+  if (isArray) {
+    if (prototype.prototype !== Array.prototype) {
       issues.push(issue(path, 'must be a plain array', 'not_json_safe'));
-      return;
+      return undefined;
     }
-  } else if (prototype !== Object.prototype && prototype !== null) {
+  } else if (prototype.prototype !== Object.prototype && prototype.prototype !== null) {
     issues.push(issue(path, 'must be a plain object', 'not_json_safe'));
-    return;
+    return undefined;
   }
 
-  if (Object.getOwnPropertySymbols(record).length > 0) {
+  if (hasSymbols) {
     issues.push(issue(path, 'must not carry symbol-keyed properties', 'not_json_safe'));
-    return;
+    return undefined;
   }
 
   seen.add(record);
-  for (const key of Object.getOwnPropertyNames(record)) {
-    if (Array.isArray(record) && key === 'length') continue;
-    const descriptor = Object.getOwnPropertyDescriptor(record, key);
-    if (descriptor === undefined) continue;
-    const childPath = [...path, Array.isArray(record) ? Number(key) : key];
+  const snapshot = isArray
+    ? collectNonJsonSafeArray(record, names, path, seen, issues)
+    : collectNonJsonSafeObject(record, names, prototype.prototype, path, seen, issues);
+  seen.delete(record);
+  return snapshot;
+}
+
+/** The own-property rules for a plain object, and the walk into its values. */
+function collectNonJsonSafeObject(
+  record: object,
+  names: readonly string[],
+  prototype: unknown,
+  path: readonly (string | number)[],
+  seen: Set<object>,
+  issues: ValidationIssue[],
+): unknown {
+  // A `null`-prototype source must not become an `Object.prototype` snapshot:
+  // the two behave differently on exactly the key a stored record can carry.
+  const snapshot: Record<string, unknown> =
+    prototype === null ? (Object.create(null) as Record<string, unknown>) : {};
+
+  for (const key of names) {
+    const read = tryOwnDescriptor(record, key);
+    if (read.kind === 'failed') {
+      issues.push(
+        issue([...path, key], 'must be a value that can be inspected as JSON', 'not_json_safe'),
+      );
+      return undefined;
+    }
+    if (read.kind === 'absent') continue;
+
+    const childPath = [...path, key];
+    const descriptor = read.descriptor;
     if (!('value' in descriptor)) {
       issues.push(issue(childPath, 'must be a data property, not an accessor', 'not_json_safe'));
-      break;
+      return undefined;
+    }
+    if (!descriptor.enumerable) {
+      issues.push(
+        issue(childPath, 'must be an enumerable property to be JSON data', 'not_json_safe'),
+      );
+      return undefined;
     }
     if (descriptor.value === undefined) {
       issues.push(issue(childPath, 'must be absent rather than undefined', 'not_json_safe'));
-      break;
+      return undefined;
     }
-    collectNonJsonSafe(descriptor.value, childPath, seen, issues);
-    if (issues.length > 0) break;
+    const child = collectNonJsonSafe(descriptor.value, childPath, seen, issues);
+    if (issues.length > 0) return undefined;
+    snapshot[key] = child;
   }
-  seen.delete(record);
+  return snapshot;
+}
+
+/** The own-property rules for an array, and the walk into its elements. */
+function collectNonJsonSafeArray(
+  record: object,
+  names: readonly string[],
+  path: readonly (string | number)[],
+  seen: Set<object>,
+  issues: ValidationIssue[],
+): unknown {
+  const lengthRead = tryOwnDescriptor(record, 'length');
+  if (lengthRead.kind === 'failed') {
+    issues.push(issue(path, 'must be a value that can be inspected as JSON', 'not_json_safe'));
+    return undefined;
+  }
+  if (lengthRead.kind === 'absent' || !('value' in lengthRead.descriptor)) {
+    issues.push(issue(path, 'must carry length as a data property', 'not_json_safe'));
+    return undefined;
+  }
+  const length: unknown = lengthRead.descriptor.value;
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) {
+    issues.push(issue(path, 'must carry a non-negative integer length', 'not_json_safe'));
+    return undefined;
+  }
+
+  for (const key of names) {
+    if (key === 'length' || isIndexKey(key, length)) continue;
+    issues.push(
+      issue(path, 'must not carry own properties other than its elements', 'not_json_safe'),
+    );
+    return undefined;
+  }
+
+  const snapshot: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const read = tryOwnDescriptor(record, String(index));
+    if (read.kind === 'failed') {
+      issues.push(
+        issue([...path, index], 'must be a value that can be inspected as JSON', 'not_json_safe'),
+      );
+      return undefined;
+    }
+    if (read.kind === 'absent') {
+      issues.push(issue([...path, index], 'must not be a hole in a sparse array', 'not_json_safe'));
+      return undefined;
+    }
+
+    const childPath = [...path, index];
+    const descriptor = read.descriptor;
+    if (!('value' in descriptor)) {
+      issues.push(issue(childPath, 'must be a data property, not an accessor', 'not_json_safe'));
+      return undefined;
+    }
+    if (descriptor.value === undefined) {
+      issues.push(issue(childPath, 'must be absent rather than undefined', 'not_json_safe'));
+      return undefined;
+    }
+    const child = collectNonJsonSafe(descriptor.value, childPath, seen, issues);
+    if (issues.length > 0) return undefined;
+    snapshot.push(child);
+  }
+  return snapshot;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -539,11 +753,21 @@ const SettledTraceSchema = z.strictObject({
 /* Validator                                                                   */
 /* -------------------------------------------------------------------------- */
 
-/** Reads one own data property without invoking an accessor or a prototype. */
+/**
+ * Reads one own data property without invoking an accessor or a prototype.
+ *
+ * The descriptor read is guarded even though the passive-JSON check has already
+ * run: a helper whose safety depends on being called in one particular order is
+ * a helper that will eventually be called in another (INV-ADAPTER-001).
+ */
 function ownValue(value: unknown, key: string): unknown {
   if (typeof value !== 'object' || value === null) return undefined;
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -562,10 +786,12 @@ export class SettledCompilationTraceValidator {
    *
    * The **same** value is returned, not a copy: for a persisted record, what a
    * consumer reads must be exactly what was stored, and a rebuild step is an
-   * opportunity to differ from it. That is sound only because the record is
-   * first proven to be passive JSON data — no accessor, no `Proxy`, no cycle,
-   * no class instance, no `undefined`-valued property — so reading it twice
-   * cannot yield two answers.
+   * opportunity to differ from it. That is sound because the record's own data
+   * properties are first proven to be passive JSON — no accessor, no cycle, no
+   * class instance, no symbol key, no non-enumerable property, no hole, no
+   * `undefined`-valued property — and the schema is then run against a plain
+   * snapshot of exactly those properties, so nothing in validation reads through
+   * the value itself.
    *
    * @throws {PersistedCompilationTraceError} when the value is not one.
    */
@@ -595,12 +821,15 @@ export class SettledCompilationTraceValidator {
  */
 function assertSettledCompilationTrace(input: unknown): asserts input is SettledCompilationTrace {
   const jsonIssues: ValidationIssue[] = [];
-  collectNonJsonSafe(input, [], new Set<object>(), jsonIssues);
+  // The snapshot is a plain rebuild of everything the passive walk read. Every
+  // check below runs against it, so no property read after this line can reach a
+  // `Proxy` `get` trap or an installed getter — including the ones zod performs.
+  const snapshot = collectNonJsonSafe(input, [], new Set<object>(), jsonIssues);
   if (jsonIssues.length > 0) {
     throw new PersistedCompilationTraceError(jsonIssues);
   }
 
-  const version = ownValue(input, 'schemaVersion');
+  const version = ownValue(snapshot, 'schemaVersion');
   if (typeof version === 'number' && version !== COMPILATION_TRACE_SCHEMA_VERSION) {
     throw new PersistedCompilationTraceError([
       issue(
@@ -611,7 +840,7 @@ function assertSettledCompilationTrace(input: unknown): asserts input is Settled
     ]);
   }
 
-  if (ownValue(input, 'settled') === false) {
+  if (ownValue(snapshot, 'settled') === false) {
     throw new PersistedCompilationTraceError([
       issue(
         ['settled'],
@@ -621,7 +850,7 @@ function assertSettledCompilationTrace(input: unknown): asserts input is Settled
     ]);
   }
 
-  const parsed = safeParse(SettledTraceSchema, input);
+  const parsed = safeParse(SettledTraceSchema, snapshot);
   if (!parsed.ok) {
     throw new PersistedCompilationTraceError(
       parsed.issues.map((detail) => ({

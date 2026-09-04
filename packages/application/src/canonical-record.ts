@@ -110,12 +110,24 @@ function ownDataEntries(object: object): readonly OwnEntry[] | null {
  * A hole reads as `undefined`, which is what iteration produces for it, so the
  * callers keep deciding what absence means. Own string keys that are not
  * indices are ignored, exactly as `JSON.stringify` ignores them.
+ *
+ * `length` is read through its own descriptor rather than as `array.length`.
+ * `Array.isArray` is true of a `Proxy` around an array, so the plain read is a
+ * property *get* that runs the proxy's `get` trap — and a trap that does not
+ * throw is worse than one that does, because it can answer differently on each
+ * read or merely observe that it was consulted. A real array always carries
+ * `length` as an own data property, so nothing is lost.
  */
 function ownArrayItems(array: readonly unknown[]): readonly unknown[] | null {
   if (Object.getOwnPropertySymbols(array).length > 0) return null;
 
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(array, 'length');
+  if (lengthDescriptor === undefined || !('value' in lengthDescriptor)) return null;
+  const length: unknown = lengthDescriptor.value;
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return null;
+
   const items: unknown[] = [];
-  for (let index = 0; index < array.length; index += 1) {
+  for (let index = 0; index < length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(array, String(index));
     if (descriptor === undefined) {
       items.push(undefined);
@@ -414,4 +426,39 @@ export function tryReadArrayItems(value: readonly unknown[]): readonly unknown[]
   } catch {
     return null;
   }
+}
+
+/**
+ * The elements of an untrusted value that claims to be an array, or `null`.
+ *
+ * This is {@link tryReadArrayItems} with the array test itself guarded, and it
+ * is what a boundary holding a bare `unknown` needs. `Array.isArray` looks
+ * passive, but the specification's `IsArray` unwraps a `Proxy` to reach its
+ * target, and on a **revoked** proxy it throws:
+ *
+ * ```text
+ * const { proxy, revoke } = Proxy.revocable([], {});
+ * revoke();
+ * Array.isArray(proxy);
+ * // TypeError: Cannot perform 'IsArray' on a proxy that has been revoked
+ * ```
+ *
+ * A revoked proxy is an ordinary value for a dependency to resolve with — it is
+ * `typeof "object"` and not `null` — so an unguarded test there would let a raw
+ * `TypeError`, with the engine's own wording, escape as this layer's failure
+ * (INV-ADAPTER-001, INV-SEC-001).
+ *
+ * *Not an array* and *unreadable as one* both answer `null`, because a caller
+ * that cannot iterate the result has the same problem either way, and telling
+ * the two apart would mean describing a value that has refused to be inspected.
+ */
+export function tryReadArray(value: unknown): readonly unknown[] | null {
+  let isArray: boolean;
+  try {
+    isArray = Array.isArray(value);
+  } catch {
+    return null;
+  }
+  if (!isArray) return null;
+  return tryReadArrayItems(value as readonly unknown[]);
 }

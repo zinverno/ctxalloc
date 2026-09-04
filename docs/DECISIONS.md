@@ -4923,7 +4923,11 @@ The validator:
 * validates the trace schema version **exactly**, and reports an unsupported one under its own issue code rather than as one literal mismatch among many;
 * distinguishes settled from unsettled, and requires the settled variant with its own code — *this is a trace, but not one that may stand as the record of a completed compilation* is a different finding from *this is not a trace* (INV-TRACE-006);
 * validates the complete persistence shape, rejecting an unknown field rather than stripping it: a surplus field is evidence the record came from a different producer;
-* first proves the value is **passive JSON** — no accessor, no `Proxy`, no cycle, no class instance, no `undefined`-valued property — which is what makes it safe to publish the caller's own value rather than a rebuilt copy. For a persisted record, what a consumer reads is then byte-for-byte what was stored.
+* first proves the value is **passive JSON** — no accessor, no cycle, no class instance, no symbol key, no non-enumerable property, no array hole, no `undefined`-valued property — which is what makes it safe to publish the caller's own value rather than a rebuilt copy. For a persisted record, what a consumer reads is then byte-for-byte what was stored.
+
+That proof has to be **total** over arbitrary runtime values, because a stored record is one. `Array.isArray`, `getPrototypeOf`, `getOwnPropertyNames`, `getOwnPropertySymbols`, and `getOwnPropertyDescriptor` are all total on ordinary values and none of them is total on a `Proxy` whose traps throw, or on a revoked one — which is `typeof "object"` and not `null`, so it reaches every structural check and refuses all five. Each is therefore guarded, and a value that refuses inspection is reported as `not_json_safe` with the kernel's own wording; nothing the value said is repeated (INV-ADAPTER-001, INV-SEC-001).
+
+The passive walk also builds a **plain snapshot** of exactly the own data properties it read, and the schema runs against the snapshot rather than the caller's value. Zod reads properties the ordinary way, so validating the original directly would run a `Proxy` `get` trap after the passive pass had carefully avoided one. Three rules go beyond what a serializer would notice, and they exist because the validated value is *published* rather than rebuilt: a non-enumerable own property, an array's own properties other than its elements, and a sparse array are each rejected — `JSON.stringify` ignores or rewrites all three, so a record carrying one is not the record any serialization of it describes.
 
 It is **not reconstruction**. It re-scores nothing, re-renders nothing, recomputes no digest, and calls no tokenizer, retrieval provider, model, or clock (INV-DEP-002, INV-DET-003, INV-DET-004). A trace whose stored totals contradict each other is accepted and reads as contradictory, which is the honest answer: *the stored record says this* is the question a persisted audit record answers.
 
@@ -4939,6 +4943,8 @@ It is **not reconstruction**. It re-scores nothing, re-renders nothing, recomput
 * A failed migration rolls back completely. The data tables are created **without** `IF NOT EXISTS`, deliberately: a file that already holds a `ctxalloc_source_registration` this build did not create is not an empty database with a coincidence in it, and continuing would write project rows into a table of unknown shape.
 
 Only the mechanism plus migration `0 -> 1` exists. Inventing steps for versions that were never released would be migration code no database can have needed.
+
+**The optional title is stored as a JSON string, in a `title_json` column.** The existing `SourceRegistration` contract is `title: z.string().optional()`: it does not require non-blank, it does not require non-whitespace, and it does not require well-formed UTF-16. Persistence must preserve the contract it was given rather than narrow it, and raw `TEXT` binding cannot: Node's SQLite `TEXT` boundary round-trips a lone surrogate as `U+FFFD`, so a store that bound the title directly would silently rewrite a registration the application considers valid, and a "must not be blank" guard would reject `""` outright — both making the shared `ControlStore` contract false against the in-memory implementation (INV-ADAPTER-005, INV-STORE-002). A JSON string escapes a lone surrogate as ASCII, so the column only ever carries well-formed text and the exact original code units come back. `NULL` means the title is absent, which is a different record from a title that is the empty string. This is written into schema version **1** rather than added as a `1 -> 2` migration: version 1 has never shipped, and a migration for a schema no database was ever written at would be fiction.
 
 ### The Scope Key Is Canonical JSON, Because SQLite NULLs Do Not Compare
 
@@ -4975,7 +4981,9 @@ A `CompilationId` is deterministic, so writing one trace twice is the ordinary c
 
 A **different** record under one identifier is a contradiction in the audit log. It is rejected with `TRACE_CONFLICT` and the original is left exactly as it was; overwriting would destroy the evidence the store exists to keep (INV-ADAPTER-004). The check and the insert run in one immediate transaction.
 
-Equality is **canonical**: a record rebuilt field by field, or round-tripped through a parser that ordered keys differently, is the same record (INV-DET-002).
+Equality is **canonical**, and canonical on **both** sides: the existing row is parsed and canonicalized before it is compared, rather than trusted to be canonical because some build once wrote it. A row an operator edited into semantically identical but differently ordered JSON is the same audit record, and comparing raw column text would call it a conflict (INV-DET-002).
+
+The existing row is also **completely validated** before either verdict is reached — envelope version, scope, identifier, trace version, and payload — through the same reader `getTrace` uses. One reader is what makes the two agree: a row `getTrace` would refuse must not be a row `putTrace` silently accepts as already stored. An unreadable row is `INVALID_STORED_DATA`, never idempotent success, so `ctxalloc compile` cannot report `traceStored` for an identifier whose audit row cannot be read back (INV-STORE-002). A corrupted row is never repaired and never overwritten: rewriting it would destroy the only evidence that something else wrote it. The **whole** envelope participates in equality, the scope included, so a different scope under one deterministic identifier is a conflict rather than a repeat write (INV-SEC-004).
 
 A read requires the **exact** scope. A record stored under a different scope reads as `null`, indistinguishably from one that does not exist, because distinguishing them would disclose that another scope holds that identifier (INV-SEC-004).
 
@@ -4986,6 +4994,10 @@ A read requires the **exact** scope. A record stored under a different scope rea
 ```
 
 Exact keys, no coercion, no defaults. No environment variable, no `process.cwd()` fallback, **no `~/.ctxalloc`**, and no search up the directory tree. A store that found its own database would make *which data am I looking at?* depend on where a command happened to be run (INV-DET-003).
+
+The path must be non-blank, well-formed UTF-16, absolute, and free of an actual `NUL` — the character, built from its code point, not the six-character text that spells its escape sequence. A backslash that loses its escaping turns that check into a comparison against ordinary text no path contains, which passes on every input including one carrying a real `NUL`; the value then reaches the driver and Node's own `TypeError` decides the outcome, so the validator does not enforce the contract it documents. The literal text `\u0000` is a legal filename component where backslashes are legal, and it is accepted.
+
+Reading the configuration is itself **passive and total**: it is an `unknown` a caller supplied, so `Object.keys`, a plain `config.databasePath`, and an `Array.isArray` are each guarded, an accessor is reported rather than invoked, and an uninspectable value is `INVALID_CONFIG` — the same public code a malformed one gets. The same passive reads are used wherever either store reads an unknown object before binding it (INV-ADAPTER-001).
 
 The adapter requires an **absolute** path. A relative path is meaningful only against some directory, and the adapter is the wrong layer to choose one — the CLI resolves relative paths against its config file and hands an absolute path down.
 
@@ -5033,7 +5045,27 @@ Arguments are parsed with `node:util.parseArgs`. Commander and Yargs were not ad
 
 **Configuration is explicit, and relative paths resolve against the config file.** Every command that needs one takes `--config <path>`. There is no discovery of any kind and no `~/.ctxalloc`. `databasePath` and `sourceRoot` may be written relative, and they resolve against the **directory holding the config file**, never `process.cwd()`: a config describes one project's layout, and a path that meant something different depending on where a command was typed would make the config a half-answer. Adapters receive absolute paths only. The outer composition is validated here; `maxCandidates`, the compiler policy, and the chunking policies are validated by the components that own them.
 
-**Structured inputs are explicit JSON files** — `--request`, `--registration`, `--key`, `--scope`, `--case`, `--run-config` — read as strict UTF-8 and strict JSON. No stdin auto-detection, no comment or trailing-comma extension, no format guessing.
+**Structured inputs are explicit JSON files** — `--request`, `--registration`, `--key`, `--scope`, `--case`, `--run-config` — decoded as **fatal UTF-8** and parsed as strict JSON. No stdin auto-detection, no comment or trailing-comma extension, no format guessing.
+
+Fatal, not replacement. `readFileSync(path, 'utf8')` decodes with replacement: the bytes `7b 22 78 22 3a 22 80 22 7d` are `{"x":"<0x80>"}`, and that path turns them into the perfectly valid document `{"x":"\uFFFD"}` — so the CLI would hand a component a string the operator never wrote and report success while doing it. Files are read as bytes and decoded through `TextDecoder` with `fatal: true`, and an ill-formed sequence is `input_not_utf8`, a code of its own rather than a mislabelled `input_not_json`. Neither the offending bytes, the decoder's message, nor the path is copied into the envelope.
+
+A leading byte-order mark is **retained**, not stripped. `TextDecoder`'s default strips it, which is one more silent edit to the caller's file; `ignoreBOM: true` keeps it, so `U+FEFF` reaches `JSON.parse`, which has no production for it, and a BOM-prefixed file is a reported `input_not_json`. Stripping it would be a quiet extension to the JSON grammar this CLI does not implement.
+
+**Each command has an exact option contract**, and it is both the allowed set and the required set:
+
+```text id="pe19h"
+version         (none)
+compile         --config --request
+trace           --config --scope --id
+inspect-blocks  --config --scope
+eval            --config --case --run-config
+source add      --config --registration
+source update   --config --registration
+source remove   --config --key
+source list     --config --scope
+```
+
+`parseArgs` in strict mode rejects an option **no command** knows. It cannot reject one that *some other* command knows: `--scope` is real for `trace`, `inspect-blocks`, and `source list`, so `ctxalloc compile --config c --request r --scope s` parses and the scope is silently discarded, and `ctxalloc version --config x` does the same while needing no file at all. A caller who mistyped one real option as another would then believe a scope or an input participated in a command that never read it, and nothing in the output would say otherwise (INV-DET-001). Every option present but not in the command's list is therefore a usage failure, reported as `unexpected_option` in the program's own option order so two spellings of one mistake produce one answer. One list rather than two is deliberate: two would permit a third state — accepted but unused — which is exactly what the table exists to forbid. An option a future command needs is added together with the code that reads it.
 
 **One error envelope, and nothing else on stderr:**
 
@@ -5072,6 +5104,19 @@ Exit `0` for success, `2` for a usage failure, `1` for a validated operational f
 `@ctxalloc/testing`: `InMemoryControlStore` now implements `ControlStoreWriter` with exactly `SQLiteControlStore`'s semantics and the exact same machine codes. Its constructor stays **permissive** — it stores the initial registrations as configured, duplicates included — because a real store cannot hold two records of one logical source, but a *consumer* must still reject a control plane that contradicts itself, and the only way to test that branch is with a store that can produce the contradiction. `InMemoryTraceStore` is new. One shared contract suite runs against both doubles and both SQLite adapters (INV-ADAPTER-005).
 
 **Previous adapter boundary debt was inspected and deliberately not touched.** `NodeFileSourceReader` already publishes project-owned errors with stable codes and discloses no path; `AnthropicModelProvider` is not reachable from any Phase 19 code path, because `ctxalloc eval` constructs no model provider. No Phase 19 acceptance test reached a raw exception through either, and no new code relies on unsafe behavior in either, so neither was hardened in this phase.
+
+### What Review Corrected Before This Phase Merged
+
+Six findings were raised against the first implementation of this phase and fixed in place. None changed a decision above; each made a stated contract true.
+
+1. **The CLI claimed strict UTF-8 and used replacement decoding.** `readFileSync(path, 'utf8')` silently rewrites an ill-formed byte as `U+FFFD`, so `{"x":"<0x80>"}` parsed as a valid document. Files are now read as bytes and decoded with `fatal: true`, under a new `input_not_utf8` code, with the BOM decision made explicitly rather than inherited.
+2. **Known-but-unused options were silently ignored.** The dispatch checked only that required options were *present*; `ctxalloc version --config x` and `ctxalloc compile --request r --scope s` both ran with the extra option discarded. Every command now has an exact option contract, and a present-but-disallowed option is `unexpected_option`.
+3. **The database-path guard compared against the six-character text `\u0000`, not a `NUL`.** An actual `NUL` therefore passed the explicit check and was decided by the driver, so the validator did not enforce the contract it documented. It now compares against `String.fromCharCode(0)`.
+4. **SQLite did not preserve the existing `SourceRegistration.title` contract.** The column bound the title as raw `TEXT` through a non-blank guard, so `""` and `"   "` were rejected outright and a lone surrogate came back as `U+FFFD` — a store rejecting and silently rewriting registrations the in-memory implementation preserves. The column is now `title_json`, and the shared contract suite proves both implementations round-trip every string the schema accepts.
+5. **Trace idempotence compared raw column text and ignored `scope_json`.** A row whose scope was corrupted could be reported as already stored — for a row the very next read refuses — and a semantically identical row with reordered keys could be reported as a conflict. Both verdicts now come from one validated, canonicalized reading of the complete stored envelope.
+6. **The persisted-trace validator's own inspection was not total.** It claimed to reject `Proxy` and accessor values while calling `Array.isArray`, `getPrototypeOf`, `getOwnPropertyNames`, `getOwnPropertySymbols`, and `getOwnPropertyDescriptor` unguarded, each of which a hostile or revoked proxy can make throw. All are guarded now, the schema runs against a plain snapshot so no `get` trap is reached, and the "is JSON data" claim was made exact.
+
+The same total-inspection rule was applied to the other new Phase 19 boundaries: the failure-code reads in `LocalSourceRegistryService` and `CompilationTracePersistenceService`, that service's array-kind check on a listing, and the SQLite configuration and method-argument reads. External error codes are unchanged.
 
 ARCHITECTURE changes: `TraceStore` and `ControlStoreWriter` marked implemented; `SQLiteControlStore` and `SQLiteTraceStore` marked implemented; `apps/cli` marked implemented as the outermost composition root; the dependency direction records that no package may import the CLI.
 

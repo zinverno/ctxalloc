@@ -1,4 +1,10 @@
-import { JsonObjectSchema, ScopeSchema, scopesEqual, type Scope } from '@ctxalloc/domain';
+import {
+  JsonObjectSchema,
+  ScopeSchema,
+  scopesEqual,
+  type JsonObject,
+  type Scope,
+} from '@ctxalloc/domain';
 import type { StoredCompilationTraceRecord, TraceStore } from '@ctxalloc/ports';
 import type { DatabaseSync } from 'node:sqlite';
 import { canonicalJson, parseStoredJsonObject } from './sqlite-json.js';
@@ -9,6 +15,7 @@ import {
   type SQLiteLocalStoreConfig,
 } from './sqlite-store-config.js';
 import { COMPILATION_TRACE_TABLE, migrateToCurrentSchema } from './sqlite-migrations.js';
+import { ownDataValue } from './passive-inspection.js';
 
 /**
  * The local SQLite audit store for settled compilation traces (DEC-042).
@@ -40,7 +47,18 @@ import { COMPILATION_TRACE_TABLE, migrateToCurrentSchema } from './sqlite-migrat
  *
  * Equality is canonical, so a record rebuilt field by field or round-tripped
  * through a parser that ordered keys differently is the same record
- * (INV-DET-002).
+ * (INV-DET-002). That holds for the **stored** side too: an existing row is
+ * parsed and canonicalized before it is compared, rather than being trusted to
+ * be canonical because some build once wrote it. A row an operator edited by
+ * hand into semantically identical but differently ordered JSON is the same
+ * audit record, and comparing raw column text would call it a conflict.
+ *
+ * The existing row is also **completely validated** before either verdict is
+ * reached — envelope version, scope, identifier, trace version, and payload —
+ * so a corrupted row is `INVALID_STORED_DATA` rather than a silent idempotent
+ * success. Reporting *stored* for an identifier whose audit row cannot be read
+ * back would be the one outcome this store must never produce (INV-STORE-002,
+ * INV-TRACE-005).
  *
  * ## Scope
  *
@@ -115,7 +133,7 @@ function scopeJson(scope: Scope): string {
   });
 }
 
-/** The values one trace row binds. */
+/** The values one trace row binds, together with the payload they were built from. */
 interface TraceRow {
   readonly compilationId: string;
   readonly scope: Scope;
@@ -124,6 +142,7 @@ interface TraceRow {
   readonly traceSchemaVersion: number;
   readonly envelopeSchemaVersion: number;
   readonly traceJson: string;
+  readonly payload: JsonObject;
 }
 
 /**
@@ -137,73 +156,145 @@ function toRow(record: unknown): TraceRow {
   if (typeof record !== 'object' || record === null) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a trace record must be an object');
   }
-  const envelope = record as {
-    schemaVersion?: unknown;
-    scope?: unknown;
-    compilationId?: unknown;
-    traceSchemaVersion?: unknown;
-    payload?: unknown;
-  };
-
-  if (envelope.schemaVersion !== 1) {
+  // Every field is read through `ownDataValue`, never as `record.payload`: a
+  // plain property read on an `unknown` runs a `Proxy` `get` trap or an
+  // installed getter before anything has decided to trust the value
+  // (INV-ADAPTER-001).
+  if (ownDataValue(record, 'schemaVersion') !== 1) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a trace record must declare schemaVersion 1');
   }
-  const scope = ScopeSchema.safeParse(envelope.scope);
+  const scope = ScopeSchema.safeParse(ownDataValue(record, 'scope'));
   if (!scope.success) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a trace record must carry a valid scope');
   }
-  if (typeof envelope.compilationId !== 'string' || envelope.compilationId.trim().length === 0) {
+  const compilationId = ownDataValue(record, 'compilationId');
+  if (typeof compilationId !== 'string' || compilationId.trim().length === 0) {
     throw new SQLiteStoreFailure(
       'INVALID_INPUT',
       'a trace record must carry a non-empty compilation identifier',
     );
   }
-  if (
-    typeof envelope.traceSchemaVersion !== 'number' ||
-    !Number.isSafeInteger(envelope.traceSchemaVersion)
-  ) {
+  const traceSchemaVersion = ownDataValue(record, 'traceSchemaVersion');
+  if (typeof traceSchemaVersion !== 'number' || !Number.isSafeInteger(traceSchemaVersion)) {
     throw new SQLiteStoreFailure(
       'INVALID_INPUT',
       'a trace record must carry an integer trace schema version',
     );
   }
-  const payload = JsonObjectSchema.safeParse(envelope.payload);
+  const payload = JsonObjectSchema.safeParse(ownDataValue(record, 'payload'));
   if (!payload.success) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a trace record must carry a JSON-safe payload');
   }
 
   return {
-    compilationId: envelope.compilationId,
+    compilationId,
     scope: scope.data,
     scopeKey: scopeKey(scope.data),
     scopeJson: scopeJson(scope.data),
-    traceSchemaVersion: envelope.traceSchemaVersion,
+    traceSchemaVersion,
     envelopeSchemaVersion: 1,
     traceJson: canonicalJson(payload.data),
+    payload: payload.data,
   };
 }
 
 /**
- * The canonical form of one row, for the structural equality `putTrace` needs.
+ * The canonical form of one **complete** envelope, for the equality `putTrace`
+ * needs.
  *
- * `traceJson` is already canonical on both sides — the stored column was written
- * canonically and the incoming payload is canonicalized above — so the two are
- * comparable as text.
+ * Every field of the record participates, the scope included. Comparing without
+ * it would let a row whose stored scope was corrupted — or whose scope differs
+ * from the incoming one under the same deterministic identifier — pass as the
+ * same record (INV-SEC-004).
+ *
+ * The payload is the **parsed** value on both sides, canonicalized here, so
+ * equality is semantic rather than textual: two spellings of the same JSON
+ * object are one audit record (INV-DET-002).
  */
-function canonicalRow(row: {
+function semanticEnvelope(record: {
   readonly compilationId: string;
-  readonly scopeKey: string;
+  readonly scope: Scope;
   readonly traceSchemaVersion: number;
-  readonly envelopeSchemaVersion: number;
-  readonly traceJson: string;
+  readonly payload: JsonObject;
 }): string {
   return canonicalJson({
-    compilationId: row.compilationId,
-    scopeKey: row.scopeKey,
-    traceSchemaVersion: row.traceSchemaVersion,
-    envelopeSchemaVersion: row.envelopeSchemaVersion,
-    traceJson: row.traceJson,
+    envelopeSchemaVersion: 1,
+    compilationId: record.compilationId,
+    scope: {
+      tenantId: record.scope.tenantId,
+      workspaceId: record.scope.workspaceId,
+      ...(record.scope.projectId !== undefined ? { projectId: record.scope.projectId } : {}),
+    },
+    traceSchemaVersion: record.traceSchemaVersion,
+    payload: record.payload,
   });
+}
+
+/**
+ * Rebuilds one stored row into a complete record, or fails with a stable code.
+ *
+ * This is the **only** path from a row to a record, used by `getTrace` and by
+ * the existing-row branch of `putTrace` alike. One reader is what makes the two
+ * agree: a row `getTrace` would reject as corrupted must not be a row `putTrace`
+ * silently accepts as already stored, and two readers with slightly different
+ * checks is exactly how that divergence appears (INV-ADAPTER-005).
+ *
+ * A stored row is external data however it got there — the file is on an
+ * operator's disk and another build may have written it — so nothing about it is
+ * assumed, including that its JSON is canonical (INV-BLOCK-005).
+ */
+function readStoredRecord(row: object): StoredCompilationTraceRecord {
+  const envelopeSchemaVersion = storedInteger(row, 'envelope_schema_version');
+  if (envelopeSchemaVersion !== 1) {
+    throw new SQLiteStoreFailure(
+      'INVALID_STORED_DATA',
+      `a stored trace declares envelope schema version ${String(envelopeSchemaVersion)}, and this build reads version 1`,
+    );
+  }
+
+  const storedScope = parseStoredJsonObject(storedText(row, 'scope_json'));
+  if (storedScope === null) {
+    throw new SQLiteStoreFailure(
+      'INVALID_STORED_DATA',
+      'a stored trace carries a scope that is not readable JSON',
+    );
+  }
+  const validatedScope = ScopeSchema.safeParse(storedScope);
+  if (!validatedScope.success) {
+    throw new SQLiteStoreFailure(
+      'INVALID_STORED_DATA',
+      'a stored trace carries a scope that is not a valid scope',
+    );
+  }
+  // The two scope columns are meant to describe one scope. A `scope_json` that
+  // does not reproduce the row's own `scope_key` is a corrupted row, and it is
+  // refused here rather than at whichever caller happened to notice.
+  if (scopeKey(validatedScope.data) !== storedText(row, 'scope_key')) {
+    throw new SQLiteStoreFailure(
+      'INVALID_STORED_DATA',
+      'a stored trace carries a scope that disagrees with its scope key',
+    );
+  }
+
+  const payload = parseStoredJsonObject(storedText(row, 'trace_json'));
+  if (payload === null) {
+    throw new SQLiteStoreFailure(
+      'INVALID_STORED_DATA',
+      'a stored trace payload is not readable JSON',
+    );
+  }
+  const validatedPayload = JsonObjectSchema.safeParse(payload);
+  if (!validatedPayload.success) {
+    throw new SQLiteStoreFailure('INVALID_STORED_DATA', 'a stored trace payload is not JSON-safe');
+  }
+
+  return {
+    schemaVersion: 1,
+    scope: validatedScope.data,
+    compilationId: storedText(row, 'compilation_id'),
+    traceSchemaVersion: storedInteger(row, 'trace_schema_version'),
+    payload: validatedPayload.data,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -280,6 +371,17 @@ export class SQLiteTraceStore implements TraceStore {
    * The read and the write run in one immediate transaction, so no other
    * connection can insert the same identifier between the check and the insert,
    * and a rejected conflict leaves the original row untouched (INV-STORE-003).
+   *
+   * An existing row is read through {@link readStoredRecord} — the same reader
+   * `getTrace` uses — before either verdict is reached. Three outcomes follow,
+   * and the first is the one a naive store gets wrong: an **unreadable** row is
+   * `INVALID_STORED_DATA`, so a caller can never be told a trace is stored under
+   * an identifier whose audit row cannot be read back; a semantically identical
+   * record is idempotent success; and a valid but different one, scope included,
+   * is `TRACE_CONFLICT`.
+   *
+   * A corrupted row is never repaired and never overwritten. Rewriting it would
+   * destroy the only evidence that something else wrote it (INV-STORE-002).
    */
   putTrace(record: StoredCompilationTraceRecord): Promise<void> {
     try {
@@ -298,14 +400,12 @@ export class SQLiteTraceStore implements TraceStore {
               'a stored trace row is not readable',
             );
           }
-          const stored = canonicalRow({
-            compilationId: storedText(existing, 'compilation_id'),
-            scopeKey: storedText(existing, 'scope_key'),
-            traceSchemaVersion: storedInteger(existing, 'trace_schema_version'),
-            envelopeSchemaVersion: storedInteger(existing, 'envelope_schema_version'),
-            traceJson: storedText(existing, 'trace_json'),
-          });
-          if (stored !== canonicalRow(row)) {
+          // Validate the complete stored envelope first. A row that cannot be
+          // read is neither the same record nor a different one, and answering
+          // "already stored" for it would report an audit entry that is not
+          // there.
+          const stored = readStoredRecord(existing);
+          if (semanticEnvelope(stored) !== semanticEnvelope(row)) {
             throw new SQLiteStoreFailure(
               'TRACE_CONFLICT',
               'a different trace is already stored under this compilation identifier',
@@ -368,60 +468,20 @@ export class SQLiteTraceStore implements TraceStore {
         throw new SQLiteStoreFailure('INVALID_STORED_DATA', 'a stored trace row is not readable');
       }
 
-      return Promise.resolve(this.#toRecord(found, parsed.data));
+      const record = readStoredRecord(found);
+      // Selected by `scope_key`, so a stored scope that disagrees with the
+      // requested one is a corrupted row rather than another scope's record. It
+      // is refused, not returned (INV-SEC-004).
+      if (!scopesEqual(record.scope, parsed.data)) {
+        throw new SQLiteStoreFailure(
+          'INVALID_STORED_DATA',
+          'a stored trace carries a scope that disagrees with its scope key',
+        );
+      }
+      return Promise.resolve(record);
     } catch (cause) {
       return Promise.reject(translate(cause, 'READ_FAILED'));
     }
-  }
-
-  #toRecord(row: object, scope: Scope): StoredCompilationTraceRecord {
-    const envelopeSchemaVersion = storedInteger(row, 'envelope_schema_version');
-    if (envelopeSchemaVersion !== 1) {
-      throw new SQLiteStoreFailure(
-        'INVALID_STORED_DATA',
-        `a stored trace declares envelope schema version ${String(envelopeSchemaVersion)}, and this build reads version 1`,
-      );
-    }
-
-    const storedScope = parseStoredJsonObject(storedText(row, 'scope_json'));
-    if (storedScope === null) {
-      throw new SQLiteStoreFailure(
-        'INVALID_STORED_DATA',
-        'a stored trace carries a scope that is not readable JSON',
-      );
-    }
-    const validatedScope = ScopeSchema.safeParse(storedScope);
-    if (!validatedScope.success || !scopesEqual(validatedScope.data, scope)) {
-      // Selected by `scope_key`, so a disagreeing `scope_json` is a corrupted
-      // row rather than another scope's record. It is refused, not returned.
-      throw new SQLiteStoreFailure(
-        'INVALID_STORED_DATA',
-        'a stored trace carries a scope that disagrees with its scope key',
-      );
-    }
-
-    const payload = parseStoredJsonObject(storedText(row, 'trace_json'));
-    if (payload === null) {
-      throw new SQLiteStoreFailure(
-        'INVALID_STORED_DATA',
-        'a stored trace payload is not readable JSON',
-      );
-    }
-    const validatedPayload = JsonObjectSchema.safeParse(payload);
-    if (!validatedPayload.success) {
-      throw new SQLiteStoreFailure(
-        'INVALID_STORED_DATA',
-        'a stored trace payload is not JSON-safe',
-      );
-    }
-
-    return {
-      schemaVersion: 1,
-      scope: validatedScope.data,
-      compilationId: storedText(row, 'compilation_id'),
-      traceSchemaVersion: storedInteger(row, 'trace_schema_version'),
-      payload: validatedPayload.data,
-    };
   }
 }
 

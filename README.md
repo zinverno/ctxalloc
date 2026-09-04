@@ -851,16 +851,31 @@ node apps/cli/dist/bin.js eval --config ctxalloc.config.json \
   --run-config run-config.json --case case.json
 ```
 
-Every structured input is an explicit JSON file, parsed strictly. stdout carries
-success output only; stderr carries one machine-readable envelope only:
+Every structured input is an explicit JSON file, decoded as **fatal UTF-8** and
+parsed strictly. An ill-formed byte sequence is reported as `input_not_utf8` and
+is never repaired into `U+FFFD`: a tool that silently rewrote its input would
+hand a component a string the operator never wrote. A leading byte-order mark is
+kept rather than stripped, so it reaches the parser and is reported as
+`input_not_json` — the CLI implements JSON, not JSON with a prefix.
+
+**Each command takes exactly its own options.** `--scope` is real for `trace`,
+`inspect-blocks`, and `source list`, so a strict parse accepts it on `compile`
+too; the CLI rejects it there instead of discarding it, because an operator who
+mistyped one real option as another would otherwise believe a scope
+participated in a command that never read it. `ctxalloc version` takes no
+options at all.
+
+stdout carries success output only; stderr carries one machine-readable envelope
+only:
 
 ```json
 { "schemaVersion": 1, "code": "CTXALLOC_CLI_FAILED", "stage": "compilation", "issues": [] }
 ```
 
-Exit `0` for success, `2` for a usage failure (an unknown command, a missing or
-unknown option), `1` for a validated operational failure. The split matters to a
-script: a usage failure will not succeed on retry, and an operational one might.
+Exit `0` for success, `2` for a usage failure (an unknown command, an unknown
+option, an option this command does not take, or a missing required one), `1`
+for a validated operational failure. The split matters to a script: a usage
+failure will not succeed on retry, and an operational one might.
 
 `ctxalloc index` and `ctxalloc search` are **not** implemented.
 

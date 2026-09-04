@@ -315,3 +315,157 @@ describe('INV-SEC-001: a store failure never escapes with its own wording', () =
     expect(error.issues.every((issue) => issue.code === 'invalid_stored_data')).toBe(true);
   });
 });
+
+/**
+ * The failure-code inspection is passive and **total** (INV-ADAPTER-001).
+ *
+ * A rejected port may reject with any JavaScript value. If reading `code` from
+ * it could throw, or could run a getter, then a dependency would be able to
+ * choose this service's verdict or escape it entirely — which is precisely what
+ * the boundary exists to prevent.
+ */
+describe('INV-ADAPTER-001: a hostile rejection cannot escape or choose the verdict', () => {
+  const CANARY = 'ctxalloc-registry-canary';
+
+  /** A store that rejects with the given value from every operation. */
+  function rejectingWith(value: unknown): ControlStore & ControlStoreWriter {
+    const fail = (): Promise<never> => Promise.reject(value);
+    return {
+      id: 'hostile-store',
+      version: '1',
+      listSources: fail,
+      registerSource: fail,
+      updateSource: fail,
+      removeSource: fail,
+    };
+  }
+
+  async function registerAgainst(store: ControlStore & ControlStoreWriter): Promise<{
+    readonly issues: readonly { code: string; message: string }[];
+    readonly message: string;
+  }> {
+    const error = await failure(() =>
+      new LocalSourceRegistryService(store, store).execute({
+        schemaVersion: 1,
+        operation: 'register',
+        registration: registration(),
+      }),
+    );
+    return { issues: error.issues, message: error.message };
+  }
+
+  it('reports a rejection whose code descriptor throws as a dependency failure', async () => {
+    const hostile = new Proxy(
+      { code: 'SOURCE_CONFLICT' },
+      {
+        getOwnPropertyDescriptor: (): never => {
+          throw new Error(CANARY);
+        },
+      },
+    );
+
+    const { issues, message } = await registerAgainst(rejectingWith(hostile));
+
+    // Not `source_conflict`: an unreadable code is the same as no code, so the
+    // hostile value could not talk its way into a specific verdict either.
+    expect(issues[0]?.code).toBe('control_store_unavailable');
+    expect(message).not.toContain(CANARY);
+    expect(issues[0]?.message).not.toContain(CANARY);
+  });
+
+  it('reports a rejection that is a revoked proxy as a dependency failure', async () => {
+    const { proxy, revoke } = Proxy.revocable({ code: 'SOURCE_CONFLICT' }, {});
+    revoke();
+
+    expect((await registerAgainst(rejectingWith(proxy))).issues[0]?.code).toBe(
+      'control_store_unavailable',
+    );
+  });
+
+  it('never invokes an accessor named code', async () => {
+    let reads = 0;
+    const hostile = {};
+    Object.defineProperty(hostile, 'code', {
+      get: () => {
+        reads += 1;
+        return 'SOURCE_CONFLICT';
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    const { issues } = await registerAgainst(rejectingWith(hostile));
+
+    expect(issues[0]?.code).toBe('control_store_unavailable');
+    expect(reads).toBe(0);
+  });
+
+  it('never uses a get trap on the rejected value', async () => {
+    let gets = 0;
+    const hostile = new Proxy(
+      { code: 'SOURCE_NOT_FOUND' },
+      {
+        get: (target, key) => {
+          gets += 1;
+          return Reflect.get(target, key);
+        },
+      },
+    );
+
+    await registerAgainst(rejectingWith(hostile));
+    expect(gets).toBe(0);
+  });
+
+  it('reports a listing that is a revoked proxy as a dependency failure', async () => {
+    const { proxy, revoke } = Proxy.revocable([], {});
+    revoke();
+    const store: ControlStore & ControlStoreWriter = {
+      id: 'hostile-store',
+      version: '1',
+      listSources: () => Promise.resolve(proxy as unknown as SourceRegistration[]),
+      registerSource: () => Promise.resolve(),
+      updateSource: () => Promise.resolve(),
+      removeSource: () => Promise.resolve(false),
+    };
+
+    // `Array.isArray` throws outright on a revoked proxy, so an unguarded check
+    // here would let a raw `TypeError` escape as this service's failure.
+    const error = await failure(() =>
+      new LocalSourceRegistryService(store, store).execute({
+        schemaVersion: 1,
+        operation: 'list',
+        scope: SCOPE,
+      }),
+    );
+
+    expect(error.issues[0]?.code).toBe('control_store_unavailable');
+  });
+
+  it('never consults a get trap while snapshotting the listing', async () => {
+    let gets = 0;
+    const listed = new Proxy([registration()], {
+      get: (target, key) => {
+        // `then` is excluded: resolving a promise with this value makes the
+        // runtime itself probe for a thenable, which happens before any of this
+        // service's code sees the result.
+        if (key !== 'then') gets += 1;
+        return Reflect.get(target, key);
+      },
+    });
+    const store: ControlStore & ControlStoreWriter = {
+      id: 'hostile-store',
+      version: '1',
+      listSources: () => Promise.resolve(listed),
+      registerSource: () => Promise.resolve(),
+      updateSource: () => Promise.resolve(),
+      removeSource: () => Promise.resolve(false),
+    };
+
+    await new LocalSourceRegistryService(store, store).execute({
+      schemaVersion: 1,
+      operation: 'list',
+      scope: SCOPE,
+    });
+    expect(gets).toBe(0);
+  });
+});

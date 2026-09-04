@@ -80,6 +80,17 @@ export const COMPILATION_TRACE_TABLE = 'ctxalloc_compilation_trace';
  * no retrieval index. The original files remain the content authority, and this
  * database is the control and audit store (INV-STORE-001, DEC-042).
  *
+ * `title_json` holds a **JSON string**, not the title text. The existing
+ * `SourceRegistration` contract accepts any `string` as a title, including one
+ * carrying a lone surrogate, and Node's SQLite `TEXT` binding is lossy for
+ * exactly that: writing `"\uD800"` and reading it back yields `"\uFFFD"`. A
+ * store that quietly rewrote a registration the application considers valid
+ * would break the round trip its contract promises, so the value is encoded as a
+ * JSON string — which escapes a lone surrogate as ASCII — and the `TEXT` column
+ * never has to carry the malformed code unit itself. `NULL` means the title is
+ * absent, which is a different record from a title that is the empty string
+ * (INV-ADAPTER-005, INV-STORE-002).
+ *
  * The trace table has no `created_at`. A wall clock is not an input this phase
  * has a port for, and a column filled from `new Date()` inside an adapter would
  * put a hidden non-deterministic value into an audit record (INV-DET-004).
@@ -92,7 +103,7 @@ const MIGRATION_0_TO_1: readonly string[] = [
      identity_namespace TEXT NOT NULL,
      identity_key TEXT NOT NULL,
      locator TEXT NOT NULL,
-     title TEXT,
+     title_json TEXT,
      created_at TEXT,
      updated_at TEXT,
      metadata_json TEXT NOT NULL,

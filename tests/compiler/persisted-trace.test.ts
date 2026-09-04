@@ -256,6 +256,211 @@ describe('INV-SEC-001: the validator inspects passive data only', () => {
   });
 });
 
+/**
+ * The validator returns the **caller's own value**, so "is JSON data" has to be
+ * exact and its inspection has to be total (INV-ADAPTER-001, INV-SEC-001).
+ *
+ * Every reflective operation it performs — `Array.isArray`, `getPrototypeOf`,
+ * `getOwnPropertyNames`, `getOwnPropertySymbols`, `getOwnPropertyDescriptor` —
+ * is total on ordinary values and none is total on a hostile one. A revoked
+ * `Proxy` is `typeof "object"` and not `null`, so it reaches every structural
+ * check, and it refuses all five.
+ *
+ * Reverting any of the guards makes these fail with a raw `TypeError` escaping
+ * the kernel instead of a project-owned `not_json_safe`.
+ */
+describe('INV-ADAPTER-001: hostile runtime values cannot escape as raw errors', () => {
+  /** A message a hostile value would love to see republished. */
+  const CANARY = 'ctxalloc-trace-canary';
+
+  /** One settled trace with `groups` replaced by a hostile value. */
+  function withHostileGroups(groups: unknown): unknown {
+    const stored = persisted(correctedTrace()) as Record<string, unknown>;
+    stored.groups = groups;
+    return stored;
+  }
+
+  it('rejects a revoked array-target proxy', () => {
+    const { proxy, revoke } = Proxy.revocable([], {});
+    revoke();
+
+    const error = reject(withHostileGroups(proxy));
+    expect(error.issues[0]?.code).toBe('not_json_safe');
+    expect(error.issues[0]?.pointer).toBe('groups');
+  });
+
+  it('rejects a revoked object-target proxy', () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+
+    expect(reject(withHostileGroups(proxy)).issues[0]?.code).toBe('not_json_safe');
+  });
+
+  it('rejects a throwing getPrototypeOf trap without repeating its message', () => {
+    const hostile = new Proxy([], {
+      getPrototypeOf: (): never => {
+        throw new Error(CANARY);
+      },
+    });
+
+    const error = reject(withHostileGroups(hostile));
+    expect(error.issues[0]?.code).toBe('not_json_safe');
+    expect(error.message).not.toContain(CANARY);
+    expect(error.issues[0]?.message).not.toContain(CANARY);
+  });
+
+  it('rejects a throwing ownKeys trap without repeating its message', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys: (): never => {
+          throw new Error(CANARY);
+        },
+      },
+    );
+
+    const error = reject(withHostileGroups(hostile));
+    expect(error.issues[0]?.code).toBe('not_json_safe');
+    expect(error.message).not.toContain(CANARY);
+  });
+
+  it('rejects a throwing getOwnPropertyDescriptor trap without repeating its message', () => {
+    const hostile = new Proxy(
+      { a: 1 },
+      {
+        getOwnPropertyDescriptor: (): never => {
+          throw new Error(CANARY);
+        },
+      },
+    );
+
+    const error = reject(withHostileGroups(hostile));
+    expect(error.issues[0]?.code).toBe('not_json_safe');
+    expect(error.message).not.toContain(CANARY);
+  });
+
+  it('never invokes an accessor, however deep it is', () => {
+    let reads = 0;
+    const nested = {};
+    Object.defineProperty(nested, 'id', {
+      get: () => {
+        reads += 1;
+        return 'block:a';
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(reject(withHostileGroups([nested])).issues[0]?.code).toBe('not_json_safe');
+    expect(reads).toBe(0);
+  });
+
+  it('never uses a get trap', () => {
+    let gets = 0;
+    const hostile = new Proxy(
+      { id: 'block:a' },
+      {
+        get: (target, key) => {
+          gets += 1;
+          return Reflect.get(target, key);
+        },
+      },
+    );
+
+    // Whatever the verdict, no `get` trap ran: a trap that answers rather than
+    // throws could return one value to the validator and another to the
+    // consumer of the published record.
+    reject(withHostileGroups([hostile]));
+    expect(gets).toBe(0);
+  });
+});
+
+/**
+ * The three rules that go beyond what a serializer would notice.
+ *
+ * They exist because the validated value is **published**, not rebuilt: a
+ * property `JSON.stringify` ignores is still observable on the object a consumer
+ * receives, so a record carrying one is not the record any serialization of it
+ * describes.
+ */
+describe('INV-STORE-004: the published value is exactly JSON data', () => {
+  function withGroupProperty(mutate: (group: Record<string, unknown>) => void): unknown {
+    const stored = persisted(correctedTrace()) as { groups: Record<string, unknown>[] };
+    const group = stored.groups[0];
+    expect(group).toBeDefined();
+    if (group !== undefined) mutate(group);
+    return stored;
+  }
+
+  it('rejects a symbol-keyed own property', () => {
+    const stored = withGroupProperty((group) => {
+      (group as Record<symbol, unknown>)[Symbol('hidden')] = 1;
+    });
+
+    expect(reject(stored).issues[0]?.code).toBe('not_json_safe');
+    expect(reject(stored).issues[0]?.message).toContain('symbol');
+  });
+
+  it('rejects a non-enumerable own property that JSON would omit', () => {
+    const stored = withGroupProperty((group) => {
+      Object.defineProperty(group, 'hidden', {
+        value: 'invisible to JSON, visible on the returned object',
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    expect(reject(stored).issues[0]?.code).toBe('not_json_safe');
+    expect(reject(stored).issues[0]?.message).toContain('enumerable');
+  });
+
+  it('rejects an array carrying a custom own property', () => {
+    const stored = persisted(correctedTrace()) as { groups: unknown[] };
+    (stored.groups as unknown as Record<string, unknown>).note = 'dropped by JSON';
+
+    const error = reject(stored);
+    expect(error.issues[0]?.code).toBe('not_json_safe');
+    expect(error.issues[0]?.message).toContain('other than its elements');
+  });
+
+  it('rejects an array with an accessor element', () => {
+    const stored = persisted(correctedTrace()) as { groups: unknown[] };
+    let reads = 0;
+    Object.defineProperty(stored.groups, '0', {
+      get: () => {
+        reads += 1;
+        return {};
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(reject(stored).issues[0]?.code).toBe('not_json_safe');
+    expect(reads).toBe(0);
+  });
+
+  it('rejects a sparse array rather than reading its holes as undefined', () => {
+    const stored = persisted(correctedTrace()) as { groups: unknown[] };
+    // `JSON.stringify` writes a hole as `null`, so the published array would not
+    // equal the data any serialization of this record describes.
+    stored.groups.length = stored.groups.length + 2;
+
+    const error = reject(stored);
+    expect(error.issues[0]?.code).toBe('not_json_safe');
+    expect(error.issues[0]?.message).toContain('sparse');
+  });
+
+  it('still accepts an ordinary round-tripped trace unchanged', () => {
+    const trace = correctedTrace();
+    const stored = persisted(trace);
+
+    // The identical object is returned, not a copy, so the published record is
+    // byte-for-byte what was stored.
+    expect(new SettledCompilationTraceValidator().validate(stored)).toBe(stored);
+  });
+});
+
 describe('INV-DEP-002: validation reconstructs nothing', () => {
   it('accepts a trace whose stored totals contradict each other', () => {
     const stored = persisted(correctedTrace()) as { totals: Record<string, unknown> };

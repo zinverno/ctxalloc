@@ -30,6 +30,7 @@ import {
   type SQLiteLocalStoreConfig,
 } from './sqlite-store-config.js';
 import { SOURCE_REGISTRATION_TABLE, migrateToCurrentSchema } from './sqlite-migrations.js';
+import { ownDataValue } from './passive-inspection.js';
 
 /**
  * The local SQLite control plane (DEC-042).
@@ -173,6 +174,13 @@ function requireText(value: unknown, field: string): string {
  * values it is about to bind rather than trusting the compile-time type: the
  * caller is another process's data in every deployment that matters
  * (INV-BLOCK-005).
+ *
+ * Every field is read through `ownDataValue`, never as `record.scope`. This is
+ * not semantic validation — the application layer owns that — but the values are
+ * about to be bound into a statement, and a plain property read on an `unknown`
+ * runs a `Proxy` `get` trap or an installed getter before anything has decided
+ * to trust the value. An unreadable field simply has no value, and the ordinary
+ * check below rejects it (INV-ADAPTER-001).
  */
 function readIdentity(input: unknown): {
   readonly scope: Scope;
@@ -183,29 +191,25 @@ function readIdentity(input: unknown): {
   if (typeof input !== 'object' || input === null) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a registration must be an object');
   }
-  const record = input as {
-    scope?: unknown;
-    sourceType?: unknown;
-    identity?: { namespace?: unknown; key?: unknown };
-  };
 
-  const scope = ScopeSchema.safeParse(record.scope);
+  const scope = ScopeSchema.safeParse(ownDataValue(input, 'scope'));
   if (!scope.success) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a registration must carry a valid scope');
   }
-  const sourceType = SourceTypeSchema.safeParse(record.sourceType);
+  const sourceType = SourceTypeSchema.safeParse(ownDataValue(input, 'sourceType'));
   if (!sourceType.success) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a registration must carry a known source type');
   }
-  if (typeof record.identity !== 'object' || record.identity === null) {
+  const identity = ownDataValue(input, 'identity');
+  if (typeof identity !== 'object' || identity === null) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a registration must carry an identity');
   }
 
   return {
     scope: scope.data,
     sourceType: sourceType.data,
-    namespace: requireText(record.identity.namespace, 'identity.namespace'),
-    key: requireText(record.identity.key, 'identity.key'),
+    namespace: requireText(ownDataValue(identity, 'namespace'), 'identity.namespace'),
+    key: requireText(ownDataValue(identity, 'key'), 'identity.key'),
   };
 }
 
@@ -217,7 +221,7 @@ interface RegistrationRow {
   readonly namespace: string;
   readonly key: string;
   readonly locator: string;
-  readonly title: string | null;
+  readonly titleJson: string | null;
   readonly createdAt: string | null;
   readonly updatedAt: string | null;
   readonly metadataJson: string;
@@ -229,22 +233,72 @@ function optionalText(value: unknown, field: string): string | null {
   return requireText(value, field);
 }
 
+/**
+ * Encodes an optional title as a JSON string, or `null` when it is absent.
+ *
+ * The title is **not** bound as raw text, and it is **not** required to be
+ * non-blank. The existing `SourceRegistration` contract accepts any `string`
+ * there — `""` and `"   "` included — and this adapter's job is to persist the
+ * contract it was given, not to narrow it. A store that rejected a registration
+ * the in-memory implementation accepts would make the shared port contract false
+ * (INV-ADAPTER-005).
+ *
+ * Raw text binding is also lossy for a value the contract allows: `"\uD800"` is
+ * a lone surrogate, and Node's SQLite `TEXT` binding round-trips it as
+ * `"\uFFFD"` — a silent rewrite of an operator's registration. JSON string
+ * encoding escapes a lone surrogate as ASCII, so the column only ever carries
+ * well-formed text and the exact original code units come back (INV-STORE-002).
+ *
+ * `JSON.stringify` of a `string` is always a string, so the `?? null` is
+ * unreachable; it is written rather than asserted away because the type says the
+ * result is optional.
+ */
+function optionalTitleJson(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw new SQLiteStoreFailure('INVALID_INPUT', 'registration title must be a string');
+  }
+  return JSON.stringify(value) ?? null;
+}
+
+/**
+ * Rebuilds an optional title from its stored JSON string.
+ *
+ * A stored column is external data, so the decoded value must be proven to be a
+ * string rather than assumed: `title_json` holding `7` or `[]` is a corrupted
+ * row, and returning `7` as a title would publish a `SourceRegistration` whose
+ * own schema rejects it (INV-BLOCK-005).
+ */
+function storedTitle(row: object, name: string): string | undefined {
+  const text = optionalStoredText(row, name);
+  if (text === undefined) return undefined;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(text);
+  } catch {
+    // The parser's message quotes the offending text, which is stored data.
+    throw new SQLiteStoreFailure(
+      'INVALID_STORED_DATA',
+      'a stored registration carries a title that is not readable JSON',
+    );
+  }
+  if (typeof decoded !== 'string') {
+    throw new SQLiteStoreFailure(
+      'INVALID_STORED_DATA',
+      'a stored registration carries a title that is not a JSON string',
+    );
+  }
+  return decoded;
+}
+
 function toRow(registration: unknown): RegistrationRow {
   const identity = readIdentity(registration);
-  const record = registration as {
-    locator?: unknown;
-    title?: unknown;
-    createdAt?: unknown;
-    updatedAt?: unknown;
-    metadata?: unknown;
-    schemaVersion?: unknown;
-  };
 
-  const metadata = JsonObjectSchema.safeParse(record.metadata);
+  const metadata = JsonObjectSchema.safeParse(ownDataValue(registration, 'metadata'));
   if (!metadata.success) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a registration must carry JSON-safe metadata');
   }
-  if (record.schemaVersion !== 1) {
+  if (ownDataValue(registration, 'schemaVersion') !== 1) {
     throw new SQLiteStoreFailure('INVALID_INPUT', 'a registration must declare schemaVersion 1');
   }
 
@@ -254,10 +308,10 @@ function toRow(registration: unknown): RegistrationRow {
     sourceType: identity.sourceType,
     namespace: identity.namespace,
     key: identity.key,
-    locator: requireText(record.locator, 'locator'),
-    title: optionalText(record.title, 'title'),
-    createdAt: optionalText(record.createdAt, 'createdAt'),
-    updatedAt: optionalText(record.updatedAt, 'updatedAt'),
+    locator: requireText(ownDataValue(registration, 'locator'), 'locator'),
+    titleJson: optionalTitleJson(ownDataValue(registration, 'title')),
+    createdAt: optionalText(ownDataValue(registration, 'createdAt'), 'createdAt'),
+    updatedAt: optionalText(ownDataValue(registration, 'updatedAt'), 'updatedAt'),
     metadataJson: canonicalJson(metadata.data),
     registrationSchemaVersion: 1,
   };
@@ -319,7 +373,7 @@ function toRegistration(row: object): SourceRegistration {
     );
   }
 
-  const title = optionalStoredText(row, 'title');
+  const title = storedTitle(row, 'title_json');
   const createdAt = storedTimestamp(row, 'created_at');
   const updatedAt = storedTimestamp(row, 'updated_at');
 
@@ -347,7 +401,7 @@ function toRegistration(row: object): SourceRegistration {
 /* -------------------------------------------------------------------------- */
 
 const SELECT_COLUMNS = `scope_json, source_type, identity_namespace, identity_key, locator,
-   title, created_at, updated_at, metadata_json, registration_schema_version`;
+   title_json, created_at, updated_at, metadata_json, registration_schema_version`;
 
 const LOGICAL_KEY_PREDICATE = `scope_key = ? AND source_type = ? AND identity_namespace = ? AND identity_key = ?`;
 
@@ -475,7 +529,7 @@ export class SQLiteControlStore implements ControlStore, ControlStoreWriter {
           .prepare(
             `INSERT INTO ${SOURCE_REGISTRATION_TABLE}
                (scope_key, scope_json, source_type, identity_namespace, identity_key,
-                locator, title, created_at, updated_at, metadata_json, registration_schema_version)
+                locator, title_json, created_at, updated_at, metadata_json, registration_schema_version)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
@@ -485,7 +539,7 @@ export class SQLiteControlStore implements ControlStore, ControlStoreWriter {
             row.namespace,
             row.key,
             row.locator,
-            row.title,
+            row.titleJson,
             row.createdAt,
             row.updatedAt,
             row.metadataJson,
@@ -513,14 +567,14 @@ export class SQLiteControlStore implements ControlStore, ControlStoreWriter {
         const result = this.#database
           .prepare(
             `UPDATE ${SOURCE_REGISTRATION_TABLE}
-                SET scope_json = ?, locator = ?, title = ?, created_at = ?, updated_at = ?,
+                SET scope_json = ?, locator = ?, title_json = ?, created_at = ?, updated_at = ?,
                     metadata_json = ?, registration_schema_version = ?
               WHERE ${LOGICAL_KEY_PREDICATE}`,
           )
           .run(
             row.scopeJson,
             row.locator,
-            row.title,
+            row.titleJson,
             row.createdAt,
             row.updatedAt,
             row.metadataJson,
