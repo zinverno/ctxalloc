@@ -51,24 +51,34 @@ External systems communicate with the kernel through ports.
 Adapters implement those ports.
 
 ```text
-                 Applications
-           CLI / HTTP API / Tests
-                       |
-                       v
-              Application Services
-                       |
-                       v
-                Compiler Kernel
-                       |
-        +--------------+--------------+
-        |              |              |
-        v              v              v
-   TokenizerPort  CandidatePort   TraceStorePort
-        |              |              |
-        v              v              v
-   Tokenizer       Retrieval       SQLite or
-   Adapter          Adapter        In-Memory
+                       Applications
+                 CLI / HTTP API / Tests
+                             |
+                             v
+                    Application Services
+                             |
+        +--------------------+--------------------+
+        |                    |                    |
+        v                    v                    v
+  SourceReaderPort    CandidateProviderPort   ControlStorePort
+  NodeFile...         MiniSearch...           ControlStoreWriterPort
+                                              TraceStorePort
+                             |                      |
+                             v                      v
+                      Compiler Kernel          SQLite or
+                             |                 In-Memory
+                             v
+                       TokenizerPort
+                             |
+                             v
+                      O200kBase / Fake
 ```
+
+Only `Tokenizer` is a kernel port. The compiler reads no file, asks no provider
+for candidates, and writes no trace: the application layer resolves all three and
+hands the kernel a complete request (INV-DEP-002). `TraceStore` is likewise an
+application-layer capability — the compilation finishes first, and its settled
+trace is persisted afterwards (DEC-042).
 
 The core dependency direction is always inward.
 
@@ -148,8 +158,17 @@ It takes one `Tokenizer` object and constructs `MarkdownChunker`, `TextChunker`,
 accept a pre-built compiler plus a second tokenizer: block token counts would
 then be produced by one tokenizer and validated by another.
 
-Trace persistence is deliberately absent from the flow: no `TraceStore` port
-exists yet.
+Source preparation is `PrepareLocalCorpusService`, which this service composes
+rather than duplicates. It is a use case in its own right — *what blocks does
+this scope contain?* — and `ctxalloc inspect-blocks` answers it without
+compiling anything (DEC-042).
+
+Trace persistence is deliberately absent **from this flow**. A compilation is a
+pure function of its inputs, and a service that wrote to a store as part of
+producing a result would make the result depend on whether the write succeeded.
+`CompilationTracePersistenceService` owns persistence, and a caller composes the
+two: `ctxalloc compile` runs the compilation to completion, then stores the
+settled trace, then publishes its output (DEC-042).
 
 The compiler itself remains synchronous. The application service is
 asynchronous, because reading sources and asking a provider for candidates are
@@ -169,15 +188,15 @@ Initial ports:
 * Tokenizer, implemented (DEC-027);
 * CandidateProvider, implemented (DEC-039);
 * SourceReader, implemented (DEC-039);
-* TraceStore, future;
 * ControlStore, implemented and read-only (DEC-039);
+* ControlStoreWriter, implemented (DEC-042);
+* TraceStore, implemented (DEC-042);
 * ModelProvider, implemented for evaluation only (DEC-040);
 * MonotonicClock, implemented for evaluation durations only (DEC-040);
-* TraceStore, future;
 * a general wall Clock, still absent: every time-dependent decision takes an
   explicit reference instant, so nothing needs one.
 
-The six implemented ports are type-only contracts in `@ctxalloc/ports`. That
+The eight implemented ports are type-only contracts in `@ctxalloc/ports`. That
 package has no runtime export and no external dependency; it may reference
 `@ctxalloc/domain` with type-only imports so that a port and an adapter never
 describe one concept in two vocabularies.
@@ -190,10 +209,25 @@ configured model, one text request, one text result, and no streaming, tools,
 routing, retry, fallback, caching orchestration, or pricing. `MonotonicClock`
 measures elapsed durations only and carries no date semantics.
 
-`ControlStore` declares `listSources` and nothing else. Control-plane writing
-needs its own persistence decision and its own failure semantics, so it arrives
-with the phase that implements it rather than as a declared method nothing
-honors.
+`ControlStore` declares `listSources` and nothing else. Control-plane **writing**
+is a separate interface, `ControlStoreWriter`, rather than three more methods on
+the one every consumer of the compilation path already holds: almost none of
+them needs to create, move, or retire a source, and merging the two would hand
+that capability to all of them (DEC-042). It declares `registerSource`,
+`updateSource`, and `removeSource` — and deliberately no `upsert`, which would
+leave *did I create it, or replace something?* unanswerable.
+
+`TraceStore` speaks in a JSON envelope, `StoredCompilationTraceRecord`, rather
+than in `SettledCompilationTrace`. `@ctxalloc/compiler` already depends inward on
+`@ctxalloc/ports`, so naming a compiler type here would close a dependency cycle,
+and moving the trace type down into the ports package would make every future
+change to compiler tracing a change to the contract every adapter implements.
+The application layer owns the conversion in both directions (DEC-042,
+INV-DEP-003).
+
+No store port declares a connection lifecycle. `close()` is declared on the
+concrete SQLite adapters and on none of the three ports: a local CLI composing a
+store must not have to know a database exists.
 
 Potential later ports:
 
@@ -219,15 +253,21 @@ Implemented:
 * `SystemMonotonicClock` in `@ctxalloc/adapters` (DEC-040);
 * `MiniSearchCandidateProvider` in `@ctxalloc/adapters`, the first real retrieval
   implementation (DEC-041);
+* `SQLiteControlStore` in `@ctxalloc/adapters`, implementing `ControlStore` and
+  `ControlStoreWriter` over the runtime's built-in `node:sqlite` (DEC-042);
+* `SQLiteTraceStore` in `@ctxalloc/adapters`, implementing `TraceStore` (DEC-042);
 * `FakeTokenizer`, `InMemorySourceReader`, `InMemoryControlStore`,
-  `FakeCandidateProvider`, `FakeModelProvider`, and `FakeMonotonicClock` in
-  `@ctxalloc/testing`.
+  `InMemoryTraceStore`, `FakeCandidateProvider`, `FakeModelProvider`, and
+  `FakeMonotonicClock` in `@ctxalloc/testing`.
+
+The two SQLite adapters share package-internal database, migration, and
+canonical-JSON mechanics, and export none of it. `DatabaseSync`, `StatementSync`,
+and every other driver type stop inside the package: no port, no public
+declaration, and no consumer of `@ctxalloc/adapters` names one
+(INV-ADAPTER-001). They may share one database file, but never one connection.
 
 Future:
 
-* InMemoryTraceStore;
-* SQLiteTraceStore;
-* SQLiteControlStore;
 * ObsidianVaultSourceReader;
 * a semantic or hybrid `CandidateProvider`, and a persistent retrieval index.
 
@@ -269,13 +309,40 @@ Adapters may be removed without modifying the domain compiler.
 
 Initial application interfaces:
 
-* CLI;
-* minimal HTTP API;
+* CLI, implemented as `apps/cli` (DEC-042);
+* minimal HTTP API, future, as `apps/api`;
 * test harness.
 
 These interfaces call application services.
 
 They do not implement compiler behavior.
+
+`apps/cli` is the **outermost composition root**. It may depend inward on
+`@ctxalloc/application`, `@ctxalloc/adapters`, `@ctxalloc/evaluation`,
+`@ctxalloc/compiler`, `@ctxalloc/domain`, `@ctxalloc/ports`, and
+`@ctxalloc/tokenization`; **no package may import it**, and the internal
+dependency allowlist enforces that. A package that imported the CLI would be
+importing a program's argument parsing and output format, which is the one thing
+in the system with no reusable contract.
+
+It parses arguments, reads explicit JSON input files, composes the real adapters
+and the real application services, and serializes the result. It contains no
+selection logic, no budget arithmetic, no chunking, no retrieval, and no
+validation rule a component already owns.
+
+```text
+ctxalloc compile          ctxalloc trace           ctxalloc source add|update|remove|list
+ctxalloc inspect-blocks   ctxalloc eval            ctxalloc version
+```
+
+`runCli(argv, io)` returns an exit code and touches neither `process.argv` nor
+`process.exit`, so nearly the whole CLI is tested in-process; `bin.js` supplies
+the real argument vector and the real streams and nothing else.
+
+stdout carries success output only, stderr carries one machine-readable error
+envelope only, and exit codes are `0` for success, `2` for a usage failure, and
+`1` for a validated operational failure. No `SyntaxError`, validation-library
+error, SQLite error, filesystem error, or stack trace reaches a stream.
 
 ---
 
@@ -2679,30 +2746,68 @@ The compiler sees these values only as source metadata.
 
 ## 11. Persistence Architecture
 
-The domain defines storage ports.
-
-Example:
+The ports package defines storage contracts, and they are implemented (DEC-042).
 
 ```ts
+interface StoredCompilationTraceRecord {
+  readonly schemaVersion: 1;
+  readonly scope: Scope;
+  readonly compilationId: string;
+  readonly traceSchemaVersion: number;
+  readonly payload: JsonObject;
+}
+
 interface TraceStore {
-  save(trace: CompilationTrace): Promise<void>;
-  get(id: string): Promise<CompilationTrace | null>;
+  readonly id: string;
+  readonly version: string;
+
+  putTrace(record: StoredCompilationTraceRecord): Promise<void>;
+  getTrace(scope: Scope, compilationId: string): Promise<StoredCompilationTraceRecord | null>;
 }
 ```
 
-MVP adapters:
+The port carries an **envelope**, not a `SettledCompilationTrace`. Naming a
+compiler type here would close a dependency cycle, since the compiler already
+depends inward on the ports; `CompilationTracePersistenceService` in
+`@ctxalloc/application` owns the conversion in both directions, and
+`SettledCompilationTraceValidator` proves a stored record on the way back in and
+publishes a passive validated snapshot of it rather than the value it was handed
+(INV-BLOCK-005, INV-DEP-003).
 
-* InMemoryTraceStore;
-* SQLiteTraceStore.
+Implemented adapters:
 
-SQLite may also store:
+* `InMemoryTraceStore` and `InMemoryControlStore` in `@ctxalloc/testing`;
+* `SQLiteTraceStore` and `SQLiteControlStore` in `@ctxalloc/adapters`, over the
+  runtime's built-in `node:sqlite`, with no external dependency.
 
-* source metadata;
-* block metadata;
-* evaluation runs;
-* indexing state.
+One shared contract suite runs against all four, so a divergence between a double
+and a shipped store is a test failure rather than a production surprise
+(INV-ADAPTER-005).
 
-Large original documents should remain in their source location or a dedicated document cache.
+### What the local database holds, and what it does not
+
+SQLite is the local **control and audit** store. It holds:
+
+* source registrations — the control-plane record of which sources exist in a
+  scope, including their locator, title, timestamps, and metadata;
+* settled compilation traces — the privacy-minimized audit record of one
+  compilation.
+
+It deliberately does **not** hold source content, blocks, candidates, compiled
+context, model answers, evaluation reports, or a retrieval index. The original
+files remain the content authority, and a rebuilt or deleted database must not
+be able to destroy a source (INV-STORE-001, INV-STORE-002).
+
+The database path is explicit configuration. There is no environment variable, no
+`process.cwd()` fallback, no `~/.ctxalloc` location, and no search up the
+directory tree: a store that found its own database would make *which data am I
+looking at?* depend on where a command was run (INV-DET-003).
+
+The database schema version is explicit (`SQLITE_LOCAL_STORE_SCHEMA_VERSION`),
+recorded in a project-owned metadata table rather than in SQLite's unnamespaced
+`user_version` pragma. Initialization and migration run inside one transaction, a
+newer database fails clearly, and there is no automatic downgrade (INV-STORE-003,
+INV-STORE-004).
 
 SQLite is not the source of truth for an Obsidian vault.
 

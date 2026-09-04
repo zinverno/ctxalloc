@@ -35,7 +35,32 @@ importers:
 
   apps/api: {}
 
-  apps/cli: {}
+  apps/cli:
+    dependencies:
+      '@ctxalloc/adapters':
+        specifier: workspace:*
+        version: link:../../packages/adapters
+      '@ctxalloc/application':
+        specifier: workspace:*
+        version: link:../../packages/application
+      '@ctxalloc/compiler':
+        specifier: workspace:*
+        version: link:../../packages/compiler
+      '@ctxalloc/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@ctxalloc/evaluation':
+        specifier: workspace:*
+        version: link:../../packages/evaluation
+      '@ctxalloc/ports':
+        specifier: workspace:*
+        version: link:../../packages/ports
+      '@ctxalloc/tokenization':
+        specifier: workspace:*
+        version: link:../../packages/tokenization
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/adapters:
     dependencies:

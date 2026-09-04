@@ -9,6 +9,8 @@ const PORT_FILES = [
   'packages/ports/src/tokenizer.ts',
   'packages/ports/src/source-reader.ts',
   'packages/ports/src/control-store.ts',
+  'packages/ports/src/control-store-writer.ts',
+  'packages/ports/src/trace-store.ts',
   'packages/ports/src/candidate-provider.ts',
   'packages/ports/src/model-provider.ts',
   'packages/ports/src/monotonic-clock.ts',
@@ -56,6 +58,7 @@ describe('@ctxalloc/ports public API', () => {
       'CandidateProvider',
       'CandidateProviderRequest',
       'ControlStore',
+      'ControlStoreWriter',
       'ModelProvider',
       'ModelProviderRequest',
       'ModelProviderResult',
@@ -65,19 +68,25 @@ describe('@ctxalloc/ports public API', () => {
       'SourceReadResult',
       'SourceReader',
       'SourceRegistration',
+      'SourceRegistrationKey',
+      'StoredCompilationTraceRecord',
       'Tokenizer',
+      'TraceStore',
     ]);
     expect(entry).not.toMatch(/export (const|function|class|enum|let|var)/);
   });
 
   it('defines no speculative port for this phase', () => {
-    // `ModelProvider` and `MonotonicClock` left this list in Phase 17 because the
-    // evaluation harness consumes them. A general wall clock stays absent:
-    // nothing needs one, and a `Date.now` abstraction reachable from a component
-    // is exactly what ends determinism (INV-DET-004).
+    // `ModelProvider` and `MonotonicClock` left this list in Phase 17, and
+    // `TraceStore`, `ControlStoreWriter`, and `SourceRegistrationKey` in Phase 19,
+    // because each has a real consumer (DEC-040, DEC-042).
+    //
+    // A general wall clock stays absent: nothing needs one, and a `Date.now`
+    // abstraction reachable from a component is exactly what ends determinism
+    // (INV-DET-004). So does a store for anything Phase 19 deliberately did not
+    // persist — an evaluation report, a retrieval index, a compiled context.
     const entry = readSource('packages/ports/src/index.ts');
     for (const name of [
-      'TraceStore',
       'Clock,',
       'WallClock',
       'DocumentConverter',
@@ -86,6 +95,8 @@ describe('@ctxalloc/ports public API', () => {
       'JobQueue',
       'ObjectStore',
       'EvaluationStore',
+      'RetrievalIndexStore',
+      'CompiledContextStore',
     ]) {
       expect(entry, `declares ${name}`).not.toContain(`${name},`);
     }

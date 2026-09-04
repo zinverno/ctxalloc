@@ -7,6 +7,14 @@
   "@ctxalloc/tokenization": ["@ctxalloc/domain", "@ctxalloc/ports"],
   "@ctxalloc/evaluation": ["@ctxalloc/domain", "@ctxalloc/ports", "@ctxalloc/compiler"],
   "@ctxalloc/testing": ["@ctxalloc/domain", "@ctxalloc/ports"],
-  "@ctxalloc/cli": ["@ctxalloc/application"],
+  "@ctxalloc/cli": [
+    "@ctxalloc/adapters",
+    "@ctxalloc/application",
+    "@ctxalloc/compiler",
+    "@ctxalloc/domain",
+    "@ctxalloc/evaluation",
+    "@ctxalloc/ports",
+    "@ctxalloc/tokenization"
+  ],
   "@ctxalloc/api": ["@ctxalloc/application"]
 }

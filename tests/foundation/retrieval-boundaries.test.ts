@@ -189,22 +189,32 @@ describe('INV-DEP-001: the adapter stays below the kernel', () => {
   });
 });
 
-describe('Phase 18 adds no Phase 19 or Phase 20 capability', () => {
-  it('ships no CLI or HTTP implementation', () => {
+describe('retrieval remains request-local and unpersisted', () => {
+  it('the retrieval library never reaches an application entry point', () => {
+    // `apps/cli` composes the provider inside its `compile` command (DEC-042),
+    // and that is the only place: neither entry point may name the library, and
+    // `apps/api` composes nothing at all until the HTTP phase.
     for (const entry of ['apps/cli/src/index.ts', 'apps/api/src/index.ts']) {
       const source = readSource(entry);
       expect(source).not.toContain(RETRIEVAL_LIBRARY);
       expect(source).not.toContain('MiniSearchCandidateProvider');
     }
+    expect(readSource('apps/api/src/index.ts').trim()).toBe('export {};');
   });
 
-  it('ships no SQLite control store, trace store, or persistent index', () => {
+  it('ships no persistent retrieval index', () => {
+    // `SQLiteControlStore` and `SQLiteTraceStore` arrived in Phase 19 and are
+    // deliberately **not** on this list: they are the local control and audit
+    // store (DEC-042). A persisted retrieval index is a different thing
+    // entirely, and it remains future work — the index MiniSearch builds is an
+    // in-memory value that becomes garbage when the call returns
+    // (INV-STORE-002).
     for (const forbidden of [
-      'SQLiteControlStore',
-      'SQLiteTraceStore',
-      'TraceStore',
       'PersistentRetrievalIndex',
       'RetrievalIndexStore',
+      'IndexStore',
+      'saveIndex',
+      'loadIndex',
     ]) {
       for (const file of sourceFiles('packages/adapters/src')) {
         expect(
@@ -216,9 +226,19 @@ describe('Phase 18 adds no Phase 19 or Phase 20 capability', () => {
     expect(existsSync(new URL('packages/retrieval', rootUrl))).toBe(false);
   });
 
-  it('ships no file watcher and no index lifecycle', () => {
+  it('the retrieval adapter reaches no store, no file, and no watcher', () => {
     const code = codeOf(readSource('packages/adapters/src/minisearch-candidate-provider.ts'));
-    for (const forbidden of ['watch(', 'FSWatcher', 'chokidar', 'migrate', 'reindex']) {
+    for (const forbidden of [
+      'watch(',
+      'FSWatcher',
+      'chokidar',
+      'migrate',
+      'reindex',
+      'node:sqlite',
+      'node:fs',
+      'ControlStore',
+      'TraceStore',
+    ]) {
       expect(code, `the adapter declares ${forbidden}`).not.toContain(forbidden);
     }
   });

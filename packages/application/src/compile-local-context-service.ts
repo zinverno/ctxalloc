@@ -6,12 +6,9 @@ import {
 } from '@ctxalloc/compiler';
 import {
   ScopeSchema,
-  SourceTypeSchema,
   TimestampSchema,
-  JsonObjectSchema,
   findLoneSurrogate,
   safeParse,
-  scopesEqual,
   type CandidateBlock,
   type ContextBlock,
   type Scope,
@@ -21,13 +18,7 @@ import {
   type ValidationIssue,
 } from '@ctxalloc/domain';
 import { TokenBudgetSchema } from '@ctxalloc/domain';
-import type {
-  CandidateProvider,
-  ControlStore,
-  SourceReader,
-  SourceRegistration,
-  Tokenizer,
-} from '@ctxalloc/ports';
+import type { CandidateProvider, ControlStore, SourceReader, Tokenizer } from '@ctxalloc/ports';
 import { z } from 'zod';
 import {
   cloneRecord,
@@ -38,11 +29,18 @@ import {
   type CanonicalRecordAttempt,
 } from './canonical-record.js';
 import { issue } from './chunking-primitives.js';
-import { ConversationChunker } from './conversation-chunker.js';
-import { ingestConversationSource, parseConversationSourceJson } from './conversation-source.js';
-import { MarkdownChunker, type MarkdownChunkingOptions } from './markdown-chunker.js';
-import { ingestSource, type IngestedSource } from './source-ingestion.js';
-import { TextChunker, type TextChunkingOptions } from './text-chunker.js';
+import {
+  LocalSourcePipelineError,
+  build,
+  underField,
+  validatePort,
+} from './local-source-pipeline.js';
+import type { MarkdownChunkingOptions } from './markdown-chunker.js';
+import {
+  PREPARE_LOCAL_CORPUS_CONFIG_SCHEMA_VERSION,
+  PrepareLocalCorpusService,
+} from './prepare-local-corpus-service.js';
+import type { TextChunkingOptions } from './text-chunker.js';
 
 /**
  * The local source-to-compilation vertical slice (DEC-039).
@@ -53,16 +51,23 @@ import { TextChunker, type TextChunkingOptions } from './text-chunker.js';
  * to a `CompilationResult`.
  *
  * ```text
- * ControlStore.listSources(scope)
+ * PrepareLocalCorpusService
+ *   -> ControlStore.listSources(scope)
  *   -> SourceRegistration validation
  *   -> SourceReader.read({ locator })
  *   -> ingestSource / ingestConversationSource
  *   -> MarkdownChunker / TextChunker / ConversationChunker
  *   -> canonical corpus order
- *   -> CandidateProvider.getCandidates(...)
+ * CandidateProvider.getCandidates(...)
  *   -> ContextCompiler.compile(...)
  *   -> LocalCompilationResult
  * ```
+ *
+ * Everything above the provider call is `PrepareLocalCorpusService`, which owns
+ * source preparation for this service and for `ctxalloc inspect-blocks` alike
+ * (DEC-042). Delegating rather than duplicating is what keeps the corpus an
+ * operator inspects identical to the corpus a compilation is built from
+ * (INV-DEP-003).
  *
  * It adds **no** selection behavior. Scoring, filtering, allocation, ordering,
  * rendering, correction, and tracing all stay inside `ContextCompiler`, which
@@ -73,6 +78,12 @@ import { TextChunker, type TextChunkingOptions } from './text-chunker.js';
  * port, so the whole slice runs in memory in a test (INV-DEP-002). It reads no
  * clock, no environment variable, and no random value; `referenceTime` arrives
  * with the request (INV-DET-003, INV-DET-004).
+ *
+ * Persisting the settled trace is deliberately **not** here. A compilation is a
+ * pure function of its inputs, and a service that wrote to a store as part of
+ * producing a result would make the result depend on whether the write
+ * succeeded. `CompilationTracePersistenceService` owns that, and a caller
+ * composes the two (DEC-042).
  */
 
 /* -------------------------------------------------------------------------- */
@@ -150,47 +161,6 @@ export interface LocalCompilationResult {
   readonly compilation: CompilationResult;
 }
 
-/** Where one local pipeline run failed, before the compiler was reached. */
-export type LocalSourcePipelineStage =
-  | 'configuration'
-  | 'request-validation'
-  | 'control-store'
-  | 'source-registration'
-  | 'source-read'
-  | 'source-ingestion'
-  | 'source-chunking'
-  | 'candidate-provider';
-
-/**
- * The single error this service raises for a pre-compiler failure.
- *
- * The issues are project-owned, serializable, and deterministically ordered.
- * They carry no raw file content, no conversation content, no filesystem error
- * object, no `SyntaxError`, and no validation-library error: an adapter failure
- * is translated at this boundary rather than re-thrown (INV-ADAPTER-001,
- * INV-ADAPTER-003).
- *
- * A failure *inside* the compiler is not wrapped. `ContextCompilationError`
- * already names its stage, its issues, and its compilation identifier, and
- * replacing it with a weaker application error would discard exactly the detail
- * a caller needs (INV-DEP-003).
- */
-export class LocalSourcePipelineError extends Error {
-  readonly code = 'LOCAL_SOURCE_PIPELINE_FAILED';
-  readonly stage: LocalSourcePipelineStage;
-  readonly issues: readonly ValidationIssue[];
-
-  constructor(stage: LocalSourcePipelineStage, issues: readonly ValidationIssue[]) {
-    const summary = issues
-      .map((detail) => `${detail.pointer || '<root>'}: ${detail.message}`)
-      .join('; ');
-    super(`Local source pipeline failed at ${stage}: ${summary}`);
-    this.name = 'LocalSourcePipelineError';
-    this.stage = stage;
-    this.issues = issues;
-  }
-}
-
 /* -------------------------------------------------------------------------- */
 /* Validation schemas                                                          */
 /* -------------------------------------------------------------------------- */
@@ -239,204 +209,6 @@ const LocalCompilationRequestSchema = z.strictObject({
   policy: z.looseObject({}),
 });
 
-/**
- * The runtime boundary of one control-plane record.
- *
- * A registration arrives from an external control plane, so compile-time types
- * prove nothing (INV-BLOCK-005). Unknown fields are rejected, nothing is
- * coerced, and no value is defaulted — least of all the source type, which
- * decides how the bytes are interpreted.
- */
-const SourceRegistrationSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  scope: ScopeSchema,
-  sourceType: SourceTypeSchema,
-  identity: z.strictObject({
-    namespace: exactIdentityString,
-    key: exactIdentityString,
-  }),
-  locator: exactIdentityString,
-  title: z.string().optional(),
-  createdAt: TimestampSchema.optional(),
-  updatedAt: TimestampSchema.optional(),
-  metadata: JsonObjectSchema,
-});
-
-/* -------------------------------------------------------------------------- */
-/* Dependency validation                                                       */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Checks one injected port implementation for the shape it must have.
- *
- * The dependencies arrive as objects, and their identities may travel into a
- * report, so the port shape is checked once at construction rather than trusted
- * from the compile-time type alone.
- */
-function validatePort(
-  name: string,
-  candidate: unknown,
-  method: string,
-): readonly ValidationIssue[] {
-  if (typeof candidate !== 'object' || candidate === null) {
-    return [issue([name], `must be a ${name}`, 'invalid_type')];
-  }
-  const port = candidate as Record<string, unknown>;
-  const issues: ValidationIssue[] = [];
-  if (typeof port.id !== 'string' || port.id.trim().length === 0) {
-    issues.push(issue([name, 'id'], 'must not be empty or whitespace-only'));
-  }
-  if (typeof port.version !== 'string' || port.version.trim().length === 0) {
-    issues.push(issue([name, 'version'], 'must not be empty or whitespace-only'));
-  }
-  if (typeof port[method] !== 'function') {
-    issues.push(issue([name, method], 'must be a function', 'invalid_type'));
-  }
-  return issues;
-}
-
-/** Re-addresses one component's issues under the configuration field that carries it. */
-function underField(field: string, issues: readonly ValidationIssue[]): readonly ValidationIssue[] {
-  return issues.map((detail) => {
-    const path = [field, ...detail.path];
-    return { code: detail.code, path, pointer: path.join('.'), message: detail.message };
-  });
-}
-
-/**
- * The structured issues of a project-owned error, or one fixed generic issue.
- *
- * Only a project-owned `issues` array is carried through: those are already
- * serializable, deterministic, and written by this project. The thrown value's
- * `message` is never read, because an error raised inside an injected component
- * may quote source content or a machine path (INV-SEC-001).
- *
- * An empty `issues` array falls back too. A chunker reports a tokenizer failure
- * with a message and no issues, and passing that empty array through would
- * produce a pipeline failure that names its stage but says nothing at all.
- */
-function issuesOf(
-  cause: unknown,
-  path: readonly string[],
-  fallback: string,
-): readonly ValidationIssue[] {
-  if (typeof cause === 'object' && cause !== null) {
-    const nested: unknown = (cause as { issues?: unknown }).issues;
-    if (Array.isArray(nested) && nested.length > 0) {
-      return nested as readonly ValidationIssue[];
-    }
-  }
-  return [issue(path, fallback)];
-}
-
-/**
- * Rebuilds one validated registration with absent optional fields left absent.
- *
- * The validated value carries an explicit `undefined` for every omitted optional
- * field. Writing that through would produce a record claiming *there is a title,
- * and it is nothing*, and it would change what a serializer emits for the
- * record. Exact values are copied unchanged (INV-ADAPTER-002).
- */
-function toRegistration(registration: {
-  readonly schemaVersion: 1;
-  readonly scope: Scope;
-  readonly sourceType: SourceRegistration['sourceType'];
-  readonly identity: { readonly namespace: string; readonly key: string };
-  readonly locator: string;
-  readonly title?: string | undefined;
-  readonly createdAt?: Timestamp | undefined;
-  readonly updatedAt?: Timestamp | undefined;
-  readonly metadata: SourceRegistration['metadata'];
-}): SourceRegistration {
-  return {
-    schemaVersion: registration.schemaVersion,
-    scope: registration.scope,
-    sourceType: registration.sourceType,
-    identity: registration.identity,
-    locator: registration.locator,
-    ...(registration.title !== undefined ? { title: registration.title } : {}),
-    ...(registration.createdAt !== undefined ? { createdAt: registration.createdAt } : {}),
-    ...(registration.updatedAt !== undefined ? { updatedAt: registration.updatedAt } : {}),
-    metadata: registration.metadata,
-  };
-}
-
-/* -------------------------------------------------------------------------- */
-/* Canonical ordering                                                          */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Compares two strings by UTF-16 code unit.
- *
- * `localeCompare` is deliberately not used anywhere in this module: its result
- * depends on the machine's locale data, which would make one corpus order on a
- * developer's laptop and another in a container (INV-DET-001).
- */
-function compareCodeUnits(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
-}
-
-/**
- * Canonical registration order: source type, then identity namespace, then key.
- *
- * The locator is deliberately absent. Ordering by it would make the prepared
- * corpus depend on where files happen to live, so moving one source could change
- * another source's position — and identity, not location, is what a registration
- * means (DEC-028).
- */
-function compareRegistrations(a: SourceRegistration, b: SourceRegistration): number {
-  return (
-    compareCodeUnits(a.sourceType, b.sourceType) ||
-    compareCodeUnits(a.identity.namespace, b.identity.namespace) ||
-    compareCodeUnits(a.identity.key, b.identity.key)
-  );
-}
-
-/**
- * Rank of one source location kind, so a total order exists across kinds.
- *
- * A block with no location sorts last: it has nothing to compare, and putting it
- * first would let an unlocated block displace located ones.
- */
-function locationRank(block: ContextBlock): number {
-  if (block.sourceLocation === undefined) return 2;
-  return block.sourceLocation.kind === 'text-range' ? 0 : 1;
-}
-
-/**
- * Canonical corpus order: source document, then position inside it, then block
- * identifier.
- *
- * The final comparison on the block identifier makes the order **total**: two
- * blocks that agree on document and position still compare deterministically, so
- * the prepared corpus never depends on the order the control store happened to
- * list its sources in (INV-DET-002, INV-DET-005).
- */
-function compareBlocks(a: ContextBlock, b: ContextBlock): number {
-  const byDocument = compareCodeUnits(a.sourceDocumentId, b.sourceDocumentId);
-  if (byDocument !== 0) return byDocument;
-
-  const byKind = locationRank(a) - locationRank(b);
-  if (byKind !== 0) return byKind;
-
-  const left = a.sourceLocation;
-  const right = b.sourceLocation;
-  if (left?.kind === 'text-range' && right?.kind === 'text-range') {
-    const byStart = left.startOffset - right.startOffset;
-    if (byStart !== 0) return byStart;
-    const byEnd = left.endOffset - right.endOffset;
-    if (byEnd !== 0) return byEnd;
-  } else if (left?.kind === 'conversation-message' && right?.kind === 'conversation-message') {
-    const byIndex = (left.messageIndex ?? 0) - (right.messageIndex ?? 0);
-    if (byIndex !== 0) return byIndex;
-    const byMessage = compareCodeUnits(left.messageId, right.messageId);
-    if (byMessage !== 0) return byMessage;
-  }
-
-  return compareCodeUnits(a.id, b.id);
-}
-
 /* -------------------------------------------------------------------------- */
 /* Service                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -445,22 +217,18 @@ function compareBlocks(a: ContextBlock, b: ContextBlock): number {
  * Compiles context from the local sources registered for one scope.
  *
  * **One tokenizer, owned here.** The service receives exactly one `Tokenizer`
- * object and injects that same object into `MarkdownChunker`, `TextChunker`,
- * `ConversationChunker`, and `ContextCompiler`. It deliberately does not accept
- * a pre-built compiler plus a second tokenizer: block token counts would then be
- * produced by one tokenizer and validated by another, and `CandidateValidator`
- * would reject a corpus that is in fact correct — or, worse, accept one that is
- * not. Owning the composition is what makes the compiler's
- * `tokenizerCoverage: "validation-and-rendering"` claim true of this slice as
- * well (DEC-038, INV-BLOCK-003).
+ * object and injects that same object into `PrepareLocalCorpusService` — and so
+ * into `MarkdownChunker`, `TextChunker`, and `ConversationChunker` — and into
+ * `ContextCompiler`. It deliberately does not accept a pre-built compiler plus a
+ * second tokenizer: block token counts would then be produced by one tokenizer
+ * and validated by another, and `CandidateValidator` would reject a corpus that
+ * is in fact correct — or, worse, accept one that is not. Owning the composition
+ * is what makes the compiler's `tokenizerCoverage: "validation-and-rendering"`
+ * claim true of this slice as well (DEC-038, INV-BLOCK-003).
  */
 export class CompileLocalContextService {
   readonly #compiler: ContextCompiler;
-  readonly #markdownChunker: MarkdownChunker;
-  readonly #textChunker: TextChunker;
-  readonly #conversationChunker: ConversationChunker;
-  readonly #sourceReader: SourceReader;
-  readonly #controlStore: ControlStore;
+  readonly #preparation: PrepareLocalCorpusService;
   readonly #candidateProvider: CandidateProvider;
 
   /**
@@ -495,38 +263,26 @@ export class CompileLocalContextService {
       () => new ContextCompiler(parsed.value.compiler, tokenizer),
       'config.compiler',
     );
-    // The two chunker constructors take a typed policy, and the validated shape
-    // above proves only that an object arrived. The value is passed through
-    // `unknown` because the chunker itself is the runtime boundary for its own
-    // policy: it rejects a fraction, a zero, or a reversed pair with its own
-    // issues, and restating those rules here would create a second owner of one
-    // truth (INV-BLOCK-005, INV-DEP-003).
-    this.#markdownChunker = build(
-      () =>
-        new MarkdownChunker(
-          tokenizer,
-          parsed.value.markdownChunking as unknown as MarkdownChunkingOptions,
-        ),
-      'config.markdownChunking',
+    // The preparation service is constructed rather than wrapped: it raises the
+    // same `LocalSourcePipelineError`, already addressed under
+    // `config.markdownChunking`, `config.textChunking`, and `tokenizer`, so
+    // re-addressing it here would prefix a path that is already complete.
+    this.#preparation = new PrepareLocalCorpusService(
+      {
+        schemaVersion: PREPARE_LOCAL_CORPUS_CONFIG_SCHEMA_VERSION,
+        markdownChunking: parsed.value.markdownChunking,
+        textChunking: parsed.value.textChunking,
+      },
+      tokenizer,
+      sourceReader,
+      controlStore,
     );
-    this.#textChunker = build(
-      () => new TextChunker(tokenizer, parsed.value.textChunking as unknown as TextChunkingOptions),
-      'config.textChunking',
-    );
-    this.#conversationChunker = build(() => new ConversationChunker(tokenizer), 'tokenizer');
 
-    this.#sourceReader = sourceReader;
-    this.#controlStore = controlStore;
     this.#candidateProvider = candidateProvider;
   }
 
   /**
    * Runs the whole local slice for one request.
-   *
-   * Every registration is validated, checked against the request scope, and
-   * checked for logical duplication **before any source is read**: a control
-   * plane that contradicts itself must not cause half a corpus to be loaded
-   * (INV-ADAPTER-004).
    *
    * Nothing the service is given is mutated: registrations, read results,
    * documents, blocks, candidates, and the request all leave exactly as they
@@ -542,25 +298,7 @@ export class CompileLocalContextService {
     }
     const request = parsed.value;
 
-    const registrations = this.#canonicalRegistrations(
-      await this.#listSources(request.scope),
-      request.scope,
-    );
-
-    const documents: SourceDocument[] = [];
-    const blocks: ContextBlock[] = [];
-    for (const [index, registration] of registrations.entries()) {
-      const content = await this.#read(index, registration);
-      const prepared = this.#prepare(index, registration, content);
-      documents.push(prepared.document);
-      blocks.push(...prepared.blocks);
-    }
-
-    // Both orders are project-owned and total, so the prepared corpus is a
-    // function of the registrations and their contents alone — never of the
-    // order the control store listed them in (INV-DET-002).
-    const sourceDocuments = [...documents].sort((a, b) => compareCodeUnits(a.id, b.id));
-    const corpus = [...blocks].sort(compareBlocks);
+    const { sourceDocuments, blocks: corpus } = await this.#preparation.prepare(request.scope);
 
     const candidates = await this.#getCandidates(request, sourceDocuments, corpus);
 
@@ -580,217 +318,6 @@ export class CompileLocalContextService {
     });
 
     return { sourceDocuments, blocks: corpus, candidates, compilation };
-  }
-
-  async #listSources(scope: Scope): Promise<readonly unknown[]> {
-    let listed: unknown;
-    try {
-      listed = await this.#controlStore.listSources(scope);
-    } catch {
-      // The thrown value is deliberately not inspected. A port implementation
-      // chooses its own message, and a control plane's may carry a connection
-      // string, a query, or a credential; copying it into a project-owned issue
-      // would publish whatever the dependency happened to say (INV-SEC-001).
-      throw new LocalSourcePipelineError('control-store', [
-        issue(['controlStore'], 'ControlStore listSources failed.', 'control_store_unavailable'),
-      ]);
-    }
-    if (!Array.isArray(listed)) {
-      throw new LocalSourcePipelineError('control-store', [
-        issue(['controlStore'], 'listSources must resolve to an array', 'invalid_type'),
-      ]);
-    }
-    return listed;
-  }
-
-  /**
-   * Validates every registration, rejects scope mismatches and logical
-   * duplicates, and returns the canonical order.
-   *
-   * Logical uniqueness is exact scope plus source type plus identity namespace
-   * plus identity key. The locator takes no part: two registrations of one
-   * logical source pointing at two paths are a contradiction the control plane
-   * must resolve, not a pair of sources that happen to look alike (DEC-028).
-   */
-  #canonicalRegistrations(listed: readonly unknown[], scope: Scope): readonly SourceRegistration[] {
-    const issues: ValidationIssue[] = [];
-    const registrations: SourceRegistration[] = [];
-
-    listed.forEach((entry, index) => {
-      const parsed = safeParse(SourceRegistrationSchema, entry);
-      if (!parsed.ok) {
-        issues.push(...underField(String(index), parsed.issues));
-        return;
-      }
-      registrations.push(toRegistration(parsed.value));
-    });
-    if (issues.length > 0) {
-      throw new LocalSourcePipelineError('source-registration', issues);
-    }
-
-    registrations.forEach((registration, index) => {
-      if (!scopesEqual(registration.scope, scope)) {
-        issues.push(
-          issue(
-            [String(index), 'scope'],
-            'must equal the request scope: the control store returned a cross-scope registration',
-            'scope_mismatch',
-          ),
-        );
-      }
-    });
-
-    const seen = new Map<string, number>();
-    registrations.forEach((registration, index) => {
-      const key = JSON.stringify([
-        registration.scope.tenantId,
-        registration.scope.workspaceId,
-        registration.scope.projectId ?? null,
-        registration.sourceType,
-        registration.identity.namespace,
-        registration.identity.key,
-      ]);
-      const first = seen.get(key);
-      if (first !== undefined) {
-        issues.push(
-          issue(
-            [String(index), 'identity'],
-            `must be unique within the scope: registration ${String(first)} declares the same logical source`,
-            'duplicate_registration',
-          ),
-        );
-        return;
-      }
-      seen.set(key, index);
-    });
-
-    if (issues.length > 0) {
-      throw new LocalSourcePipelineError('source-registration', issues);
-    }
-
-    return [...registrations].sort(compareRegistrations);
-  }
-
-  async #read(index: number, registration: SourceRegistration): Promise<string> {
-    let result: unknown;
-    try {
-      result = await this.#sourceReader.read({ locator: registration.locator });
-    } catch {
-      // The reader's own message is not copied: a filesystem error routinely
-      // names an absolute path, and another reader's could carry a token or a
-      // fragment of the file itself. The logical identity is registration data
-      // the caller already holds; the locator is not repeated (INV-SEC-001).
-      throw new LocalSourcePipelineError('source-read', [
-        issue(
-          [String(index), 'locator'],
-          `SourceReader failed for logical source ${identityLabel(registration)}.`,
-          'source_unreadable',
-        ),
-      ]);
-    }
-    if (
-      typeof result !== 'object' ||
-      result === null ||
-      typeof (result as { content?: unknown }).content !== 'string'
-    ) {
-      throw new LocalSourcePipelineError('source-read', [
-        issue(
-          [String(index), 'locator'],
-          `read for ${identityLabel(registration)} must resolve to an object carrying string content`,
-          'invalid_type',
-        ),
-      ]);
-    }
-    return (result as { content: string }).content;
-  }
-
-  /** Ingests and chunks one source according to its declared type. */
-  #prepare(
-    index: number,
-    registration: SourceRegistration,
-    content: string,
-  ): { readonly document: SourceDocument; readonly blocks: readonly ContextBlock[] } {
-    if (registration.sourceType === 'conversation') {
-      return this.#prepareConversation(index, registration, content);
-    }
-
-    let ingested: IngestedSource;
-    try {
-      ingested = ingestSource({
-        scope: registration.scope,
-        sourceType: registration.sourceType,
-        identity: registration.identity,
-        content,
-        ...(registration.title !== undefined ? { title: registration.title } : {}),
-        ...(registration.createdAt !== undefined ? { createdAt: registration.createdAt } : {}),
-        ...(registration.updatedAt !== undefined ? { updatedAt: registration.updatedAt } : {}),
-        metadata: registration.metadata,
-      });
-    } catch (cause) {
-      throw new LocalSourcePipelineError(
-        'source-ingestion',
-        underField(
-          String(index),
-          issuesOf(cause, [], `ingestion failed for ${identityLabel(registration)}`),
-        ),
-      );
-    }
-
-    try {
-      const blocks =
-        registration.sourceType === 'markdown'
-          ? this.#markdownChunker.chunk(ingested)
-          : this.#textChunker.chunk(ingested);
-      return { document: ingested.document, blocks };
-    } catch (cause) {
-      throw new LocalSourcePipelineError(
-        'source-chunking',
-        underField(
-          String(index),
-          issuesOf(cause, [], `chunking failed for ${identityLabel(registration)}`),
-        ),
-      );
-    }
-  }
-
-  #prepareConversation(
-    index: number,
-    registration: SourceRegistration,
-    content: string,
-  ): { readonly document: SourceDocument; readonly blocks: readonly ContextBlock[] } {
-    let ingested;
-    try {
-      const payload = parseConversationSourceJson(content);
-      ingested = ingestConversationSource({
-        scope: registration.scope,
-        identity: registration.identity,
-        payload,
-        ...(registration.title !== undefined ? { title: registration.title } : {}),
-        ...(registration.createdAt !== undefined ? { createdAt: registration.createdAt } : {}),
-        ...(registration.updatedAt !== undefined ? { updatedAt: registration.updatedAt } : {}),
-        metadata: registration.metadata,
-      });
-    } catch (cause) {
-      throw new LocalSourcePipelineError(
-        'source-ingestion',
-        underField(
-          String(index),
-          issuesOf(cause, [], `ingestion failed for ${identityLabel(registration)}`),
-        ),
-      );
-    }
-
-    try {
-      return { document: ingested.document, blocks: this.#conversationChunker.chunk(ingested) };
-    } catch (cause) {
-      throw new LocalSourcePipelineError(
-        'source-chunking',
-        underField(
-          String(index),
-          issuesOf(cause, [], `chunking failed for ${identityLabel(registration)}`),
-        ),
-      );
-    }
   }
 
   /**
@@ -1042,28 +569,4 @@ function blockOf(candidate: unknown): { readonly id: string; readonly value: unk
   const id = tryReadOwnDataProperty(value, 'id');
   if (typeof id !== 'string' || id.length === 0) return null;
   return { id, value };
-}
-
-/** `namespace/key`, which names the logical source without disclosing its location. */
-function identityLabel(registration: SourceRegistration): string {
-  return `${registration.identity.namespace}/${registration.identity.key}`;
-}
-
-/**
- * Builds one component, re-addressing its construction issues under the
- * configuration field that carried them.
- */
-function build<T>(construct: () => T, field: string): T {
-  try {
-    return construct();
-  } catch (cause) {
-    const issues = issuesOf(cause, [], `is not a valid ${field}`);
-    throw new LocalSourcePipelineError(
-      'configuration',
-      issues.map((detail) => {
-        const path = [...field.split('.'), ...detail.path];
-        return { code: detail.code, path, pointer: path.join('.'), message: detail.message };
-      }),
-    );
-  }
 }

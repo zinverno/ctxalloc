@@ -1,5 +1,10 @@
 import { scopesEqual, type JsonObject, type JsonValue, type Scope } from '@ctxalloc/domain';
-import type { ControlStore, SourceRegistration } from '@ctxalloc/ports';
+import type {
+  ControlStore,
+  ControlStoreWriter,
+  SourceRegistration,
+  SourceRegistrationKey,
+} from '@ctxalloc/ports';
 
 /**
  * Deterministic test double for the {@link ControlStore} port.
@@ -10,13 +15,22 @@ import type { ControlStore, SourceRegistration } from '@ctxalloc/ports';
  * for a boundary the caller did not ask about would hide the very cross-scope
  * leak these tests exist to catch (INV-SCOPE-004).
  *
- * Listing order is the configured order. That is deliberate rather than
- * canonical: a consumer must impose its own order, and a fake that sorted for it
- * would conceal the bug where it does not (INV-DET-002).
+ * Listing order is the configured order, and a write never reorders it. That is
+ * deliberate rather than canonical: a consumer must impose its own order, and a
+ * fake that sorted for it would conceal the bug where it does not
+ * (INV-DET-002).
  *
- * There is no write API. The port is read-only in this phase, and a fake with
- * methods the contract does not define would let a test depend on a capability
- * no real store has (INV-ADAPTER-005).
+ * It implements the write port too (DEC-042), with exactly the semantics
+ * `SQLiteControlStore` has: `registerSource` is insert-only and conflicts on an
+ * existing logical key even when every field matches, `updateSource` requires an
+ * existing key and never creates, and `removeSource` answers `true` or `false`
+ * rather than failing on absence. One shared contract suite runs against this
+ * fake and against SQLite, so a test written on the double is a test of the
+ * behavior the product ships (INV-ADAPTER-005).
+ *
+ * Writes clone on the way in and reads clone on the way out, so a caller that
+ * mutates a registration it registered — or one it listed — cannot change what a
+ * later listing reports.
  *
  * It reads no file, database, environment variable, clock, or random value
  * (INV-DET-001, INV-DET-003, INV-DET-004).
@@ -29,6 +43,28 @@ const DEFAULT_VERSION = '1';
 export interface InMemoryControlStoreOptions {
   readonly id?: string;
   readonly version?: string;
+}
+
+/**
+ * Machine-readable categories of an in-memory control-plane write failure.
+ *
+ * The two codes are the **exact strings** `SQLiteControlStore` publishes, and
+ * that is the point: the application layer distinguishes a conflict from a
+ * missing record by a stable project-owned code, so a double that spelled them
+ * differently would let a test pass against behavior no real store produces
+ * (INV-ADAPTER-003, INV-ADAPTER-005).
+ */
+export type InMemoryControlStoreWriteErrorCode = 'SOURCE_CONFLICT' | 'SOURCE_NOT_FOUND';
+
+/** A rejected in-memory control-plane write. */
+export class InMemoryControlStoreWriteError extends Error {
+  readonly code: InMemoryControlStoreWriteErrorCode;
+
+  constructor(code: InMemoryControlStoreWriteErrorCode, message: string) {
+    super(message);
+    this.name = 'InMemoryControlStoreWriteError';
+    this.code = code;
+  }
 }
 
 /** Rejected {@link InMemoryControlStore} configuration. */
@@ -82,12 +118,51 @@ function copyRegistration(registration: SourceRegistration): SourceRegistration 
   };
 }
 
-export class InMemoryControlStore implements ControlStore {
+/**
+ * The logical identity of one registration, as a comparable string.
+ *
+ * An absent `projectId` is written as `null` rather than omitted, so an absent
+ * and a present project stay distinguishable: a representation where absence
+ * disappeared would let one scope's key collide with another's
+ * (INV-SCOPE-004). The application layer computes the same key from the same
+ * fields; it is spelled again here because a test double may not depend on the
+ * layer it is used to test.
+ */
+function logicalKey(entry: SourceRegistration | SourceRegistrationKey): string {
+  return JSON.stringify([
+    entry.scope.tenantId,
+    entry.scope.workspaceId,
+    entry.scope.projectId ?? null,
+    entry.sourceType,
+    entry.identity.namespace,
+    entry.identity.key,
+  ]);
+}
+
+export class InMemoryControlStore implements ControlStore, ControlStoreWriter {
   readonly id: string;
   readonly version: string;
 
-  readonly #registrations: readonly SourceRegistration[];
+  /**
+   * Stored in configured order, so a listing reports what a store yielded rather
+   * than an order this fake chose. Writes address entries by logical key.
+   */
+  #registrations: SourceRegistration[];
 
+  /**
+   * The initial registrations are stored **exactly** as configured, duplicates
+   * included.
+   *
+   * A real store cannot hold two records of one logical source — its primary key
+   * forbids it — but a *consumer* must still reject a control plane that
+   * contradicts itself, and the only way to test that branch is with a store
+   * that can produce the contradiction. Rejecting it here would delete the test
+   * rather than the bug (INV-ADAPTER-004).
+   *
+   * The write API is not so permissive: `registerSource` conflicts on an
+   * existing logical key exactly as `SQLiteControlStore` does. Construction
+   * seeds a fixture; writing is the behaviour under contract.
+   */
   constructor(
     registrations: readonly SourceRegistration[],
     options: InMemoryControlStoreOptions = {},
@@ -103,5 +178,46 @@ export class InMemoryControlStore implements ControlStore {
         .filter((registration) => scopesEqual(registration.scope, scope))
         .map(copyRegistration),
     );
+  }
+
+  registerSource(registration: SourceRegistration): Promise<void> {
+    if (this.#indexOf(logicalKey(registration)) !== -1) {
+      return Promise.reject(
+        new InMemoryControlStoreWriteError(
+          'SOURCE_CONFLICT',
+          'A registration with this logical identity already exists in this scope.',
+        ),
+      );
+    }
+    this.#registrations.push(copyRegistration(registration));
+    return Promise.resolve();
+  }
+
+  updateSource(registration: SourceRegistration): Promise<void> {
+    const index = this.#indexOf(logicalKey(registration));
+    if (index === -1) {
+      return Promise.reject(
+        new InMemoryControlStoreWriteError(
+          'SOURCE_NOT_FOUND',
+          'No registration with this logical identity exists in this scope.',
+        ),
+      );
+    }
+    // Replaced in place, so an update never moves a record in a listing: an
+    // order that changed on write would hide a consumer that depends on one.
+    this.#registrations[index] = copyRegistration(registration);
+    return Promise.resolve();
+  }
+
+  removeSource(key: SourceRegistrationKey): Promise<boolean> {
+    const index = this.#indexOf(logicalKey(key));
+    if (index === -1) return Promise.resolve(false);
+    this.#registrations.splice(index, 1);
+    return Promise.resolve(true);
+  }
+
+  /** The position of the record with one logical key, or `-1`. */
+  #indexOf(key: string): number {
+    return this.#registrations.findIndex((registration) => logicalKey(registration) === key);
   }
 }
