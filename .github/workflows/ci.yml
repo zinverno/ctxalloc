@@ -31,3 +31,6 @@ jobs:
 
       - name: Validate declarations
         run: pnpm check:declarations
+
+      - name: Smoke-test the built CLI
+        run: pnpm smoke:cli

@@ -4804,6 +4804,283 @@ METRICS changes: retrieval-backed evaluation can now materialize a real candidat
 
 ---
 
+## DEC-042: Add Explicit SQLite Local Persistence and a Minimal CLI Composition Root
+
+### Status
+
+Accepted
+
+### Decision
+
+Phase 15 completed the compiler kernel (DEC-038), Phase 16 the local source-to-compilation slice (DEC-039), Phase 17 the evaluation harness (DEC-040), and Phase 18 the first real lexical `CandidateProvider` (DEC-041, merged as `50141cd014af6ddc6638e8c2e393375ef9c5ec3b`).
+
+All of it ran in one process and vanished with it. A source registration existed only inside whatever `InMemoryControlStore` a test constructed, a settled trace existed only inside the `CompilationResult` that returned it, and nothing could be asked a second time.
+
+Phase 19 makes the local system **operable across process restarts**, and gives an operator a way to run it:
+
+```text id="pe19a"
+ctxalloc source add        -> SQLiteControlStore        (registration persisted)
+  process exits
+ctxalloc source list       -> SQLiteControlStore        (same registration)
+
+ctxalloc compile
+  -> SQLiteControlStore      registered sources of one scope
+  -> NodeFileSourceReader    exact bytes for each locator
+  -> PrepareLocalCorpusService   ingestion, chunking, canonical order
+  -> MiniSearchCandidateProvider retrieval over that corpus
+  -> ContextCompiler         selection, allocation, rendering, settlement
+  -> SQLiteTraceStore        the settled trace, persisted
+  process exits
+ctxalloc trace             -> SQLiteTraceStore          (the same settled trace)
+```
+
+The compiler kernel is **unchanged in behavior**. No compiler stage was touched, no scoring arithmetic moved, no trace field changed, and no compiled result differs. The only compiler addition is `SettledCompilationTraceValidator`, which reads a stored record and decides nothing.
+
+### The Storage Technology Is the Node Runtime's Own
+
+`node:sqlite`, built into the pinned Node 22 runtime, with **no external dependency added at all**.
+
+It was checked against eight hard gates on the exact Node version the repository and CI use (`.nvmrc`: 22):
+
+1. **Import without a command-line flag: passed.** `import { DatabaseSync } from 'node:sqlite'` resolves and works with no `--experimental-sqlite`. Node emits an `ExperimentalWarning` on first load, which is handled where it belongs — see *The warning filter lives in the executable* below.
+2. **Open and create in a temporary directory: passed.**
+3. **Transactions: passed.** `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK` behave exactly as SQLite defines, including DDL rollback.
+4. **Prepared statements and bound parameters: passed.** Quote-heavy, semicolon-bearing, and astral-plane values round-trip byte-exact.
+5. **No BLOB required: passed.** Every column of the selected schema is `TEXT` or `INTEGER`.
+6. **Deterministic close: passed.** `close()` releases the handle, and a subsequent open sees the committed data.
+7. **CI without native compilation or download: passed.** It is part of the runtime; there is nothing to build and nothing to fetch.
+8. **No external type in a public declaration: passed.** `DatabaseSync` and `StatementSync` stay inside two package-internal modules.
+
+Because the built-in passes every gate, **no alternative was evaluated and none was installed**. `better-sqlite3` and `node-sqlite3-wasm` were not inspected: a spike that keeps shopping after a candidate passes is a spike looking for a preference.
+
+**No ORM, and no query builder.** Prisma, Drizzle, TypeORM, Sequelize, Knex, and Kysely are all absent. The schema is two tables and a metadata row; an ORM would add a second model of the domain beside the one `@ctxalloc/domain` already owns, and its migration tooling would own a versioning decision this project has to make explicitly anyway (INV-STORE-004, INV-DEP-003).
+
+### Reading and Writing the Control Plane Are Two Ports
+
+`ControlStore` is **unchanged**: `id`, `version`, `listSources(scope)`. Every consumer of the compilation path needs to list sources. Almost none of them needs to create, move, or retire one, and adding three methods to the interface they already hold would hand that capability to all of them.
+
+So the write capability is a separate type-only contract:
+
+```ts id="pe19b"
+interface ControlStoreWriter {
+  readonly id: string;
+  readonly version: string;
+
+  registerSource(registration: SourceRegistration): Promise<void>;
+  updateSource(registration: SourceRegistration): Promise<void>;
+  removeSource(key: SourceRegistrationKey): Promise<boolean>;
+}
+```
+
+`SQLiteControlStore` implements both, and a consumer is handed whichever it needs.
+
+**There is no `upsert`.** An upsert answers *the store now holds this* while leaving *did I create it, or replace something?* unanswerable — which is precisely the question an operator who mistyped an identity needs answered.
+
+* `registerSource` is **insert-only**. An existing logical key is a conflict, and it stays a conflict when every field is identical: the caller asked to create something that is already there.
+* `updateSource` changes the mutable fields — locator, title, timestamps, metadata — of one exact logical key. A missing key is an explicit not-found, never a create. The key itself never changes, so renaming an identity means remove-then-register, which is the visible consequence renaming what a source *is* should have (INV-BLOCK-001).
+* `removeSource` resolves `true` when a record existed and `false` when none did. Absence is an answer, not a failure, and every implementation answers it identically (INV-ADAPTER-005).
+
+`SourceRegistrationKey` carries exact scope, source type, and identity — and **no locator**. A key that accepted one would invite a caller to believe the locator was matched on.
+
+### The Trace Store Speaks in Envelopes, Because a Cycle Is Not Available
+
+The obvious contract is `putTrace(trace: SettledCompilationTrace)`. It cannot be written: `SettledCompilationTrace` belongs to `@ctxalloc/compiler`, the compiler already depends inward on `@ctxalloc/ports`, and naming it in a port would close a dependency cycle between the two (INV-DEP-003).
+
+Moving the trace type down into the ports package would be worse. The trace is compiler output — its dispositions, reasons, and settlement evidence are the kernel's vocabulary — and a port package that owned it would make every future change to compiler tracing a change to the contract every adapter implements.
+
+So the port speaks the only vocabulary both sides already share: project-owned domain values plus JSON.
+
+```ts id="pe19c"
+interface StoredCompilationTraceRecord {
+  readonly schemaVersion: 1;
+  readonly scope: Scope;
+  readonly compilationId: string;
+  readonly traceSchemaVersion: number;
+  readonly payload: JsonObject;
+}
+
+interface TraceStore {
+  readonly id: string;
+  readonly version: string;
+
+  putTrace(record: StoredCompilationTraceRecord): Promise<void>;
+  getTrace(scope: Scope, compilationId: string): Promise<StoredCompilationTraceRecord | null>;
+}
+```
+
+Two versions are recorded and they mean different things. `schemaVersion` versions the **envelope** — the addressing a store reads. `traceSchemaVersion` versions the **payload** the compiler wrote, which a store never interprets. Collapsing them would make a change to trace content look like a change to storage addressing (INV-STORE-004).
+
+`CompilationTracePersistenceService`, in the application layer, owns the conversion in both directions. `SQLiteTraceStore` does not import `@ctxalloc/compiler` and cannot tell a settled trace from an unsettled one.
+
+### A Stored Trace Is External Data
+
+`SettledCompilationTraceValidator` is a new, narrow public component of `@ctxalloc/compiler`.
+
+`JSON.parse(row) as SettledCompilationTrace` would publish whatever the row happened to contain. The process that wrote it is gone, its build is unknown, and the file is on an operator's disk (INV-BLOCK-005).
+
+The validator:
+
+* validates the trace schema version **exactly**, and reports an unsupported one under its own issue code rather than as one literal mismatch among many;
+* distinguishes settled from unsettled, and requires the settled variant with its own code — *this is a trace, but not one that may stand as the record of a completed compilation* is a different finding from *this is not a trace* (INV-TRACE-006);
+* validates the complete persistence shape, rejecting an unknown field rather than stripping it: a surplus field is evidence the record came from a different producer;
+* first proves the value is **passive JSON** — no accessor, no `Proxy`, no cycle, no class instance, no `undefined`-valued property — which is what makes it safe to publish the caller's own value rather than a rebuilt copy. For a persisted record, what a consumer reads is then byte-for-byte what was stored.
+
+It is **not reconstruction**. It re-scores nothing, re-renders nothing, recomputes no digest, and calls no tokenizer, retrieval provider, model, or clock (INV-DEP-002, INV-DET-003, INV-DET-004). A trace whose stored totals contradict each other is accepted and reads as contradictory, which is the honest answer: *the stored record says this* is the question a persisted audit record answers.
+
+`TraceBuilder` gained no persistence behavior. Building a trace from live evidence and proving a stored one are different problems with different inputs.
+
+### The Database Schema Is Versioned Explicitly and Migrated Transactionally
+
+`SQLITE_LOCAL_STORE_SCHEMA_VERSION = 1`, recorded in a project-owned `ctxalloc_store_metadata` table rather than in SQLite's `user_version` pragma. The pragma is a single unnamespaced integer in the file header, so anything else that ever opens the file writes to the same slot; a named row in a named table says *whose* version it is.
+
+* A new database initializes to version 1 inside **one** immediate transaction, so the file either gains the complete schema or gains nothing (INV-STORE-003).
+* A database already at version 1 is left untouched. Reopening writes nothing, so repeated initialization cannot duplicate metadata.
+* A database at a **greater** version fails with `UNSUPPORTED_SCHEMA_VERSION`. There is no automatic downgrade: dropping a column this build cannot read would destroy exactly the data the newer build added (INV-STORE-004).
+* A failed migration rolls back completely. The data tables are created **without** `IF NOT EXISTS`, deliberately: a file that already holds a `ctxalloc_source_registration` this build did not create is not an empty database with a coincidence in it, and continuing would write project rows into a table of unknown shape.
+
+Only the mechanism plus migration `0 -> 1` exists. Inventing steps for versions that were never released would be migration code no database can have needed.
+
+### The Scope Key Is Canonical JSON, Because SQLite NULLs Do Not Compare
+
+Logical source uniqueness is exact scope plus source type plus identity namespace plus identity key, and it is the table's primary key.
+
+A nullable `project_id` column would not work: SQLite treats two NULLs as **distinct** in a unique index, so two registrations with no project would both be accepted, and the control plane would silently hold a contradiction (INV-SCOPE-004).
+
+`scope_key` is therefore canonical JSON over the exact `Scope` shape with an absent project written as `null` — injective by construction. `scope_json` is stored beside it because the key is a comparison value, not a record: reconstructing a scope from it would mean deciding what a stored `null` project meant, and the stored scope simply says.
+
+Three tables, and only three:
+
+```text id="pe19d"
+ctxalloc_store_metadata        key, value
+ctxalloc_source_registration   scope_key, scope_json, source_type,
+                               identity_namespace, identity_key, locator,
+                               title, created_at, updated_at, metadata_json,
+                               registration_schema_version
+                               PRIMARY KEY (scope_key, source_type,
+                                            identity_namespace, identity_key)
+ctxalloc_compilation_trace     compilation_id PRIMARY KEY, scope_key, scope_json,
+                               trace_schema_version, envelope_schema_version,
+                               trace_json
+```
+
+All `STRICT`. Without it SQLite would accept a number where a canonical JSON string belongs and hand it back as a number, and a store that returned `7` for a scope would be a store whose reads depend on what some other writer put in the column.
+
+There is **no surrogate row identifier and no autoincrement**: identity is the project's, and a database-generated one would be a second answer to *which source is this?* (INV-BLOCK-001, INV-ADAPTER-002). No read depends on row order.
+
+The trace table has **no `created_at`**. A wall clock is not an input this phase has a port for, and a column filled from `new Date()` inside an adapter would put a hidden non-deterministic value into an audit record (INV-DET-004).
+
+### Trace Writes Are Idempotent for One Record and a Conflict for Another
+
+A `CompilationId` is deterministic, so writing one trace twice is the ordinary consequence of compiling the same thing twice and must succeed.
+
+A **different** record under one identifier is a contradiction in the audit log. It is rejected with `TRACE_CONFLICT` and the original is left exactly as it was; overwriting would destroy the evidence the store exists to keep (INV-ADAPTER-004). The check and the insert run in one immediate transaction.
+
+Equality is **canonical**: a record rebuilt field by field, or round-tripped through a parser that ordered keys differently, is the same record (INV-DET-002).
+
+A read requires the **exact** scope. A record stored under a different scope reads as `null`, indistinguishably from one that does not exist, because distinguishing them would disclose that another scope holds that identifier (INV-SEC-004).
+
+### The Database Path Is Explicit, and No Component Discovers One
+
+```ts id="pe19e"
+{ schemaVersion: 1, databasePath: string }
+```
+
+Exact keys, no coercion, no defaults. No environment variable, no `process.cwd()` fallback, **no `~/.ctxalloc`**, and no search up the directory tree. A store that found its own database would make *which data am I looking at?* depend on where a command happened to be run (INV-DET-003).
+
+The adapter requires an **absolute** path. A relative path is meaningful only against some directory, and the adapter is the wrong layer to choose one — the CLI resolves relative paths against its config file and hands an absolute path down.
+
+**No lifecycle port.** `close()` is declared on `SQLiteControlStore` and `SQLiteTraceStore` and on neither `ControlStore`, `ControlStoreWriter`, nor `TraceStore`: a `close()` on a port would tell every consumer a database exists. There is no connection pool, no module-level cache, and no shared handle — two stores over one file are two independent connections, so closing either cannot break the other.
+
+### Two Application Services Were Extracted, and One Rule Now Has One Owner
+
+**`PrepareLocalCorpusService`.** Source preparation was the first half of `CompileLocalContextService`, reachable only by running a whole compilation. `ctxalloc inspect-blocks` would have had to invent a query, a budget, a policy, a reference time, and a retrieval provider to see a corpus — and its answer would have been shaped by the invented parts. The extraction changed nothing: a regression test asserts the corpus the standalone service prepares is deep-equal to the one the compile service prepares, and that the compilation identifier, compiled context, usage, candidates, and settled trace are unchanged under every permutation of the registrations.
+
+**`source-registration.ts`.** The `SourceRegistration` runtime schema lived inside the compile service, reachable only by the read path. Writing needs the same rules, and a second copy would be a second thing to keep in step: a registration the writer accepted and the compiler then rejected would be a record an operator could store and never use (INV-DEP-003). The module also owns the one canonical registration comparator, used by both the preparation flow and `ctxalloc source list`.
+
+**`LocalSourceRegistryService`** owns control-plane writing: validation, key semantics, canonical listing order, and the translation of a store failure into a project-owned one. **`CompilationTracePersistenceService`** owns the trace/envelope conversion in both directions. Both are the reusable seam a future HTTP API composes against; neither reads a file, chunks, retrieves, or compiles.
+
+### A Dependency Failure Never Escapes With Its Own Wording
+
+A SQLite error routinely carries the SQL text, the database path, and the driver's own message. None of it is the caller's (INV-SEC-001).
+
+Each adapter publishes one project-owned error with a stable code:
+
+```text id="pe19f"
+SQLiteControlStoreError   INVALID_CONFIG  INVALID_INPUT  OPEN_FAILED  MIGRATION_FAILED
+                          UNSUPPORTED_SCHEMA_VERSION  WRITE_FAILED  READ_FAILED
+                          SOURCE_CONFLICT  SOURCE_NOT_FOUND  INVALID_STORED_DATA
+
+SQLiteTraceStoreError     INVALID_CONFIG  INVALID_INPUT  OPEN_FAILED  MIGRATION_FAILED
+                          UNSUPPORTED_SCHEMA_VERSION  WRITE_FAILED  READ_FAILED
+                          TRACE_CONFLICT  INVALID_STORED_DATA
+```
+
+Every code names a real branch, and every one is reached by a test.
+
+The application layer inspects exactly one thing about a thrown value: a **stable project-owned code**, matched by identity against a closed set. `SOURCE_CONFLICT`, `SOURCE_NOT_FOUND`, `TRACE_CONFLICT`, and `INVALID_STORED_DATA` are genuine answers rather than malfunctions, and INV-ADAPTER-003 requires them to stay distinguishable from *the store failed*. Everything else becomes one generic failure. No message, `cause`, or stack is ever read.
+
+Every dynamic value is a **bound parameter** — scope, source type, identity, locator, title, timestamps, metadata, compilation identifier, payload. No SQL string is built by concatenation with data; the only interpolated names are fixed table and column constants.
+
+### The CLI Is a Composition Root, Not a Second Product
+
+`apps/cli` is the outermost layer. It may depend inward on the application services, the adapters, the evaluation harness, the compiler, the domain, the ports, and the tokenizer; **nothing may depend on it** (ARCHITECTURE section 2). It contains no selection logic, no budget arithmetic, no chunking, no retrieval, and no validation rule a component already owns.
+
+Arguments are parsed with `node:util.parseArgs`. Commander and Yargs were not added: no concrete limitation was met, and `parseArgs` in strict mode already rejects an unknown option and a stray positional.
+
+**Nine commands.** The five the MVP requires — `compile`, `trace`, `eval`, `inspect-blocks`, `version` — plus the four the writable control plane needs: `source add`, `source update`, `source remove`, `source list`.
+
+`ctxalloc index` is **not** implemented: persistent retrieval indexing remains future work. `ctxalloc search` is deferred; it would publish a retrieval ranking as a product surface before the ranking has an evaluated contract.
+
+**Configuration is explicit, and relative paths resolve against the config file.** Every command that needs one takes `--config <path>`. There is no discovery of any kind and no `~/.ctxalloc`. `databasePath` and `sourceRoot` may be written relative, and they resolve against the **directory holding the config file**, never `process.cwd()`: a config describes one project's layout, and a path that meant something different depending on where a command was typed would make the config a half-answer. Adapters receive absolute paths only. The outer composition is validated here; `maxCandidates`, the compiler policy, and the chunking policies are validated by the components that own them.
+
+**Structured inputs are explicit JSON files** — `--request`, `--registration`, `--key`, `--scope`, `--case`, `--run-config` — read as strict UTF-8 and strict JSON. No stdin auto-detection, no comment or trailing-comma extension, no format guessing.
+
+**One error envelope, and nothing else on stderr:**
+
+```json id="pe19g"
+{ "schemaVersion": 1, "code": "CTXALLOC_CLI_FAILED", "stage": "...", "issues": [] }
+```
+
+`stage` is one of `arguments`, `config`, `input`, `source-store`, `source-read`, `preparation`, `retrieval`, `compilation`, `trace-store`, `evaluation` — the CLI's own vocabulary, answering *which part of my invocation was wrong?* rather than which class threw. No `SyntaxError`, validation-library error, SQLite error, filesystem error, or stack trace appears. No source content, query, API key, or database path is copied into an issue.
+
+Exit `0` for success, `2` for a usage failure, `1` for a validated operational failure. The split matters to a script: a usage failure will not succeed on retry, and an operational one might. stdout carries success output only; stderr carries the envelope only; there is no progress reporting and no banner.
+
+**`compile` persists the trace after the compiler and before the output.** The compilation runs first and completely — persistence cannot change what was compiled, or the same request would compile differently depending on the state of a database (INV-DET-001). But the success envelope is written only *after* the trace is stored: printing the context and then discovering the write failed hands an operator a compiled context whose audit record does not exist, and no later message takes that back (INV-ADAPTER-004). The envelope carries the compilation identifier, the compiled context, the included block identifiers, usage, and `traceStored` — no prepared corpus, no candidates, no source metadata, and no raw query.
+
+**`inspect-blocks` does not compile**, and it is the one command that publishes block **content**. That is deliberate and documented: an operator who asks to inspect blocks is asking to see them, and a chunk boundary cannot be judged from a hash. Anyone piping its output into a log is copying source text there. `compile` publishes no corpus and `trace` publishes the privacy-minimized trace, which carries no content at all.
+
+**`eval` runs report-only and cannot call a model**, structurally rather than by configuration: the command constructs no `ModelProvider` and no code path in it reaches a model SDK, an API key, or a socket. A run configuration that enables model execution is rejected by the harness before anything is compiled. No secret handling was added merely to claim live execution. Output is an `EvaluationReport` and nothing else — `runSuite` never collects the raw strings, so the compiled context, the query, and any answer are structurally absent rather than filtered out. Nothing is persisted: an evaluation report is not control-plane data and not the audit record of a compilation.
+
+**`version` reads no git revision, clock, hostname, environment variable, or network resource.** It reports the executable name, the package version read from the CLI's own module-relative manifest, and a `cliContractVersion` that is deliberately separate: a build can change without the contract changing, and a script that pins behavior needs the contract.
+
+### The Warning Filter Lives in the Executable
+
+`node:sqlite` emits an `ExperimentalWarning` to stderr on first load. The CLI's contract is that stderr carries the error envelope and nothing else, and a warning printed beside — or instead of — that envelope would break a script's error parsing on a *successful* command.
+
+`bin.ts` therefore installs a narrow filter that drops **only** Node's own experimental notice for SQLite and re-emits every other warning through the default printer. It lives in the executable rather than in the adapter because `process` is global state: a library that removed a warning listener would change the behavior of whatever program imported it, and only a composition root may make that decision.
+
+### What Changed Elsewhere
+
+`@ctxalloc/domain` is **unchanged**. `@ctxalloc/evaluation` is **unchanged**. `@ctxalloc/tokenization` is **unchanged**. `MiniSearchCandidateProvider`, `NodeFileSourceReader`, `AnthropicModelProvider`, and `SystemMonotonicClock` are unchanged.
+
+`@ctxalloc/ports` adds `ControlStoreWriter`, `SourceRegistrationKey`, `StoredCompilationTraceRecord`, and `TraceStore`. `ControlStore` is untouched, and the package still exports no runtime value.
+
+`@ctxalloc/compiler` adds `SettledCompilationTraceValidator` and `PersistedCompilationTraceError`. No stage, schema, issue code, or arithmetic changed.
+
+`@ctxalloc/application` adds `PrepareLocalCorpusService`, `LocalSourceRegistryService`, `CompilationTracePersistenceService`, and `source-registration.ts`, and moves `LocalSourcePipelineError` into a shared module both services raise. `CompileLocalContextService` keeps its constructor, its request contract, its result contract, its error stages, and its exact output.
+
+`@ctxalloc/testing`: `InMemoryControlStore` now implements `ControlStoreWriter` with exactly `SQLiteControlStore`'s semantics and the exact same machine codes. Its constructor stays **permissive** — it stores the initial registrations as configured, duplicates included — because a real store cannot hold two records of one logical source, but a *consumer* must still reject a control plane that contradicts itself, and the only way to test that branch is with a store that can produce the contradiction. `InMemoryTraceStore` is new. One shared contract suite runs against both doubles and both SQLite adapters (INV-ADAPTER-005).
+
+**Previous adapter boundary debt was inspected and deliberately not touched.** `NodeFileSourceReader` already publishes project-owned errors with stable codes and discloses no path; `AnthropicModelProvider` is not reachable from any Phase 19 code path, because `ctxalloc eval` constructs no model provider. No Phase 19 acceptance test reached a raw exception through either, and no new code relies on unsafe behavior in either, so neither was hardened in this phase.
+
+ARCHITECTURE changes: `TraceStore` and `ControlStoreWriter` marked implemented; `SQLiteControlStore` and `SQLiteTraceStore` marked implemented; `apps/cli` marked implemented as the outermost composition root; the dependency direction records that no package may import the CLI.
+
+MVP_SCOPE changes: 3.9 records the two new test doubles; 3.15 marks the CLI implemented and records `index` and `search` as still future; 3.17 records what local persistence does and does not store.
+
+**Deferred, and named so nothing is assumed:** the HTTP API and every route; authentication, OAuth, and multi-user operation; a persistent retrieval index and its lifecycle; semantic, hybrid, and vector retrieval; embeddings; Qdrant and QMD; reranking and query expansion; file watching; a background daemon or job queue; a telemetry backend; evaluation-report persistence; compiled-context persistence; source-content persistence; candidate and block persistence; a model gateway; and pricing or cost accounting.
+
+---
+
 # 4. Rejected Decisions
 
 ## REJ-001: Build a Full AI Operating System

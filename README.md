@@ -9,9 +9,10 @@ or agent framework.
 
 ## Status
 
-Phase 18 — **the compiler kernel is complete, the first local
-source-to-compilation slice is complete, the evaluation harness is complete, and
-the first real lexical candidate provider is complete**.
+Phase 19 — **the compiler kernel is complete, the first local
+source-to-compilation slice is complete, the evaluation harness is complete, the
+first real lexical candidate provider is complete, and the local system now
+survives a process restart and is runnable from a shell**.
 
 `ContextCompiler` composes the kernel stages, settles the rendered budget, and
 returns a `CompilationResult` (Phase 15). `CompileLocalContextService` carries
@@ -63,6 +64,52 @@ local files
   -> CompilationResult + settled trace
 ```
 
+Until Phase 19 all of it lived in one process and vanished with it. Local
+persistence and a minimal CLI change that:
+
+```text
+ctxalloc source add     -> SQLite    (registration persisted)
+  process exits
+ctxalloc source list    -> SQLite    (same registration)
+
+ctxalloc compile        -> the whole flow above, then the settled trace persisted
+  process exits
+ctxalloc trace          -> SQLite    (the same settled trace, exactly)
+```
+
+SQLite is the local **control and audit** store, over the Node runtime's
+built-in `node:sqlite` — **no external dependency, and no ORM**. It holds source
+registrations and settled compilation traces, and deliberately holds no source
+content, no blocks, no candidates, no compiled context, no evaluation runs, and
+no retrieval index: the original files remain the content authority. The database
+path is explicit configuration; there is no environment variable, no
+`process.cwd()` fallback, and no `~/.ctxalloc` default.
+
+Reading and writing the control plane are two separate ports, so a consumer that
+only lists sources is never handed the ability to remove one, and there is no
+`upsert` — an operator who mistyped an identity learns whether they created
+something or replaced it. A trace write is idempotent for the same record and a
+named conflict for a different record under one deterministic compilation
+identifier: the original audit record is never overwritten.
+
+A trace read back from a store is treated as external data and validated before
+it is published, including that its envelope and its payload agree on scope and
+identifier. That validation reconstructs nothing — it re-scores nothing,
+re-renders nothing, recomputes no digest, and calls no tokenizer, provider,
+model, or clock.
+
+`ctxalloc` is a composition root, not a second product: it parses arguments,
+reads explicit JSON files, composes the same services a future HTTP API will, and
+serializes the result. `compile` persists the trace **after** the compilation
+completes and **before** it prints anything, so an operator never receives a
+compiled context whose audit record does not exist. `inspect-blocks` runs
+preparation only and is the one command that shows block content — deliberately,
+because an operator who asks to inspect blocks is asking to see them. `eval` is
+report-only and constructs no model provider at all, so no invocation of it can
+call a model. stdout carries success output only, stderr carries one
+machine-readable error envelope only, and no `SyntaxError`, SQLite error,
+filesystem error, or stack trace reaches either.
+
 Its search mode is stated rather than inherited: terms are combined with **OR**,
 matching is exact, and the BM25+ parameters are the library's pinned defaults
 written out in the adapter — none of which changes a score, all of which stops a
@@ -78,8 +125,11 @@ retrieval malfunctioned. Retrieval proposes; the compiler selects. The technolog
 and the primary candidate it names was rejected on measured evidence
 ([docs/RETRIEVAL_SPIKE.md](./docs/RETRIEVAL_SPIKE.md)).
 
-Phases 17 and 18 add **no** compiler selection behavior. The compiler calls no
-model, reads no clock, and cannot tell which provider produced a candidate.
+Phases 17, 18, and 19 add **no** compiler selection behavior. The compiler calls
+no model, reads no clock, opens no database, and cannot tell which provider
+produced a candidate. Persistence cannot change what was compiled: a compilation
+is a pure function of its inputs, and the settled trace is stored after the
+result exists.
 
 The repository contains the TypeScript monorepo scaffolding from Phase 1
 (workspace structure, strict compiler and linting configuration, test
@@ -88,29 +138,34 @@ domain model in `@ctxalloc/domain` (scope, identifiers, content hash values,
 JSON-safe metadata, source types, source locations, `SourceDocument`,
 `ContextBlock`, `TokenBudget`, and a structured validation API), six
 project-owned type-only ports in `@ctxalloc/ports` (`Tokenizer`, `SourceReader`,
-`ControlStore`, `CandidateProvider`, `ModelProvider`, `MonotonicClock`), six
-deterministic test doubles in `@ctxalloc/testing` (`FakeTokenizer`,
-`InMemorySourceReader`, `InMemoryControlStore`, `FakeCandidateProvider`,
-`FakeModelProvider`, `FakeMonotonicClock`) with a reusable tokenizer contract
-test suite, a real offline tokenizer adapter in `@ctxalloc/tokenization`, the
-real local file reader, model adapter, monotonic clock, and lexical candidate
-provider in `@ctxalloc/adapters`, the application use cases in `@ctxalloc/application`
-(source ingestion, Markdown, plain-text, and conversation chunking, and the local
-compilation service), the compiler kernel in `@ctxalloc/compiler` — structural
-request and policy validation plus nine components: `CandidateValidator`,
-`CandidateDeduplicator`, `CandidateScorer`, `CandidateFilter`, `BudgetAllocator`,
-`ContextOrderer`, `ContextRenderer`, the observational `TraceBuilder`, and
-`ContextCompiler` — and the evaluation harness in `@ctxalloc/evaluation` with a
-versioned benchmark dataset under `benchmarks/evaluation/v1/`, plus a versioned
-retrieval dataset under `benchmarks/retrieval/v1/`.
+`ControlStore`, `ControlStoreWriter`, `CandidateProvider`, `TraceStore`,
+`ModelProvider`, `MonotonicClock`), seven deterministic test doubles in
+`@ctxalloc/testing` (`FakeTokenizer`, `InMemorySourceReader`,
+`InMemoryControlStore`, `InMemoryTraceStore`, `FakeCandidateProvider`,
+`FakeModelProvider`, `FakeMonotonicClock`) with reusable tokenizer, control-store,
+and trace-store contract suites that run against the doubles and the shipped
+adapters alike, a real offline tokenizer adapter in `@ctxalloc/tokenization`, the
+real local file reader, model adapter, monotonic clock, lexical candidate
+provider, and the two SQLite stores in `@ctxalloc/adapters`, the application use
+cases in `@ctxalloc/application` (source ingestion, Markdown, plain-text, and
+conversation chunking, local corpus preparation, the local compilation service,
+control-plane management, and trace persistence), the compiler kernel in
+`@ctxalloc/compiler` — structural request and policy validation plus nine
+components: `CandidateValidator`, `CandidateDeduplicator`, `CandidateScorer`,
+`CandidateFilter`, `BudgetAllocator`, `ContextOrderer`, `ContextRenderer`, the
+observational `TraceBuilder`, and `ContextCompiler`, plus
+`SettledCompilationTraceValidator` for stored traces — the evaluation harness in
+`@ctxalloc/evaluation` with a versioned benchmark dataset under
+`benchmarks/evaluation/v1/` and a versioned retrieval dataset under
+`benchmarks/retrieval/v1/`, and the `ctxalloc` command line in `apps/cli`.
 
-**The product is not complete.** Semantic and hybrid retrieval, embeddings, a
-vector database, reranking, query expansion, a persistent retrieval index and its
-lifecycle, persistence and SQLite, control-plane writing, trace persistence, the
-CLI, the HTTP API, pricing and cost, LLM-as-judge scoring, and multi-model routing
-remain later phases. Phase 18 retrieval is **lexical only** — it matches words,
-not meaning, and a paraphrase sharing no term with the corpus is a legitimate
-miss.
+**The product is not complete.** The HTTP API, authentication and multi-user
+operation, semantic and hybrid retrieval, embeddings, a vector database,
+reranking, query expansion, a persistent retrieval index and its lifecycle, file
+watching, evaluation-report persistence, pricing and cost, LLM-as-judge scoring,
+and multi-model routing remain later phases. Retrieval is **lexical only** — it
+matches words, not meaning, and a paraphrase sharing no term with the corpus is a
+legitimate miss. `ctxalloc index` and `ctxalloc search` are not implemented.
 
 **No benchmark acceptance gate is claimed.** The harness runs; the MVP targets in
 [Metrics](./docs/METRICS.md) remain unmet until a real run reports them. CtxAlloc
@@ -724,25 +779,90 @@ pnpm install
 
 ## Workspace commands
 
-| Command                   | Description                                                                      |
-| ------------------------- | -------------------------------------------------------------------------------- |
-| `pnpm build`              | Emit declarations and compiled output for all packages (`tsc -b`).               |
-| `pnpm typecheck`          | Type-check packages, apps, tests, and configuration without emitting.            |
-| `pnpm lint`               | Run ESLint over the workspace.                                                   |
-| `pnpm test`               | Run the Vitest suite.                                                            |
-| `pnpm format`             | Format supported files with Prettier.                                            |
-| `pnpm format:check`       | Verify formatting without writing changes.                                       |
-| `pnpm check:boundaries`   | Validate internal package dependencies against the allowlist.                    |
-| `pnpm check:declarations` | Validate the generated declaration surface. Requires a preceding `pnpm build`.   |
-| `pnpm check`              | Run `format:check`, `lint`, `typecheck`, `test`, and boundaries. Writes nothing. |
-| `pnpm clean`              | Remove generated build artifacts.                                                |
+| Command                   | Description                                                                        |
+| ------------------------- | ---------------------------------------------------------------------------------- |
+| `pnpm build`              | Emit declarations and compiled output for all packages (`tsc -b`).                 |
+| `pnpm typecheck`          | Type-check packages, apps, tests, and configuration without emitting.              |
+| `pnpm lint`               | Run ESLint over the workspace.                                                     |
+| `pnpm test`               | Run the Vitest suite.                                                              |
+| `pnpm format`             | Format supported files with Prettier.                                              |
+| `pnpm format:check`       | Verify formatting without writing changes.                                         |
+| `pnpm check:boundaries`   | Validate internal package dependencies against the allowlist.                      |
+| `pnpm check:declarations` | Validate the generated declaration surface. Requires a preceding `pnpm build`.     |
+| `pnpm smoke:cli`          | Run the built `ctxalloc` executable end to end. Requires a preceding `pnpm build`. |
+| `pnpm check`              | Run `format:check`, `lint`, `typecheck`, `test`, and boundaries. Writes nothing.   |
+| `pnpm clean`              | Remove generated build artifacts.                                                  |
 
 `pnpm check` is non-mutating: it never builds and never creates a `dist` directory.
-Declaration validation runs after a build, as CI does:
+Declaration validation and the built-executable smoke test run after a build, as
+CI does:
 
 ```bash
-pnpm check && pnpm build && pnpm check:declarations
+pnpm check && pnpm build && pnpm check:declarations && pnpm smoke:cli
 ```
+
+## Running the CLI
+
+The `ctxalloc` executable is built by `pnpm build` and lives at
+`apps/cli/dist/bin.js`. Nothing is installed globally.
+
+Every command that touches state takes an explicit `--config <path>`. There is no
+configuration discovery, no environment variable, and no `~/.ctxalloc` fallback,
+and relative paths inside the config resolve against the **config file's own
+directory** rather than the working directory:
+
+```json
+{
+  "schemaVersion": 1,
+  "databasePath": "./ctxalloc.sqlite",
+  "sourceRoot": "./vault",
+  "maxSourceBytes": 1000000,
+  "candidateProvider": { "schemaVersion": 1, "maxCandidates": 100 },
+  "localCompile": {
+    "schemaVersion": 1,
+    "compiler": { "...": "ContextCompilerConfig" },
+    "markdownChunking": { "targetTokens": 400, "maxTokens": 800 },
+    "textChunking": { "targetTokens": 400, "maxTokens": 800 }
+  }
+}
+```
+
+```bash
+node apps/cli/dist/bin.js version
+
+# Control plane. State survives the process that wrote it.
+node apps/cli/dist/bin.js source add    --config ctxalloc.config.json --registration source.json
+node apps/cli/dist/bin.js source update --config ctxalloc.config.json --registration source.json
+node apps/cli/dist/bin.js source remove --config ctxalloc.config.json --key key.json
+node apps/cli/dist/bin.js source list   --config ctxalloc.config.json --scope scope.json
+
+# What the corpus actually contains. No retrieval, no compiler, no trace write.
+# This is the one command that prints block content.
+node apps/cli/dist/bin.js inspect-blocks --config ctxalloc.config.json --scope scope.json
+
+# The whole local flow, then the settled trace persisted.
+node apps/cli/dist/bin.js compile --config ctxalloc.config.json --request request.json
+
+# The persisted audit record, exactly as stored, in a later process.
+node apps/cli/dist/bin.js trace --config ctxalloc.config.json --scope scope.json --id sha256:...
+
+# The evaluation harness, report-only and offline.
+node apps/cli/dist/bin.js eval --config ctxalloc.config.json \
+  --run-config run-config.json --case case.json
+```
+
+Every structured input is an explicit JSON file, parsed strictly. stdout carries
+success output only; stderr carries one machine-readable envelope only:
+
+```json
+{ "schemaVersion": 1, "code": "CTXALLOC_CLI_FAILED", "stage": "compilation", "issues": [] }
+```
+
+Exit `0` for success, `2` for a usage failure (an unknown command, a missing or
+unknown option), `1` for a validated operational failure. The split matters to a
+script: a usage failure will not succeed on retry, and an operational one might.
+
+`ctxalloc index` and `ctxalloc search` are **not** implemented.
 
 ## Workspaces
 
@@ -764,17 +884,23 @@ packages/
 Allowed internal dependency direction (enforced by `pnpm check:boundaries`):
 
 ```text
-apps -> application -> compiler -> ports -> domain
-                evaluation -> compiler -> ports -> domain
-                  adapters -> ports -> domain
+apps/cli -> application -> compiler -> ports -> domain
+         -> adapters    -> ports     -> domain
+         -> evaluation  -> compiler  -> ports -> domain
+         -> tokenization
 ```
 
+`apps/cli` is the outermost composition root: it may depend inward on every
+package, and **no package may depend on it**.
+
 `@ctxalloc/adapters` is the only workspace that touches a filesystem, a network,
-or a platform clock, and the only one that may depend on an external retrieval
-library. It depends on `@ctxalloc/ports`, on `@ctxalloc/domain` for the
+a database, or a platform clock, and the only one that may depend on an external
+retrieval library. It depends on `@ctxalloc/ports`, on `@ctxalloc/domain` for the
 project-owned types the ports already speak, and on one exactly pinned lexical
 search library — never on the compiler kernel: an adapter that could see the
-kernel could make a selection decision.
+kernel could make a selection decision. Its SQLite support uses the Node
+runtime's built-in `node:sqlite` and adds no dependency at all; `DatabaseSync`
+and every other driver type stop inside the package.
 
 `@ctxalloc/evaluation` sits above the compiler and deliberately **not** on
 `@ctxalloc/application`: a benchmark case is static data, so the measurement

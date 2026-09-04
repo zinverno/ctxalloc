@@ -35,6 +35,11 @@ const SOURCE_FILES = [
   'packages/application/src/conversation-source.ts',
   'packages/application/src/conversation-chunker.ts',
   'packages/application/src/compile-local-context-service.ts',
+  'packages/application/src/local-source-pipeline.ts',
+  'packages/application/src/source-registration.ts',
+  'packages/application/src/prepare-local-corpus-service.ts',
+  'packages/application/src/local-source-registry-service.ts',
+  'packages/application/src/compilation-trace-persistence-service.ts',
 ] as const;
 
 function readSource(relativePath: string): string {
@@ -51,6 +56,8 @@ describe('@ctxalloc/application public API', () => {
   it('exports the implemented use cases and their error types only', () => {
     expect(Object.keys(application).sort()).toEqual([
       'CONVERSATION_SOURCE_SCHEMA_VERSION',
+      'CompilationTracePersistenceError',
+      'CompilationTracePersistenceService',
       'CompileLocalContextService',
       'ConversationChunker',
       'ConversationChunkingError',
@@ -58,18 +65,35 @@ describe('@ctxalloc/application public API', () => {
       'ConversationSourceValidationError',
       'LOCAL_COMPILATION_REQUEST_SCHEMA_VERSION',
       'LOCAL_COMPILE_SERVICE_CONFIG_SCHEMA_VERSION',
+      'LOCAL_SOURCE_REGISTRY_REQUEST_SCHEMA_VERSION',
       'LocalSourcePipelineError',
+      'LocalSourceRegistryError',
+      'LocalSourceRegistryService',
       'MarkdownChunker',
       'MarkdownChunkingError',
       'MarkdownChunkingValidationError',
+      'PREPARE_LOCAL_CORPUS_CONFIG_SCHEMA_VERSION',
+      'PREPARE_LOCAL_CORPUS_REQUEST_SCHEMA_VERSION',
+      'PrepareLocalCorpusService',
+      'SOURCE_REGISTRATION_KEY_SCHEMA_VERSION',
+      'SOURCE_REGISTRATION_SCHEMA_VERSION',
+      'STORED_COMPILATION_TRACE_RECORD_SCHEMA_VERSION',
       'SourceIngestionValidationError',
+      'SourceRegistrationValidationError',
       'TextChunker',
       'TextChunkingError',
       'TextChunkingValidationError',
+      'compareContextBlocks',
+      'compareSourceRegistrations',
       'ingestConversationSource',
       'ingestSource',
       'parseConversationSourceJson',
+      'parseSourceRegistration',
+      'parseSourceRegistrationKey',
+      'sourceRegistrationLogicalKey',
       'validateConversationSourcePayload',
+      'validateSourceRegistration',
+      'validateSourceRegistrationKey',
     ]);
   });
 
@@ -92,6 +116,11 @@ describe('@ctxalloc/application public API', () => {
       'tryCanonicalRecordJson',
       'tryCloneJsonRecord',
       'cloneRecord',
+      'underField',
+      'issuesOf',
+      'build',
+      'validatePort',
+      'compareCodeUnits',
     ]) {
       expect(Object.keys(application), `exports ${name}`).not.toContain(name);
     }
@@ -102,6 +131,7 @@ describe('@ctxalloc/application public API', () => {
       .map((match) => match[1])
       .sort();
     expect(exported).toEqual([
+      'CompilationTracePersistenceIssueCode',
       'ConversationChunkingErrorCode',
       'ConversationIngestionInput',
       'ConversationSourceMessage',
@@ -112,9 +142,15 @@ describe('@ctxalloc/application public API', () => {
       'LocalCompilationResult',
       'LocalCompileServiceConfig',
       'LocalSourcePipelineStage',
+      'LocalSourceRegistryIssueCode',
+      'LocalSourceRegistryRequest',
+      'LocalSourceRegistryResult',
       'MarkdownChunkingErrorCode',
       'MarkdownChunkingOptions',
       'MarkdownChunkingRange',
+      'PrepareLocalCorpusConfig',
+      'PrepareLocalCorpusRequest',
+      'PreparedLocalCorpus',
       'SourceIdentity',
       'SourceIngestionInput',
       'TextChunkingErrorCode',

@@ -16,6 +16,12 @@
  * (DEC-040). Neither derives anything from its input: the model double answers
  * only from its script, and the clock double reads only the sequence it was
  * given.
+ *
+ * `InMemoryControlStore` and `InMemoryTraceStore` are the in-memory halves of
+ * the persistence contracts (DEC-042). Each publishes the **exact** machine
+ * codes its SQLite counterpart does and is run against the same shared contract
+ * suite, so a store test written on a double is a test of shipped behavior
+ * rather than of the double (INV-ADAPTER-005).
  */
 
 export {
@@ -48,8 +54,17 @@ export {
 export {
   InMemoryControlStore,
   InMemoryControlStoreConfigurationError,
+  InMemoryControlStoreWriteError,
   type InMemoryControlStoreOptions,
+  type InMemoryControlStoreWriteErrorCode,
 } from './in-memory-control-store.js';
+export {
+  InMemoryTraceStore,
+  InMemoryTraceStoreConfigurationError,
+  InMemoryTraceStoreError,
+  type InMemoryTraceStoreErrorCode,
+  type InMemoryTraceStoreOptions,
+} from './in-memory-trace-store.js';
 export {
   InMemorySourceReader,
   InMemorySourceReaderConfigurationError,

@@ -120,6 +120,7 @@ const SOURCE_FILES = [
   'packages/compiler/src/candidate-filter.ts',
   'packages/compiler/src/compilation-policy.ts',
   'packages/compiler/src/compilation-request.ts',
+  'packages/compiler/src/persisted-trace.ts',
   'packages/compiler/src/canonical-json.ts',
   'packages/compiler/src/validation-issues.ts',
 ] as const;
@@ -176,6 +177,8 @@ describe('@ctxalloc/compiler public API', () => {
         'ContextCompiler',
         'RENDER_AWARE_CORRECTION_STRATEGY',
         'RENDER_AWARE_CORRECTION_VERSION',
+        'PersistedCompilationTraceError',
+        'SettledCompilationTraceValidator',
       ].sort(),
     );
   });
@@ -270,6 +273,7 @@ describe('@ctxalloc/compiler public API', () => {
       'FilteredCandidateSet',
       'IncludedCandidateDecision',
       'OrderedCandidateSet',
+      'PersistedCompilationTraceIssueCode',
       'PolicyEligibleCandidateDecision',
       'PolicyValueSource',
       'RecencyScoreComponent',

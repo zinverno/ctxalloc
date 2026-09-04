@@ -91,12 +91,19 @@ describe('InMemoryControlStore', () => {
     expect(second[0]?.metadata).toEqual({ path: 'a.md' });
   });
 
-  it('exposes no write API in this phase', () => {
+  it('exposes exactly the two port contracts and no convenience mutator', () => {
+    // The three write methods arrived with `ControlStoreWriter` in Phase 19
+    // (DEC-042). Nothing beyond the two ports is published: a `save` or a
+    // `clear` would be a capability no real store has, and a test built on one
+    // would be testing the double (INV-ADAPTER-005).
     const store: Record<string, unknown> = new InMemoryControlStore([]) as unknown as Record<
       string,
       unknown
     >;
-    for (const method of ['registerSource', 'updateSource', 'removeSource', 'save', 'clear']) {
+    for (const method of ['listSources', 'registerSource', 'updateSource', 'removeSource']) {
+      expect(typeof store[method], `is missing ${method}`).toBe('function');
+    }
+    for (const method of ['save', 'clear', 'reset', 'upsertSource', 'deleteSource']) {
       expect(typeof store[method], `defines ${method}`).toBe('undefined');
     }
   });

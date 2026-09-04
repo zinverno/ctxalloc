@@ -1,11 +1,19 @@
 import { readFileSync } from 'node:fs';
-import type { CandidateProvider, ControlStore, SourceReader, Tokenizer } from '@ctxalloc/ports';
+import type {
+  CandidateProvider,
+  ControlStore,
+  ControlStoreWriter,
+  SourceReader,
+  Tokenizer,
+  TraceStore,
+} from '@ctxalloc/ports';
 import * as testing from '@ctxalloc/testing';
 import {
   FakeCandidateProvider,
   FakeTokenizer,
   InMemoryControlStore,
   InMemorySourceReader,
+  InMemoryTraceStore,
 } from '@ctxalloc/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -17,6 +25,7 @@ const SOURCE_FILES = [
   'packages/testing/src/in-memory-source-reader.ts',
   'packages/testing/src/in-memory-control-store.ts',
   'packages/testing/src/fake-candidate-provider.ts',
+  'packages/testing/src/in-memory-trace-store.ts',
 ] as const;
 
 interface Manifest {
@@ -34,7 +43,7 @@ function readSource(relativePath: string): string {
 }
 
 describe('@ctxalloc/testing public API', () => {
-  it('exports the six doubles and their error types from the package entry point', () => {
+  it('exports the seven doubles and their error types from the package entry point', () => {
     expect(Object.keys(testing).sort()).toEqual([
       'FakeCandidateProvider',
       'FakeCandidateProviderError',
@@ -50,18 +59,22 @@ describe('@ctxalloc/testing public API', () => {
       'FakeTokenizerUnknownTextError',
       'InMemoryControlStore',
       'InMemoryControlStoreConfigurationError',
+      'InMemoryControlStoreWriteError',
       'InMemorySourceReader',
       'InMemorySourceReaderConfigurationError',
       'InMemorySourceReaderUnknownLocatorError',
+      'InMemoryTraceStore',
+      'InMemoryTraceStoreConfigurationError',
+      'InMemoryTraceStoreError',
     ]);
   });
 
   it('exports a double only for a port that exists', () => {
     // `FakeModelProvider` and `FakeMonotonicClock` arrived with their ports in
-    // Phase 17. A trace store and a general wall clock still have no port, and a
-    // fake for one would invite a test to depend on a contract nothing
-    // implements (DEC-040).
-    for (const name of ['InMemoryTraceStore', 'FakeTraceStore', 'FakeClock', 'FakeWallClock']) {
+    // Phase 17, and `InMemoryTraceStore` with `TraceStore` in Phase 19. A
+    // general wall clock still has no port, and a fake for one would invite a
+    // test to depend on a contract nothing implements (DEC-040, DEC-042).
+    for (const name of ['FakeClock', 'FakeWallClock', 'FakeWallClockProvider']) {
       expect(Object.keys(testing), `exports ${name}`).not.toContain(name);
     }
   });
@@ -73,12 +86,14 @@ describe('@ctxalloc/testing public API', () => {
     expect(typeof tokenizer.version).toBe('string');
   });
 
-  it('INV-ADAPTER-005: provides implementations assignable to the three new ports', () => {
+  it('INV-ADAPTER-005: provides implementations assignable to the local ports', () => {
     const reader: SourceReader = new InMemorySourceReader([{ locator: 'a.md', content: '# A' }]);
     const store: ControlStore = new InMemoryControlStore([]);
+    const writer: ControlStoreWriter = new InMemoryControlStore([]);
+    const traces: TraceStore = new InMemoryTraceStore();
     const provider: CandidateProvider = new FakeCandidateProvider();
 
-    for (const port of [reader, store, provider]) {
+    for (const port of [reader, store, writer, traces, provider]) {
       expect(typeof port.id).toBe('string');
       expect(port.id.length).toBeGreaterThan(0);
       expect(typeof port.version).toBe('string');
@@ -86,6 +101,11 @@ describe('@ctxalloc/testing public API', () => {
     }
     expect(typeof reader.read).toBe('function');
     expect(typeof store.listSources).toBe('function');
+    expect(typeof writer.registerSource).toBe('function');
+    expect(typeof writer.updateSource).toBe('function');
+    expect(typeof writer.removeSource).toBe('function');
+    expect(typeof traces.putTrace).toBe('function');
+    expect(typeof traces.getTrace).toBe('function');
     expect(typeof provider.getCandidates).toBe('function');
   });
 
@@ -115,7 +135,15 @@ describe('@ctxalloc/testing public API', () => {
 
   it('contains no real tokenizer, retrieval, or filesystem implementation', () => {
     for (const file of SOURCE_FILES) {
-      const source = readSource(file).toLowerCase();
+      // Documentation is stripped first. A double's comment legitimately names
+      // the real adapter whose behavior it mirrors — `InMemoryTraceStore` says
+      // it matches `SQLiteTraceStore` conflict semantics, which is exactly the
+      // claim its contract test proves — and this check is about what the double
+      // *does*, not what its prose refers to.
+      const source = readSource(file)
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '')
+        .toLowerCase();
       for (const name of [
         'tiktoken',
         'transformers',

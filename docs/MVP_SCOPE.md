@@ -840,19 +840,31 @@ Implemented:
 * `FakeTokenizer` (DEC-027);
 * `FakeCandidateProvider` (DEC-039), which performs no retrieval at all: it reads
   no query, computes no similarity, and invents no relevance score;
-* `InMemoryControlStore` (DEC-039), which filters by exact scope and has no write
-  API;
+* `InMemoryControlStore` (DEC-039, DEC-042), which filters by exact scope and now
+  implements `ControlStoreWriter` with exactly `SQLiteControlStore`'s semantics
+  and machine codes. Its constructor stays permissive — it stores the initial
+  registrations as configured, duplicates included — because a consumer must
+  still reject a control plane that contradicts itself, and the only way to test
+  that branch is with a store that can produce the contradiction;
 * `InMemorySourceReader` (DEC-039), which maps an exact locator to exact content
   and resolves no path;
 * `FakeModelProvider` (DEC-040), which answers only from its script: it reads no
   query, inspects no context, generates no text, and invents no token usage;
 * `FakeMonotonicClock` (DEC-040), which returns only the readings it was given
-  and fails explicitly when they run out.
+  and fails explicitly when they run out;
+* `InMemoryTraceStore` (DEC-042), which answers only for the exact scope it is
+  asked about, is idempotent for one record, and conflicts on a different record
+  under one compilation identifier.
+
+One shared contract suite runs `InMemoryControlStore` and `InMemoryTraceStore`
+against the *same* assertions as `SQLiteControlStore` and `SQLiteTraceStore`, so
+a test written on a double is a test of shipped behaviour and a divergence is a
+failure here rather than a production surprise (INV-ADAPTER-005).
 
 Future:
 
-* a trace-store double, which arrives with the `TraceStore` port it stands in
-  for.
+* a document-converter and an embedding-provider double, each of which arrives
+  with the port it stands in for.
 
 These implementations allow the complete compiler and local application suite to run without external infrastructure. A test double must never contain product logic: a fake that scored candidates would be retrieval logic living in the test package.
 
@@ -1012,9 +1024,9 @@ benchmark that runs is not a benchmark that has passed.
 
 ### 3.15 CLI
 
-The MVP includes a minimal CLI for development and validation.
+Implemented as `apps/cli`, publishing the `ctxalloc` executable (DEC-042).
 
-Required commands:
+Required commands, all implemented:
 
 ```text
 ctxalloc compile
@@ -1024,13 +1036,48 @@ ctxalloc inspect-blocks
 ctxalloc version
 ```
 
-Optional commands after the core works:
+Writable control-plane commands, all implemented:
 
 ```text
 ctxalloc source add
-ctxalloc index
-ctxalloc search
+ctxalloc source update
+ctxalloc source remove
+ctxalloc source list
 ```
+
+Still future:
+
+```text
+ctxalloc index      persistent retrieval indexing remains future work
+ctxalloc search     deferred: it would publish a retrieval ranking as a product
+                    surface before the ranking has an evaluated contract
+```
+
+The CLI is a composition root, not a second product implementation. It parses
+arguments with `node:util.parseArgs`, reads explicit JSON input files, composes
+the same application services and adapters a future HTTP API will, and
+serializes the result. No package may import it.
+
+Contract:
+
+* every command that needs configuration takes `--config <path>`; there is no
+  discovery, no environment variable, and no `~/.ctxalloc` fallback;
+* relative `databasePath` and `sourceRoot` resolve against the **config file's
+  own directory**, never `process.cwd()`; adapters receive absolute paths;
+* structured inputs are explicit JSON files, parsed strictly, with no stdin
+  auto-detection and no comment or trailing-comma extension;
+* stdout carries success output only; stderr carries one machine-readable error
+  envelope only; there is no progress reporting and no banner;
+* exit `0` for success, `2` for a usage failure, `1` for a validated operational
+  failure;
+* `compile` persists the settled trace **after** the compilation completes and
+  **before** it publishes any output, so an operator never receives a compiled
+  context whose audit record does not exist;
+* `inspect-blocks` runs preparation only — no retrieval, no compiler, no trace
+  write — and is the one command that publishes block **content**, because an
+  operator who asks to inspect blocks is asking to see them;
+* `eval` is report-only and constructs no `ModelProvider`, so no invocation of it
+  can call a model.
 
 The CLI is not required to provide a polished interactive interface.
 
@@ -1056,15 +1103,46 @@ Business logic must not be implemented inside HTTP route handlers.
 
 ### 3.17 Local Persistence
 
-SQLite may be used for:
+Implemented over the Node runtime's built-in `node:sqlite`, with **no external
+dependency and no ORM** (DEC-042).
 
-* compiler traces;
-* source records;
-* evaluation runs;
-* configuration metadata;
-* indexing state.
+SQLite is the local **control and audit** store. It holds exactly two kinds of
+record:
 
-The compiler domain must not import SQLite-specific code.
+* **source registrations** — which sources exist in a scope, with their locator,
+  title, timestamps, and metadata. Written by `ctxalloc source add|update|remove`
+  through `ControlStoreWriter`;
+* **settled compilation traces** — the privacy-minimized audit record of one
+  compilation, stored as a JSON envelope through `TraceStore`.
+
+It deliberately does **not** hold source content, blocks, candidates, compiled
+context, model answers, evaluation runs, or a retrieval index. The original files
+remain the content authority (INV-STORE-001, INV-STORE-002).
+
+Control-plane **writing** is a distinct capability behind a distinct port, so a
+consumer that only lists sources is never handed the ability to remove one. There
+is no `upsert`: `registerSource` is insert-only and conflicts on an existing
+logical key, `updateSource` requires an existing key and never creates, and
+`removeSource` answers `true` or `false` rather than failing on absence.
+
+Trace persistence is idempotent for the same record and a `TRACE_CONFLICT` for a
+different record under one deterministic compilation identifier; the original is
+never overwritten (INV-ADAPTER-004).
+
+The database path is explicit configuration — no environment variable, no
+`process.cwd()` fallback, no home-directory default. The database schema version
+is explicit, initialization and migration are transactional, a newer database
+fails clearly, and there is no automatic downgrade (INV-STORE-003,
+INV-STORE-004).
+
+The compiler domain must not import SQLite-specific code, and does not: every
+driver type stops inside `@ctxalloc/adapters`.
+
+Still future:
+
+* evaluation-run persistence;
+* indexing state and a persistent retrieval index;
+* configuration metadata beyond the schema version.
 
 Filesystem storage may be used for:
 

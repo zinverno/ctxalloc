@@ -22,6 +22,8 @@ const DECLARATIONS = [
   'packages/ports/dist/tokenizer.d.ts',
   'packages/ports/dist/source-reader.d.ts',
   'packages/ports/dist/control-store.d.ts',
+  'packages/ports/dist/control-store-writer.d.ts',
+  'packages/ports/dist/trace-store.d.ts',
   'packages/ports/dist/candidate-provider.d.ts',
   'packages/ports/dist/model-provider.d.ts',
   'packages/ports/dist/monotonic-clock.d.ts',
@@ -29,6 +31,7 @@ const DECLARATIONS = [
   'packages/testing/dist/fake-tokenizer.d.ts',
   'packages/testing/dist/in-memory-source-reader.d.ts',
   'packages/testing/dist/in-memory-control-store.d.ts',
+  'packages/testing/dist/in-memory-trace-store.d.ts',
   'packages/testing/dist/fake-candidate-provider.d.ts',
   'packages/testing/dist/fake-model-provider.d.ts',
   'packages/testing/dist/fake-monotonic-clock.d.ts',
@@ -41,11 +44,19 @@ const DECLARATIONS = [
   'packages/application/dist/conversation-source.d.ts',
   'packages/application/dist/conversation-chunker.d.ts',
   'packages/application/dist/compile-local-context-service.d.ts',
+  'packages/application/dist/local-source-pipeline.d.ts',
+  'packages/application/dist/source-registration.d.ts',
+  'packages/application/dist/prepare-local-corpus-service.d.ts',
+  'packages/application/dist/local-source-registry-service.d.ts',
+  'packages/application/dist/compilation-trace-persistence-service.d.ts',
   'packages/adapters/dist/index.d.ts',
   'packages/adapters/dist/node-file-source-reader.d.ts',
   'packages/adapters/dist/anthropic-model-provider.d.ts',
   'packages/adapters/dist/system-monotonic-clock.d.ts',
   'packages/adapters/dist/minisearch-candidate-provider.d.ts',
+  'packages/adapters/dist/sqlite-control-store.d.ts',
+  'packages/adapters/dist/sqlite-trace-store.d.ts',
+  'packages/adapters/dist/sqlite-store-config.d.ts',
   'packages/domain/dist/index.d.ts',
   'packages/domain/dist/candidate-block.d.ts',
   'packages/domain/dist/block-content-hash.d.ts',
@@ -63,6 +74,7 @@ const DECLARATIONS = [
   'packages/compiler/dist/request-fingerprint.d.ts',
   'packages/compiler/dist/compilation-id.d.ts',
   'packages/compiler/dist/context-compiler.d.ts',
+  'packages/compiler/dist/persisted-trace.d.ts',
   'packages/evaluation/dist/index.d.ts',
   'packages/evaluation/dist/evaluation-case.d.ts',
   'packages/evaluation/dist/evaluation-run-config.d.ts',
@@ -73,6 +85,11 @@ const DECLARATIONS = [
   'packages/evaluation/dist/evaluation-harness.d.ts',
   'packages/evaluation/dist/token-measurement.d.ts',
   'packages/evaluation/dist/model-provider-result.d.ts',
+  'apps/cli/dist/index.d.ts',
+  'apps/cli/dist/run-cli.d.ts',
+  'apps/cli/dist/config.d.ts',
+  'apps/cli/dist/errors.d.ts',
+  'apps/cli/dist/commands/version.d.ts',
 ];
 
 // Declarations may reference workspace packages and their own relative files
@@ -185,12 +202,16 @@ const PORT_DECLARATIONS = [
   'packages/ports/dist/tokenizer.d.ts',
   'packages/ports/dist/source-reader.d.ts',
   'packages/ports/dist/control-store.d.ts',
+  'packages/ports/dist/control-store-writer.d.ts',
+  'packages/ports/dist/trace-store.d.ts',
   'packages/ports/dist/candidate-provider.d.ts',
   'packages/ports/dist/model-provider.d.ts',
   'packages/ports/dist/monotonic-clock.d.ts',
 ];
 
 const PORT_FORBIDDEN_TYPES = [
+  'DatabaseSync',
+  'StatementSync',
   'Anthropic',
   'Response',
   'Headers',
@@ -232,6 +253,317 @@ for (const relativePath of PORT_DECLARATIONS) {
       if (declarations.includes(write)) {
         fail(`packages/ports/dist/control-store.d.ts declares the write method "${write}"`);
       }
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Phase 19: local persistence and the CLI (DEC-042)                            */
+/* -------------------------------------------------------------------------- */
+
+// Reading and writing the control plane stay two contracts. The read-only port
+// must not acquire a write method, so a consumer that only lists sources is
+// never handed the ability to remove one.
+requireContains('packages/ports/dist/control-store-writer.d.ts', 'interface SourceRegistrationKey');
+requireContains('packages/ports/dist/control-store-writer.d.ts', 'readonly schemaVersion: 1;');
+requireContains('packages/ports/dist/control-store-writer.d.ts', 'readonly scope: Scope;');
+requireContains(
+  'packages/ports/dist/control-store-writer.d.ts',
+  'readonly sourceType: SourceType;',
+);
+requireContains('packages/ports/dist/control-store-writer.d.ts', 'interface ControlStoreWriter');
+requireContains(
+  'packages/ports/dist/control-store-writer.d.ts',
+  'registerSource(registration: SourceRegistration): Promise<void>;',
+);
+requireContains(
+  'packages/ports/dist/control-store-writer.d.ts',
+  'updateSource(registration: SourceRegistration): Promise<void>;',
+);
+requireContains(
+  'packages/ports/dist/control-store-writer.d.ts',
+  'removeSource(key: SourceRegistrationKey): Promise<boolean>;',
+);
+requireContains(
+  'packages/ports/dist/index.d.ts',
+  "export type { ControlStoreWriter, SourceRegistrationKey } from './control-store-writer.js'",
+);
+
+// A logical key carries identity only: a locator is mutable state, and a key
+// that accepted one would imply it took part in matching (DEC-042).
+{
+  const content = contents.get('packages/ports/dist/control-store-writer.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const mutable of ['locator', 'title', 'createdAt', 'updatedAt', 'metadata']) {
+      if (declarations.includes(mutable)) {
+        fail(
+          `packages/ports/dist/control-store-writer.d.ts declares the mutable field "${mutable}"`,
+        );
+      }
+    }
+  }
+}
+
+// The trace store speaks in a JSON envelope, never in a compiler type: naming
+// one would close a dependency cycle, because the compiler already depends
+// inward on the ports (DEC-042, INV-DEP-003).
+requireContains('packages/ports/dist/trace-store.d.ts', 'interface StoredCompilationTraceRecord');
+requireContains('packages/ports/dist/trace-store.d.ts', 'readonly traceSchemaVersion: number;');
+requireContains('packages/ports/dist/trace-store.d.ts', 'readonly payload: JsonObject;');
+requireContains('packages/ports/dist/trace-store.d.ts', 'interface TraceStore');
+requireContains(
+  'packages/ports/dist/trace-store.d.ts',
+  'putTrace(record: StoredCompilationTraceRecord): Promise<void>;',
+);
+requireContains(
+  'packages/ports/dist/trace-store.d.ts',
+  'getTrace(scope: Scope, compilationId: string): Promise<StoredCompilationTraceRecord | null>;',
+);
+requireContains(
+  'packages/ports/dist/index.d.ts',
+  "export type { StoredCompilationTraceRecord, TraceStore } from './trace-store.js'",
+);
+
+{
+  const content = contents.get('packages/ports/dist/trace-store.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const type of [
+      'SettledCompilationTrace',
+      'UnsettledCompilationTrace',
+      'CompilationTraceSettlement',
+      '@ctxalloc/compiler',
+    ]) {
+      if (declarations.includes(type)) {
+        fail(`packages/ports/dist/trace-store.d.ts names the compiler type "${type}"`);
+      }
+    }
+  }
+}
+
+// No store port declares a connection lifecycle: a local CLI composing a store
+// must not have to know a database exists. `close()` lives on the concrete
+// adapter that needs it (DEC-042).
+for (const relativePath of [
+  'packages/ports/dist/control-store.d.ts',
+  'packages/ports/dist/control-store-writer.d.ts',
+  'packages/ports/dist/trace-store.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const method of ['close(', 'connect(', 'begin(', 'commit(', 'flush(']) {
+    if (declarations.includes(method)) {
+      fail(`${relativePath} declares the lifecycle method "${method}"`);
+    }
+  }
+}
+
+// The persisted-trace validator proves a stored record and reconstructs nothing.
+requireContains(
+  'packages/compiler/dist/persisted-trace.d.ts',
+  'declare class SettledCompilationTraceValidator',
+);
+requireContains(
+  'packages/compiler/dist/persisted-trace.d.ts',
+  'validate(input: unknown): SettledCompilationTrace;',
+);
+requireContains(
+  'packages/compiler/dist/persisted-trace.d.ts',
+  'declare class PersistedCompilationTraceError extends Error',
+);
+requireContains(
+  'packages/compiler/dist/persisted-trace.d.ts',
+  'readonly code = "PERSISTED_COMPILATION_TRACE_INVALID"',
+);
+requireContains('packages/compiler/dist/index.d.ts', "} from './persisted-trace.js'");
+
+{
+  const content = contents.get('packages/compiler/dist/persisted-trace.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    // No validation-library type and no storage type: the validator's public
+    // surface is the trace and this project's own issues (INV-ADAPTER-001).
+    for (const type of ['ZodType', 'ZodObject', 'ZodError', 'DatabaseSync', 'node:', 'Tokenizer']) {
+      if (declarations.includes(type)) {
+        fail(`packages/compiler/dist/persisted-trace.d.ts exposes the type "${type}"`);
+      }
+    }
+  }
+}
+
+// The SQLite adapters keep their documented shapes and leak no driver type.
+requireContains(
+  'packages/adapters/dist/sqlite-control-store.d.ts',
+  'declare class SQLiteControlStore implements ControlStore, ControlStoreWriter',
+);
+requireContains(
+  'packages/adapters/dist/sqlite-control-store.d.ts',
+  'declare class SQLiteControlStoreError extends Error',
+);
+requireContains('packages/adapters/dist/sqlite-control-store.d.ts', 'close(): void;');
+requireContains(
+  'packages/adapters/dist/sqlite-trace-store.d.ts',
+  'declare class SQLiteTraceStore implements TraceStore',
+);
+requireContains(
+  'packages/adapters/dist/sqlite-trace-store.d.ts',
+  'declare class SQLiteTraceStoreError extends Error',
+);
+requireContains('packages/adapters/dist/sqlite-trace-store.d.ts', 'close(): void;');
+requireContains(
+  'packages/adapters/dist/sqlite-store-config.d.ts',
+  'SQLITE_LOCAL_STORE_SCHEMA_VERSION = 1',
+);
+requireContains(
+  'packages/adapters/dist/sqlite-store-config.d.ts',
+  'interface SQLiteLocalStoreConfig',
+);
+requireContains(
+  'packages/adapters/dist/sqlite-store-config.d.ts',
+  'readonly databasePath: string;',
+);
+
+const SQLITE_DRIVER_TYPES = [
+  'DatabaseSync',
+  'StatementSync',
+  'SQLInputValue',
+  'SupportedValueType',
+];
+
+for (const relativePath of [
+  'packages/adapters/dist/index.d.ts',
+  'packages/adapters/dist/sqlite-control-store.d.ts',
+  'packages/adapters/dist/sqlite-trace-store.d.ts',
+  'packages/adapters/dist/sqlite-store-config.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const type of SQLITE_DRIVER_TYPES) {
+    if (declarations.includes(type)) {
+      fail(`${relativePath} exposes the SQLite driver type "${type}"`);
+    }
+  }
+  if (declarations.includes("'node:sqlite'")) {
+    fail(`${relativePath} re-exports from "node:sqlite"`);
+  }
+}
+
+// The shared SQLite mechanics stay package-internal: they are how these two
+// adapters happen to work, not a contract anything may build on (DEC-042).
+{
+  const content = contents.get('packages/adapters/dist/index.d.ts');
+  if (content !== undefined) {
+    const declarations = stripComments(content);
+    for (const internal of [
+      'openDatabase',
+      'inTransaction',
+      'migrateToCurrentSchema',
+      'canonicalJson',
+      'parseStoredJsonObject',
+      'SQLiteStoreFailure',
+      'validateSQLiteLocalStoreConfig',
+      'SOURCE_REGISTRATION_TABLE',
+      'COMPILATION_TRACE_TABLE',
+    ]) {
+      if (declarations.includes(internal)) {
+        fail(`packages/adapters/dist/index.d.ts exports the internal "${internal}"`);
+      }
+    }
+  }
+}
+
+// The application layer owns the conversion between the compiler's trace and the
+// port's envelope, and it opens no database of its own (DEC-042).
+requireContains(
+  'packages/application/dist/prepare-local-corpus-service.d.ts',
+  'declare class PrepareLocalCorpusService',
+);
+requireContains(
+  'packages/application/dist/prepare-local-corpus-service.d.ts',
+  'execute(input: unknown): Promise<PreparedLocalCorpus>;',
+);
+requireContains(
+  'packages/application/dist/local-source-registry-service.d.ts',
+  'declare class LocalSourceRegistryService',
+);
+requireContains(
+  'packages/application/dist/local-source-registry-service.d.ts',
+  'execute(input: unknown): Promise<LocalSourceRegistryResult>;',
+);
+requireContains(
+  'packages/application/dist/compilation-trace-persistence-service.d.ts',
+  'declare class CompilationTracePersistenceService',
+);
+requireContains(
+  'packages/application/dist/compilation-trace-persistence-service.d.ts',
+  'store(trace: unknown): Promise<void>;',
+);
+requireContains(
+  'packages/application/dist/compilation-trace-persistence-service.d.ts',
+  'get(scope: unknown, compilationId: unknown): Promise<SettledCompilationTrace | null>;',
+);
+requireContains(
+  'packages/application/dist/source-registration.d.ts',
+  'declare function validateSourceRegistration(input: unknown): SourceRegistration;',
+);
+requireContains(
+  'packages/application/dist/source-registration.d.ts',
+  'declare function validateSourceRegistrationKey(input: unknown): SourceRegistrationKey;',
+);
+
+for (const relativePath of [
+  'packages/application/dist/index.d.ts',
+  'packages/application/dist/prepare-local-corpus-service.d.ts',
+  'packages/application/dist/local-source-registry-service.d.ts',
+  'packages/application/dist/compilation-trace-persistence-service.d.ts',
+  'packages/application/dist/source-registration.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const type of [...SQLITE_DRIVER_TYPES, 'node:sqlite', '@ctxalloc/adapters']) {
+    if (declarations.includes(type)) {
+      fail(`${relativePath} exposes the storage type "${type}"`);
+    }
+  }
+}
+
+// The CLI publishes a testable entry point and no driver type at all.
+requireContains(
+  'apps/cli/dist/run-cli.d.ts',
+  'declare function runCli(argv: readonly string[], io: CliIo): Promise<number>;',
+);
+requireContains('apps/cli/dist/run-cli.d.ts', 'interface CliIo');
+requireContains('apps/cli/dist/errors.d.ts', 'declare class CliError extends Error');
+requireContains('apps/cli/dist/errors.d.ts', 'interface CliErrorEnvelope');
+requireContains('apps/cli/dist/errors.d.ts', 'readonly code = "CTXALLOC_CLI_FAILED"');
+requireContains('apps/cli/dist/config.d.ts', 'interface CliConfig');
+requireContains('apps/cli/dist/config.d.ts', 'declare function loadCliConfig(configPath: string)');
+requireContains('apps/cli/dist/commands/version.d.ts', 'CLI_NAME = "ctxalloc"');
+requireContains('apps/cli/dist/commands/version.d.ts', 'CLI_CONTRACT_VERSION = 1');
+requireContains('apps/cli/dist/index.d.ts', "} from './run-cli.js'");
+
+for (const relativePath of [
+  'apps/cli/dist/index.d.ts',
+  'apps/cli/dist/run-cli.d.ts',
+  'apps/cli/dist/config.d.ts',
+  'apps/cli/dist/errors.d.ts',
+  'apps/cli/dist/commands/version.d.ts',
+]) {
+  const content = contents.get(relativePath);
+  if (content === undefined) continue;
+  const declarations = stripComments(content);
+  for (const type of [
+    ...SQLITE_DRIVER_TYPES,
+    'node:sqlite',
+    'SQLiteControlStore',
+    'SQLiteTraceStore',
+  ]) {
+    if (declarations.includes(type)) {
+      fail(`${relativePath} exposes the storage type "${type}"`);
     }
   }
 }
@@ -512,13 +844,14 @@ requireContains(
   'readonly compiler: ContextCompilerConfig;',
 );
 requireContains(
-  'packages/application/dist/compile-local-context-service.d.ts',
+  'packages/application/dist/local-source-pipeline.d.ts',
   'declare class LocalSourcePipelineError extends Error',
 );
 requireContains(
-  'packages/application/dist/compile-local-context-service.d.ts',
+  'packages/application/dist/local-source-pipeline.d.ts',
   'readonly code = "LOCAL_SOURCE_PIPELINE_FAILED"',
 );
+requireContains('packages/application/dist/index.d.ts', "} from './local-source-pipeline.js'");
 requireContains(
   'packages/application/dist/compile-local-context-service.d.ts',
   'declare class CompileLocalContextService',
@@ -818,7 +1151,7 @@ requireContains(
 );
 requireContains(
   'packages/testing/dist/in-memory-control-store.d.ts',
-  'class InMemoryControlStore implements ControlStore',
+  'class InMemoryControlStore implements ControlStore, ControlStoreWriter',
 );
 requireContains(
   'packages/testing/dist/fake-candidate-provider.d.ts',
@@ -829,20 +1162,34 @@ requireContains('packages/testing/dist/index.d.ts', "} from './in-memory-control
 requireContains('packages/testing/dist/index.d.ts', "} from './fake-candidate-provider.js'");
 
 // No test double may declare a fake for a port that does not exist. The model
-// provider and the monotonic clock left this list in Phase 17 because both ports
-// are now real and consumed; a trace store is still absent, and publishing a
-// fake for it would invite a test to depend on a contract nothing implements.
+// provider and the monotonic clock left this list in Phase 17, and the trace
+// store in Phase 19: all three ports are now real and consumed (DEC-040,
+// DEC-042). A fake for anything still absent would invite a test to depend on a
+// contract nothing implements.
 {
   const content = contents.get('packages/testing/dist/index.d.ts');
   if (content !== undefined) {
     const declarations = stripComments(content);
-    for (const absent of ['InMemoryTraceStore', 'TraceStore', 'FakeEmbeddingProvider']) {
+    for (const absent of [
+      'FakeEmbeddingProvider',
+      'InMemoryEvaluationStore',
+      'InMemoryRetrievalIndex',
+      'FakeWallClock',
+    ]) {
       if (declarations.includes(absent)) {
         fail(`packages/testing/dist/index.d.ts declares "${absent}"`);
       }
     }
   }
 }
+
+// Both new doubles implement the ports they stand in for, and the control store
+// implements *both* control-plane contracts (INV-ADAPTER-005).
+requireContains(
+  'packages/testing/dist/in-memory-trace-store.d.ts',
+  'class InMemoryTraceStore implements TraceStore',
+);
+requireContains('packages/testing/dist/index.d.ts', "} from './in-memory-trace-store.js'");
 
 // The validation library and the Node standard library stay implementation
 // details of the use case: neither may appear in its published surface

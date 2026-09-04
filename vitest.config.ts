@@ -11,6 +11,15 @@ const packageEntry = (name: string): string =>
   fileURLToPath(new URL(`./packages/${name}/src/index.ts`, import.meta.url));
 
 /**
+ * `apps/cli` is an application, not a reusable package, so nothing in
+ * `packages/` may import it. The alias exists for the CLI's own tests, which
+ * drive `runCli` in-process rather than spawning the built executable — the
+ * suite runs before `pnpm build`, so a test that required `dist` could not run
+ * at all (DEC-042).
+ */
+const cliEntry = fileURLToPath(new URL('./apps/cli/src/index.ts', import.meta.url));
+
+/**
  * The retrieval library is a dependency of `@ctxalloc/adapters`, not of the
  * workspace root, so Node resolution from `tests/` cannot find it. The alias lets
  * an adapter test build a control index and observe the exact scores the library
@@ -38,6 +47,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@ctxalloc/adapters': packageEntry('adapters'),
+      '@ctxalloc/cli': cliEntry,
       '@ctxalloc/application': packageEntry('application'),
       '@ctxalloc/compiler': packageEntry('compiler'),
       '@ctxalloc/domain': packageEntry('domain'),

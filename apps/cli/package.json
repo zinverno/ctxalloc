@@ -5,10 +5,23 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "ctxalloc": "./dist/bin.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "dependencies": {
+    "@ctxalloc/adapters": "workspace:*",
+    "@ctxalloc/application": "workspace:*",
+    "@ctxalloc/compiler": "workspace:*",
+    "@ctxalloc/domain": "workspace:*",
+    "@ctxalloc/evaluation": "workspace:*",
+    "@ctxalloc/ports": "workspace:*",
+    "@ctxalloc/tokenization": "workspace:*",
+    "zod": "^4.4.3"
   }
 }

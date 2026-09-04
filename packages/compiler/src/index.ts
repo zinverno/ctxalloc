@@ -74,10 +74,18 @@
  * string, the final blocks in render order, exact usage, a deterministic
  * `CompilationId`, and a `SettledCompilationTrace`.
  *
- * The compiler kernel is complete; the product is not. Retrieval, `SourceReader`,
- * persistence, the CLI, the HTTP API, model execution, and the evaluation harness
- * remain later phases, as does the candidate provider port, which belongs outside
- * the kernel entirely.
+ * `SettledCompilationTraceValidator` closes the persistence boundary in the other
+ * direction (DEC-042). A trace read back from a store is external data, so its
+ * shape is proven again before it is published as a `SettledCompilationTrace`.
+ * It validates and nothing more: it re-scores nothing, re-renders nothing,
+ * recomputes no digest, calls no tokenizer, and repairs no field. Storage itself
+ * stays outside the kernel — no compiler module names a database, and the port
+ * the store implements speaks in JSON envelopes the application layer converts.
+ *
+ * The compiler kernel is complete; the product is not. The HTTP API, model
+ * routing, semantic retrieval, and a persistent retrieval index remain later
+ * phases, as does the candidate provider port, which belongs outside the kernel
+ * entirely.
  */
 
 export {
@@ -232,6 +240,11 @@ export {
   type ContextCompilerConfig,
 } from './context-compiler.js';
 export { COMPILATION_ID_VERSION, type CompilationId } from './compilation-id.js';
+export {
+  PersistedCompilationTraceError,
+  SettledCompilationTraceValidator,
+  type PersistedCompilationTraceIssueCode,
+} from './persisted-trace.js';
 export {
   COMPILATION_POLICY_SCHEMA_VERSION,
   CompilationPolicyError,

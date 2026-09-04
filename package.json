@@ -17,6 +17,7 @@
     "format:check": "prettier --check .",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:declarations": "node scripts/check-declarations.mjs",
+    "smoke:cli": "node scripts/smoke-cli.mjs",
     "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run check:boundaries",
     "clean": "node scripts/clean.mjs"
   },

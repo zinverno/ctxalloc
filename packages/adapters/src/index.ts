@@ -24,8 +24,21 @@
  * would be able to make a selection decision, and the whole point of the seam is
  * that it cannot (INV-DEP-003).
  *
- * No Node type reaches a public declaration. Every failure is a project-owned
- * error carrying a stable machine-readable code (INV-ADAPTER-001,
+ * `SQLiteControlStore` and `SQLiteTraceStore` are the local persistence
+ * implementations (DEC-042). The first implements `ControlStore` and
+ * `ControlStoreWriter`; the second implements `TraceStore` and stores opaque
+ * JSON envelopes. Neither depends on `@ctxalloc/compiler`: the kernel already
+ * depends inward on the ports, so an adapter naming it would close a dependency
+ * cycle, and a store that could see the kernel could interpret an audit record
+ * it is only meant to keep (INV-DEP-003).
+ *
+ * Their shared database, migration, and canonical-JSON mechanics are
+ * package-internal and are deliberately not exported: they are how these two
+ * adapters happen to work, not a contract anything may build on.
+ *
+ * No Node type reaches a public declaration. `DatabaseSync`, `StatementSync`,
+ * and every other driver type stop inside this package. Every failure is a
+ * project-owned error carrying a stable machine-readable code (INV-ADAPTER-001,
  * INV-ADAPTER-003).
  */
 
@@ -58,6 +71,24 @@ export {
   type NodeFileSourceReaderConfig,
   type NodeFileSourceReaderErrorCode,
 } from './node-file-source-reader.js';
+export {
+  SQLITE_CONTROL_STORE_ID,
+  SQLITE_CONTROL_STORE_VERSION,
+  SQLiteControlStore,
+  SQLiteControlStoreError,
+  type SQLiteControlStoreErrorCode,
+} from './sqlite-control-store.js';
+export {
+  SQLITE_LOCAL_STORE_SCHEMA_VERSION,
+  type SQLiteLocalStoreConfig,
+} from './sqlite-store-config.js';
+export {
+  SQLITE_TRACE_STORE_ID,
+  SQLITE_TRACE_STORE_VERSION,
+  SQLiteTraceStore,
+  SQLiteTraceStoreError,
+  type SQLiteTraceStoreErrorCode,
+} from './sqlite-trace-store.js';
 export {
   SYSTEM_MONOTONIC_CLOCK_ID,
   SYSTEM_MONOTONIC_CLOCK_VERSION,

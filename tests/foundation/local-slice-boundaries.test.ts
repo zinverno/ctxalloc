@@ -175,18 +175,23 @@ describe('local slice boundaries: no Phase 18 to 20 scope creep', () => {
     }
   });
 
-  it('implements no retrieval index, trace store, or CLI flow', () => {
-    // `ModelProvider` left this list in Phase 17: the port and its one adapter
-    // are real, and both serve evaluation only. Retrieval, persistence, the CLI,
-    // and the HTTP API remain later phases (DEC-040).
+  it('implements no vector retrieval, HTTP server, or argument parsing', () => {
+    // The list shrinks as phases land, and only as they land. `ModelProvider`
+    // left it in Phase 17 and `TraceStore` in Phase 19: both are now real ports
+    // with real adapters, serving evaluation and local persistence respectively
+    // (DEC-040, DEC-042).
+    //
+    // What remains forbidden here is what no phase has authorized: embeddings
+    // and vector search, a QMD client, an HTTP server, and argument parsing —
+    // the last because `process.argv` belongs to `apps/cli`, which is not one of
+    // these workspaces (ARCHITECTURE section 2).
     for (const workspace of WORKSPACES) {
       for (const { path, code } of sourcesOf(workspace)) {
         const declarations = code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
         for (const forbidden of [
-          'TraceStore',
-          'BM25',
           'embedding',
           'QmdClient',
+          'Qdrant',
           'createServer',
           'process.argv',
         ]) {

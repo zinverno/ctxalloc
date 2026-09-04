@@ -18,25 +18,78 @@
  * - conversation source ingestion and chunking (DEC-039) — one strict local JSON
  *   conversation becomes a document hashed over its canonical logical content,
  *   and one block per message;
+ * - deterministic local corpus preparation (DEC-042) —
+ *   `PrepareLocalCorpusService` turns the registrations of one scope into the
+ *   canonical `SourceDocument` and `ContextBlock` corpus, retrieving nothing and
+ *   compiling nothing;
  * - the local source-to-compilation slice (DEC-039) —
- *   `CompileLocalContextService` joins the control store, the source reader,
- *   ingestion, chunking, the candidate provider, and `ContextCompiler` into one
- *   path from registered local sources to a `CompilationResult`.
+ *   `CompileLocalContextService` joins that preparation with the candidate
+ *   provider and `ContextCompiler` into one path from registered local sources
+ *   to a `CompilationResult`;
+ * - control-plane registration validation (DEC-042) — `source-registration.ts`
+ *   owns the one runtime boundary and the one canonical order every reader and
+ *   writer of a `SourceRegistration` uses;
+ * - control-plane writing (DEC-042) — `LocalSourceRegistryService` registers,
+ *   updates, removes, and lists sources over a `ControlStore` and a
+ *   `ControlStoreWriter`;
+ * - trace persistence (DEC-042) — `CompilationTracePersistenceService` owns the
+ *   conversion between the compiler's `SettledCompilationTrace` and the
+ *   JSON-safe envelope a `TraceStore` persists.
  *
- * Real retrieval, model execution, the evaluation harness, persistence, the CLI,
- * and the HTTP API remain later phases.
+ * The last two are the reusable seam both the CLI and a future HTTP API compose
+ * against. This layer still opens no database: SQLite lives behind the ports, in
+ * `@ctxalloc/adapters` (INV-DEP-001, INV-ADAPTER-001).
+ *
+ * The HTTP API, model routing, and a persistent retrieval index remain later
+ * phases.
  */
 
 export {
   CompileLocalContextService,
   LOCAL_COMPILATION_REQUEST_SCHEMA_VERSION,
   LOCAL_COMPILE_SERVICE_CONFIG_SCHEMA_VERSION,
-  LocalSourcePipelineError,
   type LocalCompilationRequest,
   type LocalCompilationResult,
   type LocalCompileServiceConfig,
-  type LocalSourcePipelineStage,
 } from './compile-local-context-service.js';
+export {
+  CompilationTracePersistenceError,
+  CompilationTracePersistenceService,
+  STORED_COMPILATION_TRACE_RECORD_SCHEMA_VERSION,
+  type CompilationTracePersistenceIssueCode,
+} from './compilation-trace-persistence-service.js';
+export {
+  LocalSourcePipelineError,
+  type LocalSourcePipelineStage,
+} from './local-source-pipeline.js';
+export {
+  LOCAL_SOURCE_REGISTRY_REQUEST_SCHEMA_VERSION,
+  LocalSourceRegistryError,
+  LocalSourceRegistryService,
+  type LocalSourceRegistryIssueCode,
+  type LocalSourceRegistryRequest,
+  type LocalSourceRegistryResult,
+} from './local-source-registry-service.js';
+export {
+  PREPARE_LOCAL_CORPUS_CONFIG_SCHEMA_VERSION,
+  PREPARE_LOCAL_CORPUS_REQUEST_SCHEMA_VERSION,
+  PrepareLocalCorpusService,
+  compareContextBlocks,
+  type PrepareLocalCorpusConfig,
+  type PrepareLocalCorpusRequest,
+  type PreparedLocalCorpus,
+} from './prepare-local-corpus-service.js';
+export {
+  SOURCE_REGISTRATION_KEY_SCHEMA_VERSION,
+  SOURCE_REGISTRATION_SCHEMA_VERSION,
+  SourceRegistrationValidationError,
+  compareSourceRegistrations,
+  parseSourceRegistration,
+  parseSourceRegistrationKey,
+  sourceRegistrationLogicalKey,
+  validateSourceRegistration,
+  validateSourceRegistrationKey,
+} from './source-registration.js';
 export {
   ConversationChunker,
   ConversationChunkingError,
