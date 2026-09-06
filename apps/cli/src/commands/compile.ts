@@ -1,5 +1,6 @@
 import {
   CompilationTracePersistenceService,
+  CompileAndPersistLocalContextService,
   CompileLocalContextService,
 } from '@ctxalloc/application';
 import {
@@ -100,9 +101,10 @@ export async function runCompileCommand(
       new MiniSearchCandidateProvider(config.candidateProvider),
     );
 
-    const result = await service.execute(request);
-
-    await new CompilationTracePersistenceService(traceStore).store(result.compilation.trace);
+    const result = await new CompileAndPersistLocalContextService(
+      service,
+      new CompilationTracePersistenceService(traceStore),
+    ).execute(request);
 
     return {
       schemaVersion: 1,

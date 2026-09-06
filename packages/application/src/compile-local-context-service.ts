@@ -24,7 +24,7 @@ import {
   cloneRecord,
   tryCanonicalRecordJson,
   tryCloneJsonRecord,
-  tryReadArrayItems,
+  tryReadArray,
   tryReadOwnDataProperty,
   type CanonicalRecordAttempt,
 } from './canonical-record.js';
@@ -360,17 +360,8 @@ export class CompileLocalContextService {
         ),
       ]);
     }
-    if (!Array.isArray(candidates)) {
-      throw new LocalSourcePipelineError('candidate-provider', [
-        issue(['candidateProvider'], 'getCandidates must resolve to an array', 'invalid_type'),
-      ]);
-    }
-
-    // `Array.isArray` is also true of a `Proxy` around an array, whose element
-    // reads run provider code. Taking the spine defensively keeps ordinary
-    // iteration — the very first thing done with the result — from throwing a
-    // raw provider error out of this boundary.
-    const items = tryReadArrayItems(candidates);
+    // Passive array inspection also catches a revoked Proxy before iteration.
+    const items = tryReadArray(candidates);
     if (items === null) {
       throw new LocalSourcePipelineError('candidate-provider', [
         issue(
@@ -413,8 +404,10 @@ export class CompileLocalContextService {
  * provenance verification, compiler input, and the returned result.
  *
  * A wrapper that cannot be copied is not JSON data, so it is passed through
- * **unchanged** rather than dropped or rewritten. `CandidateValidator` owns that
- * rejection, and an un-copyable value cannot be aliased into a *successful*
+ * **unchanged** rather than dropped or rewritten. The compiler request boundary
+ * rejects active/cyclic values before schema traversal (DEC-043); ordinary
+ * candidate validation remains in `CandidateValidator`. An un-copyable value
+ * cannot be aliased into a *successful*
  * result anyway, because no compilation containing it succeeds (INV-DEP-003).
  *
  * Array order, repeated wrappers, retrieval evidence, and every block value are

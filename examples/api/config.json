@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "databasePath": "./state/ctxalloc.sqlite",
+  "sourceRoot": "./sources",
+  "maxSourceBytes": 8388608,
+  "candidateProvider": {
+    "schemaVersion": 1,
+    "maxCandidates": 100
+  },
+  "localCompile": {
+    "schemaVersion": 1,
+    "compiler": {
+      "schemaVersion": 1,
+      "compilerId": "ctxalloc-local",
+      "compilerVersion": "1.0.0",
+      "maxCorrectionSelections": 256
+    },
+    "markdownChunking": {
+      "targetTokens": 200,
+      "maxTokens": 400
+    },
+    "textChunking": {
+      "targetTokens": 200,
+      "maxTokens": 400
+    }
+  },
+  "server": {
+    "schemaVersion": 1,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "maxRequestBodyBytes": 1048576,
+    "maxConcurrentRequests": 8,
+    "requestTimeoutMs": 30000,
+    "headersTimeoutMs": 10000,
+    "keepAliveTimeoutMs": 5000,
+    "shutdownGraceMs": 10000
+  }
+}

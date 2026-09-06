@@ -22,6 +22,7 @@ for (const group of WORKSPACE_GROUPS) {
 }
 targets.push(join(rootDir, 'tsconfig.tsbuildinfo'));
 targets.push(join(rootDir, 'coverage'));
+targets.push(join(rootDir, 'benchmarks', 'dist'));
 
 let removed = 0;
 for (const target of targets) {

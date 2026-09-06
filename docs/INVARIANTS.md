@@ -1176,3 +1176,28 @@ An intentionally revised invariant requires:
 * updated tests;
 * updated documentation;
 * a migration plan when persisted data is affected.
+
+
+# 19. HTTP Boundary Clarifications (DEC-043)
+
+These clarify existing dependency, persistence and scope invariants; they add no
+compiler selection rule.
+
+* INV-DEP-001/003: HTTP and CLI are outer interfaces. Both use the shared
+  compile-then-persist application operation; neither contains compiler stages
+  or imports the other. HTTP evaluation composes no model provider.
+* INV-STORE-001/002: HTTP success follows settled trace persistence. Failure to
+  store cannot publish a success or alter compiler decisions. HTTP adds no
+  source, context, answer, or report persistence.
+* Scope equality remains a data-isolation requirement, not authentication.
+  Trace reads require explicit exact scope and return the same 404 for absence
+  and wrong scope. The no-auth API is restricted to host loopback in staging.
+* Transport bytes are bounded during streaming, decoded as fatal UTF-8 and
+  parsed strictly. Fixed project-owned error envelopes never copy raw request
+  data or dependency error wording.
+* Readiness clears before shutdown, new work is rejected, and runtime stores
+  remain open until active operations finish. Closing a client connection does
+  not prove its application operation completed. Timers cannot preempt CPU work.
+
+Regressions live in `tests/api`, the shared application orchestration tests, and
+`tests/foundation/http-staging-boundaries.test.ts`.

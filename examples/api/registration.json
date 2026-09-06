@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "scope": {
+    "tenantId": "local",
+    "workspaceId": "example"
+  },
+  "sourceType": "markdown",
+  "identity": {
+    "namespace": "example",
+    "key": "handbook"
+  },
+  "locator": "handbook.md",
+  "title": "Example handbook",
+  "metadata": {}
+}

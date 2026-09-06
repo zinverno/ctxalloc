@@ -34,3 +34,9 @@ jobs:
 
       - name: Smoke-test the built CLI
         run: pnpm smoke:cli
+
+      - name: Smoke-test the built HTTP API
+        run: pnpm smoke:api
+
+      - name: Measure deterministic MVP acceptance
+        run: pnpm acceptance:mvp

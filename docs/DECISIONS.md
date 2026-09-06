@@ -5640,3 +5640,172 @@ Before accepting a new decision, confirm:
 * Is the complexity supported by measured evidence?
 * Can the core still run offline?
 * Does it reduce or increase future maintenance cost?
+
+---
+
+## DEC-043 — Expose the Minimal HTTP API and Freeze MVP Acceptance/Staging Boundaries
+
+**Status:** Accepted — Phase 20 implementation.
+
+**Baseline.** Work started from actual `origin/main`
+`fb90f18579c0c8a99e0b8c1e9290c535eb68128f`, the merged Phase 19 PR #19 commit.
+The clean-main run passed 162 test files / 3,515 tests. Earlier historical
+paragraphs and the old development-order list described HTTP before persistence;
+the completed order is kernel (15), local preparation (16), evaluation (17),
+lexical retrieval (18), SQLite/CLI (19), HTTP/acceptance/staging (20).
+
+**Technology spike.** Node v22.23.2 `node:http` passed all eleven hard gates.
+A real `127.0.0.1:0` listener proved explicit host/port, ephemeral port binding,
+exact method/path dispatch, actual streaming byte limits, Content-Type and
+Content-Length access, the three explicit server timeout fields, `server.close`,
+and `Expect: 100-continue` (oversized known lengths rejected before 100).
+Static inspection established that no framework types, new external dependency,
+native build/download, auth/session middleware, or CORS middleware was needed.
+Use the built-in. No framework bake-off or framework dependency was added.
+
+**One owner for operational compilation.**
+`CompileAndPersistLocalContextService` composes `CompileLocalContextService` and
+`CompilationTracePersistenceService`. It completes compilation, persists only
+the settled trace, and returns the exact local result after persistence succeeds.
+It publishes no I/O and changes no compiler decision. Both CLI and HTTP compile
+use it; the pure compilation service remains free of persistence.
+
+**HTTP contract.** `API_CONTRACT_VERSION = 1` is the sole API package entry-point
+export. The app exposes exactly `POST /v1/context/compile`,
+`POST /v1/evaluations/run`, `GET /v1/traces/:id`, `GET /health`, and `GET /ready`.
+Paths and methods are exact and case-sensitive, with no trailing slash redirect,
+implicit HEAD, successful OPTIONS preflight, or extra CRUD/metrics/version route.
+Unknown routes return 404; known routes with the wrong method return 405 and a
+fixed Allow. HTTP-owned envelopes are version 1; traces retain schema 2 and
+EvaluationReport retains its own schema 1.
+
+Compilation accepts exactly the existing LocalCompilationRequest and returns
+only version, compilation ID, compiled context, included block IDs, usage, and
+`traceStored: true`. Evaluation accepts a strict `{schemaVersion, runConfig,
+case}` wrapper and delegates nested validation to the harness. It returns only
+EvaluationReport, persists nothing, and constructs no ModelProvider. A request
+for model execution is rejected by the existing harness rule.
+
+**Input limits.** One reader limits actual streamed bytes and early declared
+lengths; no unbounded read or decompression is used. Body limits and concurrency
+limits are explicit positive safe integers. Fatal UTF-8 preserves the BOM so
+strict JSON rejects it. Empty/malformed bodies fail without quoting bytes.
+Content-Type must be `application/json`; exactly a UTF-8 charset parameter,
+including quoted UTF-8, is deliberately accepted and tested. Encoding must be
+absent or identity. Duplicate media headers, unsupported types/charsets and
+non-identity encodings fail. GET bodies and queries on non-trace routes fail.
+Node parser failures are translated to fixed JSON and close the connection.
+
+Trace IDs are one segment, decoded once, at most 256 UTF-16 code units, nonblank
+and well-formed; decoded slash, backslash and NUL are rejected. Query parameters
+are exactly tenantId/workspaceId once each and optional projectId once; malformed
+UTF-8/escapes, duplicates and unknown parameters are rejected. Values are not
+trimmed or normalized. Wrong scope and absent ID return identical 404 envelopes.
+Scope selection is not authentication.
+
+**Errors.** The app publishes fixed codes, stages and issue text, never dependency
+messages, issue paths containing caller data, stack/cause, SQL, filesystem paths,
+query, source content, or provider responses. Input errors are 400, missing
+resources 404, method mismatch 405, oversize 413, unsupported media 415,
+unsupported expectation 417, operational/internal/store failures 500, and
+busy/not-ready 503. Trace conflicts deliberately remain a sanitized 500; no
+second compiler-error status taxonomy is introduced. One JSON writer serializes
+before sending headers and falls back to a fixed 500 if serialization fails.
+
+**Runtime and config.** The executable accepts exactly `--config <path>` and no
+environment/discovery fallback. Strict config v1 includes databasePath,
+sourceRoot, maxSourceBytes, candidateProvider, localCompile, and all server
+fields. Relative paths are config-directory relative; adapters get absolute
+paths. Host is an explicit IP literal (no DNS hostnames); port is 0–65535, with
+0 intended for tests. All timeouts are 1–2147483647 ms and header timeout cannot
+exceed request timeout. Component configuration semantics stay with their owners.
+
+One process owns independent long-lived SQLite control and trace connections,
+file reader, MiniSearch provider, one O200k tokenizer, shared application
+services, and a model-free evaluation harness/monotonic clock. No app imports
+another app. No package imports an app. Server/request/response types are
+internal to apps/api; declaration checks guard the reusable use case and API
+entry point. A private benchmark workspace builds the executable acceptance
+producers using existing package exports; it adds no external dependency.
+
+**Concurrency and shutdown.** Application routes have an explicit slot cap and
+no waiting queue. Saturation returns `server_busy`; liveness remains answerable.
+Slots release in finally. Readiness is false until composition/listener startup,
+then reflects runtime state without synthetic DB probes. Shutdown first clears
+readiness and rejects new work, stops accepting connections, drains active
+operations, and closes both stores once. The grace timer closes Node
+connections, but disconnected application work is still awaited before store
+closure. HTTP timeouts and shutdown do not preempt synchronous compiler CPU work.
+
+**Hardening evidence.** Revoked provider result arrays previously reached an
+unguarded Array.isArray. They now use the existing total passive array reader.
+Nested active/cyclic provider values also reached request schemas before candidate
+validation; both compiler input boundaries now validate passive snapshots without
+invoking accessors or leaking reflection errors. Ordinary malformed records
+remain schema errors and valid compilation behavior is unchanged.
+
+The file reader previously used direct config/request reads and unbounded
+readFile after stat. Exact passive flat-record snapshots replace those reads.
+Descriptor-based regular-file checks and bounded chunks read at most the limit
+plus one probe byte; a regression grows the real file after fstat. Nonblocking,
+no-follow open flags and device/inode checks narrow replacement races. Absolute,
+Windows absolute, backslash separator, traversal, NUL, surrogate, sibling-prefix,
+symlink-escape, directory/FIFO/socket/device cases are rejected. Error text never
+quotes a locator; rejected absolute locators are not published in error data.
+Portable Node lacks a directory-handle openat walk: actively hostile ancestor
+replacement remains outside the guarantee and operator-controlled source roots
+are required. No blanket claim of adversarial filesystem safety is made.
+
+The model adapter now inspects flat config/request records passively and keeps
+its timeout active through response body consumption. The adapter still reads
+no environment, performs one call with redirect rejection, and does not change
+model-identity comparison semantics. Credentials are read only by a separately
+invoked manual acceptance executable.
+
+Concurrent real HTTP requests verify identical trace-write idempotence, scoped
+source listing, independent stores, conflict preservation, sanitized locked DB
+failures, and closure after drain. No evidence required a WAL change; schema and
+journal policy stay unchanged.
+
+**Acceptance.** `pnpm acceptance:mvp` emits one report with per-gate PASS, FAIL,
+NOT_EVALUATED or NOT_APPLICABLE, and separate engineering/product states (PASS,
+FAIL, INCOMPLETE). Release context aggregates come only from validation;
+development remains diagnostic and all regression/expected-failure cases remain
+visible. Existing harness formulas are reused. Narrow additional producers count
+provenance, wrapper multiplicity, group decisions, reason coverage, exact trace
+reconciliation, repeated comparisons and foreign candidate detection. The stored
+trace schema validator is not misrepresented as an arithmetic reconciler.
+
+Missing denominators/evidence are not PASS. No exact suite-level source
+instruction escape producer is claimed: the regression remains and that gate
+stays NOT_EVALUATED. METRICS 9.1's `.95` target and the valid-budget/final-checklist
+`1.00` requirement are both reported. Validation fixtures and policies are not
+tuned against observed targets. The dataset has 3 development, 3 validation and
+7 regression cases and cannot establish statistical product validity.
+
+Model-disabled or fake execution cannot qualify as live answer-quality evidence.
+The required median quality loss gate stays NOT_EVALUATED without complete live
+same-model validation; product validation cannot pass with it missing. An
+explicit manual executable reads one named credential environment variable,
+constructs the existing real adapter, and emits no prompts/contexts/answers/key.
+Performance is a separate optional warm-up measurement with reference environment,
+candidate counts, p50/p95/p99/max and explicit persistence inclusion. It is not a
+CI timing gate and does not rename harness latency. CI rejects engineering
+FAIL; a measured product FAIL or external INCOMPLETE remains visible in JSON
+rather than being rewritten to make CI green.
+
+**Staging.** A multi-stage Node 22 image runs built output as non-root, accepts
+read-only config/source mounts and a writable state mount, and receives signals
+directly. Node probes `/ready`. Container binding may use 0.0.0.0 internally;
+host publishing must be loopback. There is no auth: direct public Internet
+exposure is outside this staging model. Backups stop all writers before copying
+the DB; upgrades preserve state and verify readiness/trace retrieval. Docker was
+unavailable during implementation, so container runtime evidence is NOT_RUN.
+See [STAGING](STAGING.md) and [MVP_ACCEPTANCE](MVP_ACCEPTANCE.md) for commands,
+measured values and limitations.
+
+**Deferred.** Authentication/SaaS, semantic/hybrid retrieval, persistent retrieval
+indexes, embeddings/vector DBs, file watching/jobs, evaluation-report persistence,
+model gateway/routing, polished UI, distributed orchestration and production
+high availability are not Phase 20 features. Missing product evidence is not
+permission to add these capabilities or to claim the hypothesis passed.

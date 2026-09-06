@@ -2036,3 +2036,50 @@ inconclusive
 ```
 
 The report must not claim success when hard correctness gates fail.
+
+
+# 30. Phase 20 Acceptance Producer (DEC-043)
+
+`pnpm acceptance:mvp` executes built smokes and
+`benchmarks/acceptance/report.ts`. It reuses the unchanged 13-case evaluation v1
+suite: development 3, validation 3, regression 7. Release context aggregates come
+only from validation; development is diagnostic and regression remains correctness
+evidence. Three fixed cases are not statistical proof. No thresholds or fixture
+policies are revised by this producer.
+
+Context reduction uses existing harness median distributions, including the
+long-context-tagged validation subset. Preservation gates use the minimum of
+measured validation cases as a conservative application of the existing targets;
+missing annotations do not become zeros. Both required-block recall >= .95 and
+the valid-budget/final-checklist = 1.00 gate are visible. Answer quality uses the
+existing same-model harness loss only with complete real-adapter evidence.
+Disabled runs, fake providers, model mismatches and partial provider failures
+cannot pass that gate. No quality formula or latency definition is changed.
+
+`correctness.ts` observes successful compiler output using existing validator,
+deduplicator and tokenizer owners: 9.5 included-block provenance; 13.3 wrapper
+multiplicity and group disposition counts; 13.4 reason coverage; 13.5 every 8.12
+initial content-total equation plus settled decisions/rendering/usage agreement;
+15.1 included scopes; and 15.2 individually detected foreign candidates. The
+harness repeat evidence supplies identical comparisons over total comparisons
+(14.1), including early divergence. Expected failures remain separate. Ratios
+without denominators are `NOT_EVALUATED`. The source-instruction escape count
+(15.3) has no exact suite-level behavioral producer and is `NOT_EVALUATED`;
+retaining an injection regression is not substituted for that measurement.
+
+Gate states are `PASS`, `FAIL`, `NOT_EVALUATED`, or `NOT_APPLICABLE`. Required
+failure takes precedence over missing evidence; otherwise required missing
+evidence makes an overall result `INCOMPLETE`. `engineeringAcceptance` covers
+correctness/integration/staging; `productValidationAcceptance` additionally
+requires context and live answer-quality gates. Exit 0 from the command means
+no measured engineering failure, not product validation success. CI exposes
+missing Docker/live/performance evidence and does not run a live model.
+
+`pnpm performance:mvp` uses `SystemMonotonicClock`, five warm-ups and twenty
+measured iterations, nearest-rank p50/p95/p99/max, and a machine manifest. It
+separates compiler-only from local file preparation/retrieval/compile with trace
+persistence; the latter records first write during warm-up and idempotent writes
+during measurement. Neither includes model time. These are additional named
+measurement scopes, not redefinitions of EvaluationHarness latency. Targets
+remain 500 ms and 2500 ms p95, with no CI timing gate. Results and limitations
+are in [MVP_ACCEPTANCE.md](MVP_ACCEPTANCE.md).

@@ -192,14 +192,15 @@ describe('INV-DEP-001: the adapter stays below the kernel', () => {
 describe('retrieval remains request-local and unpersisted', () => {
   it('the retrieval library never reaches an application entry point', () => {
     // `apps/cli` composes the provider inside its `compile` command (DEC-042),
-    // and that is the only place: neither entry point may name the library, and
-    // `apps/api` composes nothing at all until the HTTP phase.
+    // API runtime composition arrived in DEC-043; neither public entry point names the library.
     for (const entry of ['apps/cli/src/index.ts', 'apps/api/src/index.ts']) {
       const source = readSource(entry);
       expect(source).not.toContain(RETRIEVAL_LIBRARY);
       expect(source).not.toContain('MiniSearchCandidateProvider');
     }
-    expect(readSource('apps/api/src/index.ts').trim()).toBe('export {};');
+    expect(codeOf(readSource('apps/api/src/index.ts')).trim()).toBe(
+      'export const API_CONTRACT_VERSION = 1;',
+    );
   });
 
   it('ships no persistent retrieval index', () => {

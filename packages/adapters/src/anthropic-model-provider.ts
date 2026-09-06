@@ -1,3 +1,4 @@
+import { exactDataRecord } from './passive-inspection.js';
 import type { ModelProvider, ModelProviderRequest, ModelProviderResult } from '@ctxalloc/ports';
 
 /**
@@ -234,21 +235,10 @@ export class AnthropicModelProvider implements ModelProvider {
    * @throws {AnthropicModelProviderError} when the configuration is not usable.
    */
   constructor(config: unknown) {
-    if (typeof config !== 'object' || config === null || Array.isArray(config)) {
-      throw invalidConfig('AnthropicModelProvider configuration must be an object.');
-    }
-
-    const unknownKeys = Object.keys(config)
-      .filter((key) => !CONFIG_KEYS.includes(key))
-      .sort();
-    if (unknownKeys.length > 0) {
-      throw invalidConfig(
-        `AnthropicModelProvider configuration has unknown field(s): ${unknownKeys.join(', ')}.`,
-      );
-    }
-
-    const { apiKey, apiVersion, baseUrl, modelId, timeoutMs } =
-      config as Partial<AnthropicModelProviderConfig>;
+    const record = exactDataRecord(config, CONFIG_KEYS);
+    if (record === null)
+      throw invalidConfig('AnthropicModelProvider configuration must be an exact passive record.');
+    const { apiKey, apiVersion, baseUrl, modelId, timeoutMs } = record;
 
     for (const [field, value] of [
       ['apiKey', apiKey],
@@ -312,69 +302,50 @@ export class AnthropicModelProvider implements ModelProvider {
       controller.abort();
     }, this.#timeoutMs);
 
-    let response: Response;
     try {
-      response = await fetch(this.#endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': this.#apiKey,
-          'anthropic-version': this.#apiVersion,
-        },
-        body,
-        // The configured endpoint is an authorization boundary, not a starting
-        // point for discovery. `fetch` follows redirects by default, and a 307
-        // or 308 preserves the method and the body — so a compromised or
-        // misconfigured endpoint could reply `Location: <other origin>` and have
-        // the runtime re-send the `x-api-key` header, the system prompt, and the
-        // whole user prompt somewhere the caller never authorized. Rejecting at
-        // the fetch boundary is the only point that helps: validating a redirect
-        // after the fact is too late, because the request has already gone
-        // (INV-SEC-001).
-        redirect: 'error',
-        signal: controller.signal,
-      });
-    } catch {
-      // The rejection reason is discarded deliberately. A `fetch` failure names
-      // the host it could not reach and, for some causes, echoes request detail;
-      // neither belongs in an error this adapter publishes. A refused redirect
-      // arrives here too, and its `Location` is exactly the value not to
-      // disclose.
-      throw timedOut
-        ? new AnthropicModelProviderError(
-            'ANTHROPIC_MODEL_PROVIDER_TIMEOUT',
-            'AnthropicModelProvider request exceeded the configured timeout.',
-          )
-        : new AnthropicModelProviderError(
-            'ANTHROPIC_MODEL_PROVIDER_TRANSPORT_FAILED',
-            'AnthropicModelProvider request failed before a response was received.',
-          );
+      let response: Response;
+      try {
+        response = await fetch(this.#endpoint, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': this.#apiKey,
+            'anthropic-version': this.#apiVersion,
+          },
+          body,
+          redirect: 'error',
+          signal: controller.signal,
+        });
+      } catch {
+        if (timedOut) throw timeoutFailure();
+        throw new AnthropicModelProviderError(
+          'ANTHROPIC_MODEL_PROVIDER_TRANSPORT_FAILED',
+          'AnthropicModelProvider request failed before a response was received.',
+        );
+      }
+      if (!response.ok) {
+        // No dependency body is needed for an HTTP failure.
+        controller.abort();
+        throw new AnthropicModelProviderError(
+          'ANTHROPIC_MODEL_PROVIDER_HTTP_ERROR',
+          'AnthropicModelProvider received an unsuccessful response.',
+          response.status,
+        );
+      }
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        if (timedOut) throw timeoutFailure();
+        throw new AnthropicModelProviderError(
+          'ANTHROPIC_MODEL_PROVIDER_INVALID_RESPONSE_BODY',
+          'AnthropicModelProvider response body must be valid JSON.',
+        );
+      }
+      return parseResult(payload);
     } finally {
       clearTimeout(timer);
     }
-
-    if (!response.ok) {
-      // The status is the one detail worth publishing: it separates a bad
-      // credential from a rate limit from an outage without quoting the
-      // provider's message, which can restate the prompt back at the caller.
-      throw new AnthropicModelProviderError(
-        'ANTHROPIC_MODEL_PROVIDER_HTTP_ERROR',
-        'AnthropicModelProvider received an unsuccessful response.',
-        response.status,
-      );
-    }
-
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new AnthropicModelProviderError(
-        'ANTHROPIC_MODEL_PROVIDER_INVALID_RESPONSE_BODY',
-        'AnthropicModelProvider response body must be valid JSON.',
-      );
-    }
-
-    return parseResult(payload);
   }
 }
 
@@ -433,21 +404,10 @@ function buildEndpoint(baseUrl: unknown): string {
  * detail is not reproducible by anyone reading its report.
  */
 function validateRequest(request: ModelProviderRequest): ModelProviderRequest {
-  if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-    throw invalidRequest('AnthropicModelProvider request must be an object.');
-  }
-
-  const unknownKeys = Object.keys(request)
-    .filter((key) => !REQUEST_KEYS.includes(key))
-    .sort();
-  if (unknownKeys.length > 0) {
-    throw invalidRequest(
-      `AnthropicModelProvider request has unknown field(s): ${unknownKeys.join(', ')}.`,
-    );
-  }
-
-  const { schemaVersion, systemPrompt, userPrompt, maxOutputTokens, temperature } = request;
-
+  const record = exactDataRecord(request, REQUEST_KEYS);
+  if (record === null)
+    throw invalidRequest('AnthropicModelProvider request must be an exact passive record.');
+  const { schemaVersion, systemPrompt, userPrompt, maxOutputTokens, temperature } = record;
   if (schemaVersion !== REQUEST_SCHEMA_VERSION) {
     throw invalidRequest(
       `AnthropicModelProvider request schemaVersion must be ${String(REQUEST_SCHEMA_VERSION)}.`,
@@ -485,7 +445,7 @@ function validateRequest(request: ModelProviderRequest): ModelProviderRequest {
     throw invalidRequest('AnthropicModelProvider temperature must be a finite number in [0, 1].');
   }
 
-  return request;
+  return { schemaVersion, systemPrompt, userPrompt, maxOutputTokens, temperature };
 }
 
 /**
@@ -567,4 +527,11 @@ function parseResult(payload: unknown): ModelProviderResult {
     ...(stopReason === null ? {} : { stopReason }),
     ...(actualModelId === null ? {} : { actualModelId }),
   };
+}
+
+function timeoutFailure(): AnthropicModelProviderError {
+  return new AnthropicModelProviderError(
+    'ANTHROPIC_MODEL_PROVIDER_TIMEOUT',
+    'AnthropicModelProvider request exceeded the configured timeout.',
+  );
 }

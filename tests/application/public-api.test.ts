@@ -58,6 +58,7 @@ describe('@ctxalloc/application public API', () => {
       'CONVERSATION_SOURCE_SCHEMA_VERSION',
       'CompilationTracePersistenceError',
       'CompilationTracePersistenceService',
+      'CompileAndPersistLocalContextService',
       'CompileLocalContextService',
       'ConversationChunker',
       'ConversationChunkingError',

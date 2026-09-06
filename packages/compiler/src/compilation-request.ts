@@ -1,3 +1,4 @@
+import { snapshotCompilerInput } from './passive-input.js';
 import {
   CandidateBlockSchema,
   ScopeSchema,
@@ -230,7 +231,17 @@ export class CompilationRequestValidator {
    * @throws {CompilationRequestError} when the request is not valid.
    */
   validate(input: unknown): CompilationRequest {
-    const shape = safeParse(CompilationRequestShapeSchema, input);
+    const snapshot = snapshotCompilerInput(input);
+    if (!snapshot.ok)
+      throw new CompilationRequestError([
+        {
+          code: 'invalid_request',
+          path: [],
+          pointer: '',
+          message: 'Compilation request must be readable passive data without cycles.',
+        },
+      ]);
+    const shape = safeParse(CompilationRequestShapeSchema, snapshot.value);
     if (!shape.ok) {
       throw new CompilationRequestError(
         shape.issues.map((issue) => ({

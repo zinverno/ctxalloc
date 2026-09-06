@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "id": "example-request",
+  "scope": {
+    "tenantId": "local",
+    "workspaceId": "example"
+  },
+  "query": "reticulator calibrates",
+  "referenceTime": "2026-06-01T12:00:00.000Z",
+  "budget": {
+    "totalTokens": 2000,
+    "reservedOutputTokens": 500
+  },
+  "policy": {
+    "schemaVersion": 1,
+    "policyId": "local-example",
+    "policyVersion": "1",
+    "scoring": {
+      "schemaVersion": 1,
+      "policyId": "scoring",
+      "policyVersion": "1",
+      "authoredPriority": {
+        "weight": 1,
+        "min": 0,
+        "max": 1000
+      },
+      "retrieval": {
+        "weight": 1,
+        "aggregation": "max",
+        "rules": [
+          {
+            "ruleId": "minisearch",
+            "providerId": "ctxalloc-minisearch-bm25plus",
+            "providerVersion": "1+minisearch@7.2.0",
+            "semantics": "minisearch-bm25plus-sum-times-matched-query-terms",
+            "higherIsBetter": true,
+            "min": 0,
+            "max": 1000
+          }
+        ]
+      }
+    },
+    "filtering": {
+      "schemaVersion": 1,
+      "policyId": "filtering",
+      "policyVersion": "1",
+      "minimumTotalScore": 0
+    },
+    "allocation": {
+      "schemaVersion": 1,
+      "policyId": "allocation",
+      "policyVersion": "1",
+      "optionalSelection": "score-desc-greedy"
+    },
+    "ordering": {
+      "schemaVersion": 1,
+      "policyId": "ordering",
+      "policyVersion": "1",
+      "strategy": "source-document-then-location"
+    },
+    "rendering": {
+      "schemaVersion": 1,
+      "policyId": "rendering",
+      "policyVersion": "1",
+      "format": "jsonl-blocks"
+    }
+  }
+}

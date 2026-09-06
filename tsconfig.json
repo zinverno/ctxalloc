@@ -1,15 +1,38 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/domain" },
-    { "path": "packages/ports" },
-    { "path": "packages/compiler" },
-    { "path": "packages/application" },
-    { "path": "packages/adapters" },
-    { "path": "packages/tokenization" },
-    { "path": "packages/evaluation" },
-    { "path": "packages/testing" },
-    { "path": "apps/api" },
-    { "path": "apps/cli" }
+    {
+      "path": "packages/domain"
+    },
+    {
+      "path": "packages/ports"
+    },
+    {
+      "path": "packages/compiler"
+    },
+    {
+      "path": "packages/application"
+    },
+    {
+      "path": "packages/adapters"
+    },
+    {
+      "path": "packages/tokenization"
+    },
+    {
+      "path": "packages/evaluation"
+    },
+    {
+      "path": "packages/testing"
+    },
+    {
+      "path": "apps/api"
+    },
+    {
+      "path": "apps/cli"
+    },
+    {
+      "path": "benchmarks/tsconfig.build.json"
+    }
   ]
 }
