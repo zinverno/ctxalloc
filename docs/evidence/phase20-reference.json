@@ -1,0 +1,1900 @@
+{
+  "schemaVersion": 1,
+  "dataset": {
+    "id": "ctxalloc-eval-v1",
+    "version": "1",
+    "splitCounts": {
+      "development": 3,
+      "validation": 3,
+      "regression": 7
+    },
+    "limitation": "13 hand-authored cases; small fixed v1 dataset, not statistical proof."
+  },
+  "engineeringAcceptance": "INCOMPLETE",
+  "productValidationAcceptance": "FAIL",
+  "gates": [
+    {
+      "id": "medianContextReduction",
+      "state": "FAIL",
+      "value": 0,
+      "target": ">= 0.35",
+      "category": "product",
+      "evidence": "EvaluationHarness validation aggregates",
+      "required": true
+    },
+    {
+      "id": "longContextReduction",
+      "state": "PASS",
+      "value": 0.7692307692307693,
+      "target": ">= 0.50",
+      "category": "product",
+      "evidence": "EvaluationHarness long-context validation aggregates",
+      "required": true
+    },
+    {
+      "id": "requiredBlockRecall",
+      "state": "PASS",
+      "value": 1,
+      "target": ">= 0.95 in every measured case",
+      "category": "product",
+      "evidence": "EvaluationHarness validation preservation",
+      "required": true
+    },
+    {
+      "id": "requiredBlockRecallValidBudget",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00 in valid measured cases (METRICS 9.1 / 22.2)",
+      "category": "product",
+      "evidence": "EvaluationHarness validation preservation; stronger final checklist",
+      "required": true
+    },
+    {
+      "id": "weightedFactCoverage",
+      "state": "PASS",
+      "value": 1,
+      "target": ">= 0.95 in every measured case",
+      "category": "product",
+      "evidence": "EvaluationHarness validation preservation",
+      "required": true
+    },
+    {
+      "id": "criticalFactCoverage",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00 when annotated",
+      "category": "product",
+      "evidence": "EvaluationHarness validation preservation",
+      "required": true
+    },
+    {
+      "id": "budgetViolationCount",
+      "state": "PASS",
+      "value": 0,
+      "target": "= 0",
+      "category": "engineering",
+      "evidence": "EvaluationHarness all splits; expected failures retained",
+      "required": true
+    },
+    {
+      "id": "unexpectedFailureCount",
+      "state": "PASS",
+      "value": 0,
+      "target": "= 0",
+      "category": "engineering",
+      "evidence": "EvaluationHarness all splits",
+      "required": true
+    },
+    {
+      "id": "expectedFailureAccuracy",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00",
+      "category": "engineering",
+      "evidence": "EvaluationHarness regression expectations",
+      "required": true
+    },
+    {
+      "id": "provenanceCoverage",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00",
+      "category": "engineering",
+      "evidence": "acceptance correctness producer; METRICS 9.5 / 13.3–13.5",
+      "required": true
+    },
+    {
+      "id": "wrapperAccountingCompleteness",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00",
+      "category": "engineering",
+      "evidence": "acceptance correctness producer; METRICS 9.5 / 13.3–13.5",
+      "required": true
+    },
+    {
+      "id": "groupDecisionCompleteness",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00",
+      "category": "engineering",
+      "evidence": "acceptance correctness producer; METRICS 9.5 / 13.3–13.5",
+      "required": true
+    },
+    {
+      "id": "decisionReasonCoverage",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00",
+      "category": "engineering",
+      "evidence": "acceptance correctness producer; METRICS 9.5 / 13.3–13.5",
+      "required": true
+    },
+    {
+      "id": "traceReconciliationRate",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00",
+      "category": "engineering",
+      "evidence": "acceptance correctness producer; METRICS 9.5 / 13.3–13.5",
+      "required": true
+    },
+    {
+      "id": "repeatDeterminismRate",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00",
+      "category": "engineering",
+      "evidence": "EvaluationHarness three executions of each of 13 cases; matched comparisons have identical result evidence",
+      "required": true
+    },
+    {
+      "id": "scopeViolationDetectionRate",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1.00",
+      "category": "engineering",
+      "evidence": "CandidateValidator candidate-scope issues, including regression split",
+      "required": true
+    },
+    {
+      "id": "crossScopeInclusionCount",
+      "state": "PASS",
+      "value": 0,
+      "target": "= 0",
+      "category": "engineering",
+      "evidence": "Exact included block scopes against each request",
+      "required": true
+    },
+    {
+      "id": "sourceInstructionEscapeCount",
+      "state": "NOT_EVALUATED",
+      "value": null,
+      "target": "= 0",
+      "category": "engineering",
+      "evidence": "Prompt-injection regression retained. No exact suite-level behavioral escape producer; not inferred from token or fact coverage.",
+      "required": true
+    },
+    {
+      "id": "datasetUnchanged",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1",
+      "category": "engineering",
+      "evidence": "Before/after exact fixture snapshot; validation policy is unchanged",
+      "required": true
+    },
+    {
+      "id": "builtCliWorkflow",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1",
+      "category": "engineering",
+      "evidence": "Executed scripts/smoke-cli.mjs",
+      "required": true
+    },
+    {
+      "id": "builtHttpWorkflowAndParity",
+      "state": "PASS",
+      "value": 1,
+      "target": "= 1",
+      "category": "engineering",
+      "evidence": "Executed scripts/smoke-api.mjs: two formats, separate CLI/API DBs, restart, scope, privacy",
+      "required": true
+    },
+    {
+      "id": "dockerRuntime",
+      "state": "NOT_EVALUATED",
+      "value": null,
+      "target": "successful image build, mounted compile, SIGTERM, restart trace",
+      "category": "engineering",
+      "evidence": "NOT_RUN: deterministic runner makes no Docker availability assumption",
+      "required": true
+    },
+    {
+      "id": "medianAnswerQualityLoss",
+      "state": "NOT_EVALUATED",
+      "value": null,
+      "target": "<= 0.05",
+      "category": "product",
+      "evidence": "No complete live answer-quality evidence; disabled and fake runs do not qualify",
+      "required": true
+    }
+  ],
+  "correctness": {
+    "provenanceCoverage": {
+      "numerator": 27,
+      "denominator": 27
+    },
+    "wrapperAccountingCompleteness": {
+      "numerator": 38,
+      "denominator": 38
+    },
+    "groupDecisionCompleteness": {
+      "numerator": 37,
+      "denominator": 37
+    },
+    "decisionReasonCoverage": {
+      "numerator": 111,
+      "denominator": 111
+    },
+    "traceReconciliationRate": {
+      "numerator": 11,
+      "denominator": 11
+    },
+    "crossScopeInclusionCount": 0
+  },
+  "scopeDetections": {
+    "numerator": 1,
+    "denominator": 1
+  },
+  "repeatedComparisons": {
+    "identical": 26,
+    "total": 26
+  },
+  "evaluation": {
+    "all": {
+      "schemaVersion": 1,
+      "runId": "mvp-acceptance-v1",
+      "executedAt": "2026-09-06T23:29:56.429Z",
+      "datasetId": "ctxalloc-eval-v1",
+      "datasetVersion": "1",
+      "referenceEnvironment": "linux/x64/v22.23.2",
+      "modelExecution": "disabled",
+      "composition": {
+        "tokenizerId": "js-tiktoken:o200k_base",
+        "tokenizerVersion": "1.0.21",
+        "compilerId": "ctxalloc-eval",
+        "compilerVersion": "1.0.0",
+        "promptId": "ctxalloc-eval-prompt",
+        "promptVersion": "1",
+        "baselineRendererId": "ctxalloc-eval-jsonl",
+        "baselineRendererVersion": "1",
+        "clockId": "node-performance-now",
+        "clockVersion": "1"
+      },
+      "counts": {
+        "cases": 13,
+        "successfulCompilations": 11,
+        "expectedFailureCases": 2,
+        "expectedFailuresMatched": 2,
+        "unexpectedFailures": 0,
+        "providerFailures": 0,
+        "determinismFailures": 0,
+        "budgetViolations": 0,
+        "severeQualityLosses": 0,
+        "modelIdentityMismatches": 0
+      },
+      "aggregates": {
+        "requiredBlockRecall": {
+          "count": 10,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "weightedFactCoverage": {
+          "count": 11,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "criticalFactCoverage": {
+          "count": 10,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "relevantBlockRecall": {
+          "count": 11,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "irrelevantExclusionRate": {
+          "count": 3,
+          "mean": 0.3333333333333333,
+          "median": 0,
+          "p10": 0,
+          "p50": 0,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 0,
+          "maximum": 1
+        },
+        "tokenReduction": {
+          "count": 11,
+          "mean": 39.54545454545455,
+          "median": 0,
+          "p10": 0,
+          "p50": 0,
+          "p90": 35,
+          "p95": 400,
+          "p99": 400,
+          "minimum": 0,
+          "maximum": 400
+        },
+        "tokenReductionRatio": {
+          "count": 11,
+          "mean": 0.10082150858849888,
+          "median": 0,
+          "p10": 0,
+          "p50": 0,
+          "p90": 0.33980582524271846,
+          "p95": 0.7692307692307693,
+          "p99": 0.7692307692307693,
+          "minimum": 0,
+          "maximum": 0.7692307692307693
+        }
+      },
+      "latency": {
+        "compilation": {
+          "count": 13,
+          "mean": 3.399944923076803,
+          "median": 2.368875999998636,
+          "p10": 1.5528270000013435,
+          "p50": 2.368875999998636,
+          "p90": 8.234044999999242,
+          "p95": 10.190032999998948,
+          "p99": 10.190032999998948,
+          "minimum": 0.41531299999951443,
+          "maximum": 10.190032999998948
+        }
+      },
+      "cases": [
+        {
+          "schemaVersion": 1,
+          "caseId": "case-01-straightforward-relevance",
+          "datasetSplit": "development",
+          "tags": [
+            "relevance"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:718b6d3bb4534b6d7e84449555d88702059fa4ccb6588f4345467b4508d88e74",
+          "requestFingerprint": "sha256:fc8af3c491c1c60ad0414a190c051e2d578c5d30c81bed1197f876c26682a5d2",
+          "compilationLatencyMilliseconds": 8.234044999999242,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 70,
+              "contextHash": "sha256:fa2c5bec3c016aa004e773606b068b2eae5836d809660e140c2bf728b1754c80"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 70,
+              "contextHash": "sha256:fa2c5bec3c016aa004e773606b068b2eae5836d809660e140c2bf728b1754c80"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 70,
+            "compiledTokens": 70,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 70,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 70,
+            "availableInputTokens": 300,
+            "unusedTokens": 230,
+            "renderingTokenDelta": 48,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "preservedFactIds": [
+              "fact:window"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-02-distributed-facts",
+          "datasetSplit": "development",
+          "tags": [
+            "distributed-facts"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:481d2f930b197dc874d16a13ecca8e834e20d19bb43a03c04e9c58faa3dbf170",
+          "requestFingerprint": "sha256:17027179290840b1c5ce4cc3179f3c7e5df0f0b5f28c6ecb832005f281c1c972",
+          "compilationLatencyMilliseconds": 3.937162999998691,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 106,
+              "contextHash": "sha256:28d8990d1324725270774be4c9ef91a09d23bbe40cbcb22d64d529111de42320"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 106,
+              "contextHash": "sha256:28d8990d1324725270774be4c9ef91a09d23bbe40cbcb22d64d529111de42320"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 106,
+            "compiledTokens": 106,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 106,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 106,
+            "availableInputTokens": 300,
+            "unusedTokens": 194,
+            "renderingTokenDelta": 71,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "preservedFactIds": [
+              "fact:sequencing"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-03-duplicate-context",
+          "datasetSplit": "regression",
+          "tags": [
+            "duplicates"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:7dfef58efd3e6197af1df14f3fb87c660df38390420f94df9f7517c856d33c2d",
+          "requestFingerprint": "sha256:fd399c14e772b5109092b6214610ab8f1fcf9790948675602a2429736007aaeb",
+          "compilationLatencyMilliseconds": 3.134791000000405,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 103,
+              "contextHash": "sha256:31b74dc99e25a09b1a1d74fb5f02e6f6dffb3bde3571c3cc9930e191bed5fc5a"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 103,
+              "contextHash": "sha256:31b74dc99e25a09b1a1d74fb5f02e6f6dffb3bde3571c3cc9930e191bed5fc5a"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 103,
+            "compiledTokens": 68,
+            "tokenReduction": 35,
+            "tokenReductionRatio": 0.33980582524271846,
+            "truncationBaselineTokens": 103,
+            "truncationTokenReduction": 35
+          },
+          "usage": {
+            "compiledTokens": 68,
+            "availableInputTokens": 300,
+            "unusedTokens": 232,
+            "renderingTokenDelta": 47,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "preservedFactIds": [
+              "fact:retention"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-04-conflicting-context",
+          "datasetSplit": "validation",
+          "tags": [
+            "conflict"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:8126bcb5e128b453bf5648bb92b3034b51b2389ce7eeffc69d6f56c8be142241",
+          "requestFingerprint": "sha256:d6d633fc7a412c58e32b4e991d33d59e18c7a8882afd223757153c39adb06647",
+          "compilationLatencyMilliseconds": 3.9090500000002066,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 79,
+              "contextHash": "sha256:8930e274f10313cbd3a55d92b98dfe27d384e14379e7b4a7f6ef67c4052f381c"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 79,
+              "contextHash": "sha256:8930e274f10313cbd3a55d92b98dfe27d384e14379e7b4a7f6ef67c4052f381c"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 79,
+            "compiledTokens": 79,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 79,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 79,
+            "availableInputTokens": 300,
+            "unusedTokens": 221,
+            "renderingTokenDelta": 49,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "preservedFactIds": [
+              "fact:current-limit"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-05-budget-pressure",
+          "datasetSplit": "validation",
+          "tags": [
+            "budget-pressure",
+            "long-context"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:61383893c44398889ba89c973c52dc2ce5b1925306fb036717e47fdda2ec1fb6",
+          "requestFingerprint": "sha256:85de71f2f89697dfe70763bba5dcf969d5b26133a3fe37abcaf5969d39fe931a",
+          "compilationLatencyMilliseconds": 10.190032999998948,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 13,
+              "contextTokens": 520,
+              "contextHash": "sha256:58a7e99a5bb7955d9f9d03f9ac9d7f27957a7a1c06f89c58a73a459f2bc014e5"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 120,
+              "contextHash": "sha256:fa0edf42323368bee510f9ad09e60ef286ef311a285b5b278d930e5fc2ab7117"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 520,
+            "compiledTokens": 120,
+            "tokenReduction": 400,
+            "tokenReductionRatio": 0.7692307692307693,
+            "truncationBaselineTokens": 120,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 120,
+            "availableInputTokens": 140,
+            "unusedTokens": 20,
+            "renderingTokenDelta": 77,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "irrelevantExclusionRate": 1,
+            "preservedFactIds": [
+              "fact:commander"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-06-conversation-continuity",
+          "datasetSplit": "development",
+          "tags": [
+            "conversation"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:2f475ca205767c7d1127434422ada57361275915c5195ba300c09ed5a7c13410",
+          "requestFingerprint": "sha256:3ac51aa8c505959c54fa743bc2a0913bea4f2edd2b1a0d189d6c49303b1d43a1",
+          "compilationLatencyMilliseconds": 1.9064140000009502,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 97,
+              "contextHash": "sha256:d43e62a51056bc403958e3999771e725330459aebc83b4a69a61c785c1b97b2f"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 97,
+              "contextHash": "sha256:d43e62a51056bc403958e3999771e725330459aebc83b4a69a61c785c1b97b2f"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 97,
+            "compiledTokens": 97,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 97,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 97,
+            "availableInputTokens": 300,
+            "unusedTokens": 203,
+            "renderingTokenDelta": 69,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "irrelevantExclusionRate": 0,
+            "preservedFactIds": [
+              "fact:flag"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-07-required-large-block",
+          "datasetSplit": "regression",
+          "tags": [
+            "required-block"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:fd184b323120b56aa73b8667b6427c9bcf91234e7d1519864ce9931d38378767",
+          "requestFingerprint": "sha256:c8be2b955f5d0a1eee239eb67933f0ed9a03fb2bea567278eed728e0d3b5cec9",
+          "compilationLatencyMilliseconds": 1.8088210000005347,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 99,
+              "contextHash": "sha256:3fa0c89d663b1fcc26f91e5a59692f3a0b1c61a03c882b98c660a6d28625e8bf"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 99,
+              "contextHash": "sha256:3fa0c89d663b1fcc26f91e5a59692f3a0b1c61a03c882b98c660a6d28625e8bf"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 99,
+            "compiledTokens": 99,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 99,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 99,
+            "availableInputTokens": 160,
+            "unusedTokens": 61,
+            "renderingTokenDelta": 50,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "preservedFactIds": [
+              "fact:escalation"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-08-impossible-budget",
+          "datasetSplit": "regression",
+          "tags": [
+            "expected-failure",
+            "impossible-budget"
+          ],
+          "compilation": "failed",
+          "compilationId": "sha256:ecebf3366f1dc4b5e09173b10208512a4a1db51ac7a5694e49a84d86ce323045",
+          "compilationFailure": {
+            "stage": "allocation",
+            "issueCodes": [
+              "required_content_exceeds_budget"
+            ],
+            "compilationId": "sha256:ecebf3366f1dc4b5e09173b10208512a4a1db51ac7a5694e49a84d86ce323045"
+          },
+          "compilationLatencyMilliseconds": 1.5600310000008903,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 1,
+              "contextTokens": 384,
+              "contextHash": "sha256:767ee9573f0d42baadb502a23782a41658f27c520a6dff90164eec58bcd31703"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 0,
+              "contextTokens": 0,
+              "contextHash": "sha256:996767faf90e033fbee6e8836372ada29b2867f2884f0149293f5b5aff8f4ee2"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "model": {
+            "state": "skipped-expected-failure",
+            "callOrder": []
+          },
+          "expectedFailure": {
+            "expected": {
+              "stage": "allocation",
+              "issueCode": "required_content_exceeds_budget"
+            },
+            "passed": true
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-09-scope-isolation",
+          "datasetSplit": "regression",
+          "tags": [
+            "expected-failure",
+            "scope-isolation"
+          ],
+          "compilation": "failed",
+          "compilationId": "sha256:3cc0e2b879599fab36748632e4815e34693bf057619474d10e6a70a0583bad14",
+          "compilationFailure": {
+            "stage": "candidate-validation",
+            "issueCodes": [
+              "scope_mismatch"
+            ],
+            "compilationId": "sha256:3cc0e2b879599fab36748632e4815e34693bf057619474d10e6a70a0583bad14"
+          },
+          "compilationLatencyMilliseconds": 0.41531299999951443,
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "model": {
+            "state": "skipped-expected-failure",
+            "callOrder": []
+          },
+          "expectedFailure": {
+            "expected": {
+              "stage": "candidate-validation",
+              "issueCode": "scope_mismatch"
+            },
+            "passed": true
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-10-unicode-structure",
+          "datasetSplit": "regression",
+          "tags": [
+            "structured-markdown",
+            "unicode"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:6cd0de592e8fa2f7e6dace2e330007ff9f653534ee131124089e018773032c97",
+          "requestFingerprint": "sha256:18f7c391402ccc72b70e3ccc8f0abf685598ee4f294536e2c535c37801b81abb",
+          "compilationLatencyMilliseconds": 2.368875999998636,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 96,
+              "contextHash": "sha256:1ed91880a895cd89cd685f3d854ceb35e1a7ca96082cb0952ea1ce50acd25bc0"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 96,
+              "contextHash": "sha256:1ed91880a895cd89cd685f3d854ceb35e1a7ca96082cb0952ea1ce50acd25bc0"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 96,
+            "compiledTokens": 96,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 96,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 96,
+            "availableInputTokens": 300,
+            "unusedTokens": 204,
+            "renderingTokenDelta": 57,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "preservedFactIds": [
+              "fact:threshold"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-11-prompt-injection",
+          "datasetSplit": "regression",
+          "tags": [
+            "prompt-injection",
+            "security"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:0fd5be23302d96db94bcb1c8872bb99f854ee715205932604b3a3fefa687e31a",
+          "requestFingerprint": "sha256:c0aa3ecf002ac9b2141bbf85d6effcaf0282817f04739b2cabbc568f56638dde",
+          "compilationLatencyMilliseconds": 1.5528270000013435,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 83,
+              "contextHash": "sha256:6ba314ae36e21fd9075073a20c282034bdd355dba72d8877aa676b139c23da0b"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 83,
+              "contextHash": "sha256:6ba314ae36e21fd9075073a20c282034bdd355dba72d8877aa676b139c23da0b"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 83,
+            "compiledTokens": 83,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 83,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 83,
+            "availableInputTokens": 300,
+            "unusedTokens": 217,
+            "renderingTokenDelta": 48,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "preservedFactIds": [
+              "fact:backup"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-12-retrieval-noise",
+          "datasetSplit": "validation",
+          "tags": [
+            "retrieval-noise"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:969f114ff97f26f714521425503efdd3f34dfe9278e4149a66f19bf5adc00ffa",
+          "requestFingerprint": "sha256:5a944d7226a77cb8f232c0b0118458324f6701b0ac133547a3f929f21a646f3c",
+          "compilationLatencyMilliseconds": 2.904575999998997,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 100,
+              "contextHash": "sha256:2d3c9a395833826a97e21850faefa9102b23bc68dbd3bbaa82c2544733c00475"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 100,
+              "contextHash": "sha256:2d3c9a395833826a97e21850faefa9102b23bc68dbd3bbaa82c2544733c00475"
+            },
+            "topK": {
+              "applicable": true,
+              "baseline": "top-k",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 100,
+              "contextHash": "sha256:2d3c9a395833826a97e21850faefa9102b23bc68dbd3bbaa82c2544733c00475"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 100,
+            "compiledTokens": 100,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 100,
+            "truncationTokenReduction": 0,
+            "topKBaselineTokens": 100,
+            "topKTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 100,
+            "availableInputTokens": 300,
+            "unusedTokens": 200,
+            "renderingTokenDelta": 70,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "irrelevantExclusionRate": 0,
+            "preservedFactIds": [
+              "fact:purge"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-13-input-ordering",
+          "datasetSplit": "regression",
+          "tags": [
+            "determinism",
+            "input-ordering"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:a65357836dc19d654898283432c10ac083729f82b51408884b904e54e9e1d164",
+          "requestFingerprint": "sha256:54fa8e0ea64467edc5a0b6a38b5025176bf8cf43bdcb826b1a32d57d05733e2a",
+          "compilationLatencyMilliseconds": 2.2773440000000846,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 100,
+              "contextHash": "sha256:f7481fbbd8daa1d06cd9648b3d37af6c01eebf4fb68d02237d336342bb42a95b"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 100,
+              "contextHash": "sha256:f7481fbbd8daa1d06cd9648b3d37af6c01eebf4fb68d02237d336342bb42a95b"
+            },
+            "topK": {
+              "applicable": true,
+              "baseline": "top-k",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 100,
+              "contextHash": "sha256:d929c8ac5d75ea602df9b5dc097c27689c595a9bd7c93af29e4daf1d8e99f479"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 100,
+            "compiledTokens": 100,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 100,
+            "truncationTokenReduction": 0,
+            "topKBaselineTokens": 100,
+            "topKTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 100,
+            "availableInputTokens": 300,
+            "unusedTokens": 200,
+            "renderingTokenDelta": 72,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "preservedFactIds": [
+              "fact:algorithm"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        }
+      ],
+      "reportHash": "sha256:3c87e04330b14f199f3395ce7de22cb6e23e2d2b8b688e25be35b35a60505bc8"
+    },
+    "validation": {
+      "schemaVersion": 1,
+      "runId": "mvp-acceptance-v1",
+      "executedAt": "2026-09-06T23:29:56.429Z",
+      "datasetId": "ctxalloc-eval-v1",
+      "datasetVersion": "1",
+      "referenceEnvironment": "linux/x64/v22.23.2",
+      "modelExecution": "disabled",
+      "composition": {
+        "tokenizerId": "js-tiktoken:o200k_base",
+        "tokenizerVersion": "1.0.21",
+        "compilerId": "ctxalloc-eval",
+        "compilerVersion": "1.0.0",
+        "promptId": "ctxalloc-eval-prompt",
+        "promptVersion": "1",
+        "baselineRendererId": "ctxalloc-eval-jsonl",
+        "baselineRendererVersion": "1",
+        "clockId": "node-performance-now",
+        "clockVersion": "1"
+      },
+      "counts": {
+        "cases": 3,
+        "successfulCompilations": 3,
+        "expectedFailureCases": 0,
+        "expectedFailuresMatched": 0,
+        "unexpectedFailures": 0,
+        "providerFailures": 0,
+        "determinismFailures": 0,
+        "budgetViolations": 0,
+        "severeQualityLosses": 0,
+        "modelIdentityMismatches": 0
+      },
+      "aggregates": {
+        "requiredBlockRecall": {
+          "count": 3,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "weightedFactCoverage": {
+          "count": 3,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "criticalFactCoverage": {
+          "count": 3,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "relevantBlockRecall": {
+          "count": 3,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "irrelevantExclusionRate": {
+          "count": 2,
+          "mean": 0.5,
+          "median": 0,
+          "p10": 0,
+          "p50": 0,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 0,
+          "maximum": 1
+        },
+        "tokenReduction": {
+          "count": 3,
+          "mean": 133.33333333333334,
+          "median": 0,
+          "p10": 0,
+          "p50": 0,
+          "p90": 400,
+          "p95": 400,
+          "p99": 400,
+          "minimum": 0,
+          "maximum": 400
+        },
+        "tokenReductionRatio": {
+          "count": 3,
+          "mean": 0.25641025641025644,
+          "median": 0,
+          "p10": 0,
+          "p50": 0,
+          "p90": 0.7692307692307693,
+          "p95": 0.7692307692307693,
+          "p99": 0.7692307692307693,
+          "minimum": 0,
+          "maximum": 0.7692307692307693
+        }
+      },
+      "latency": {
+        "compilation": {
+          "count": 3,
+          "mean": 4.526347666666576,
+          "median": 2.28635100000065,
+          "p10": 1.966006999999081,
+          "p50": 2.28635100000065,
+          "p90": 9.326684999999998,
+          "p95": 9.326684999999998,
+          "p99": 9.326684999999998,
+          "minimum": 1.966006999999081,
+          "maximum": 9.326684999999998
+        }
+      },
+      "cases": [
+        {
+          "schemaVersion": 1,
+          "caseId": "case-04-conflicting-context",
+          "datasetSplit": "validation",
+          "tags": [
+            "conflict"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:8126bcb5e128b453bf5648bb92b3034b51b2389ce7eeffc69d6f56c8be142241",
+          "requestFingerprint": "sha256:d6d633fc7a412c58e32b4e991d33d59e18c7a8882afd223757153c39adb06647",
+          "compilationLatencyMilliseconds": 1.966006999999081,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 79,
+              "contextHash": "sha256:8930e274f10313cbd3a55d92b98dfe27d384e14379e7b4a7f6ef67c4052f381c"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 2,
+              "contextTokens": 79,
+              "contextHash": "sha256:8930e274f10313cbd3a55d92b98dfe27d384e14379e7b4a7f6ef67c4052f381c"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 79,
+            "compiledTokens": 79,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 79,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 79,
+            "availableInputTokens": 300,
+            "unusedTokens": 221,
+            "renderingTokenDelta": 49,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "preservedFactIds": [
+              "fact:current-limit"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-05-budget-pressure",
+          "datasetSplit": "validation",
+          "tags": [
+            "budget-pressure",
+            "long-context"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:61383893c44398889ba89c973c52dc2ce5b1925306fb036717e47fdda2ec1fb6",
+          "requestFingerprint": "sha256:85de71f2f89697dfe70763bba5dcf969d5b26133a3fe37abcaf5969d39fe931a",
+          "compilationLatencyMilliseconds": 9.326684999999998,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 13,
+              "contextTokens": 520,
+              "contextHash": "sha256:58a7e99a5bb7955d9f9d03f9ac9d7f27957a7a1c06f89c58a73a459f2bc014e5"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 120,
+              "contextHash": "sha256:fa0edf42323368bee510f9ad09e60ef286ef311a285b5b278d930e5fc2ab7117"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 520,
+            "compiledTokens": 120,
+            "tokenReduction": 400,
+            "tokenReductionRatio": 0.7692307692307693,
+            "truncationBaselineTokens": 120,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 120,
+            "availableInputTokens": 140,
+            "unusedTokens": 20,
+            "renderingTokenDelta": 77,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "irrelevantExclusionRate": 1,
+            "preservedFactIds": [
+              "fact:commander"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "caseId": "case-12-retrieval-noise",
+          "datasetSplit": "validation",
+          "tags": [
+            "retrieval-noise"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:969f114ff97f26f714521425503efdd3f34dfe9278e4149a66f19bf5adc00ffa",
+          "requestFingerprint": "sha256:5a944d7226a77cb8f232c0b0118458324f6701b0ac133547a3f929f21a646f3c",
+          "compilationLatencyMilliseconds": 2.28635100000065,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 100,
+              "contextHash": "sha256:2d3c9a395833826a97e21850faefa9102b23bc68dbd3bbaa82c2544733c00475"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 100,
+              "contextHash": "sha256:2d3c9a395833826a97e21850faefa9102b23bc68dbd3bbaa82c2544733c00475"
+            },
+            "topK": {
+              "applicable": true,
+              "baseline": "top-k",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 100,
+              "contextHash": "sha256:2d3c9a395833826a97e21850faefa9102b23bc68dbd3bbaa82c2544733c00475"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 100,
+            "compiledTokens": 100,
+            "tokenReduction": 0,
+            "tokenReductionRatio": 0,
+            "truncationBaselineTokens": 100,
+            "truncationTokenReduction": 0,
+            "topKBaselineTokens": 100,
+            "topKTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 100,
+            "availableInputTokens": 300,
+            "unusedTokens": 200,
+            "renderingTokenDelta": 70,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "irrelevantExclusionRate": 0,
+            "preservedFactIds": [
+              "fact:purge"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        }
+      ],
+      "reportHash": "sha256:e3868dcb52d7f98960e6d968c745eb0e614b35ad24bb50fb4ce5dd111c476e29"
+    },
+    "longContext": {
+      "schemaVersion": 1,
+      "runId": "mvp-acceptance-v1",
+      "executedAt": "2026-09-06T23:29:56.429Z",
+      "datasetId": "ctxalloc-eval-v1",
+      "datasetVersion": "1",
+      "referenceEnvironment": "linux/x64/v22.23.2",
+      "modelExecution": "disabled",
+      "composition": {
+        "tokenizerId": "js-tiktoken:o200k_base",
+        "tokenizerVersion": "1.0.21",
+        "compilerId": "ctxalloc-eval",
+        "compilerVersion": "1.0.0",
+        "promptId": "ctxalloc-eval-prompt",
+        "promptVersion": "1",
+        "baselineRendererId": "ctxalloc-eval-jsonl",
+        "baselineRendererVersion": "1",
+        "clockId": "node-performance-now",
+        "clockVersion": "1"
+      },
+      "counts": {
+        "cases": 1,
+        "successfulCompilations": 1,
+        "expectedFailureCases": 0,
+        "expectedFailuresMatched": 0,
+        "unexpectedFailures": 0,
+        "providerFailures": 0,
+        "determinismFailures": 0,
+        "budgetViolations": 0,
+        "severeQualityLosses": 0,
+        "modelIdentityMismatches": 0
+      },
+      "aggregates": {
+        "requiredBlockRecall": {
+          "count": 1,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "weightedFactCoverage": {
+          "count": 1,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "criticalFactCoverage": {
+          "count": 1,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "relevantBlockRecall": {
+          "count": 1,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "irrelevantExclusionRate": {
+          "count": 1,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p50": 1,
+          "p90": 1,
+          "p95": 1,
+          "p99": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "tokenReduction": {
+          "count": 1,
+          "mean": 400,
+          "median": 400,
+          "p10": 400,
+          "p50": 400,
+          "p90": 400,
+          "p95": 400,
+          "p99": 400,
+          "minimum": 400,
+          "maximum": 400
+        },
+        "tokenReductionRatio": {
+          "count": 1,
+          "mean": 0.7692307692307693,
+          "median": 0.7692307692307693,
+          "p10": 0.7692307692307693,
+          "p50": 0.7692307692307693,
+          "p90": 0.7692307692307693,
+          "p95": 0.7692307692307693,
+          "p99": 0.7692307692307693,
+          "minimum": 0.7692307692307693,
+          "maximum": 0.7692307692307693
+        }
+      },
+      "latency": {
+        "compilation": {
+          "count": 1,
+          "mean": 8.288186999998288,
+          "median": 8.288186999998288,
+          "p10": 8.288186999998288,
+          "p50": 8.288186999998288,
+          "p90": 8.288186999998288,
+          "p95": 8.288186999998288,
+          "p99": 8.288186999998288,
+          "minimum": 8.288186999998288,
+          "maximum": 8.288186999998288
+        }
+      },
+      "cases": [
+        {
+          "schemaVersion": 1,
+          "caseId": "case-05-budget-pressure",
+          "datasetSplit": "validation",
+          "tags": [
+            "budget-pressure",
+            "long-context"
+          ],
+          "compilation": "succeeded",
+          "compilationId": "sha256:61383893c44398889ba89c973c52dc2ce5b1925306fb036717e47fdda2ec1fb6",
+          "requestFingerprint": "sha256:85de71f2f89697dfe70763bba5dcf969d5b26133a3fe37abcaf5969d39fe931a",
+          "compilationLatencyMilliseconds": 8.288186999998288,
+          "baselines": {
+            "fullContext": {
+              "applicable": true,
+              "baseline": "full-context",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 13,
+              "contextTokens": 520,
+              "contextHash": "sha256:58a7e99a5bb7955d9f9d03f9ac9d7f27957a7a1c06f89c58a73a459f2bc014e5"
+            },
+            "truncation": {
+              "applicable": true,
+              "baseline": "truncation",
+              "rendererId": "ctxalloc-eval-jsonl",
+              "rendererVersion": "1",
+              "includedCandidateCount": 3,
+              "contextTokens": 120,
+              "contextHash": "sha256:fa0edf42323368bee510f9ad09e60ef286ef311a285b5b278d930e5fc2ab7117"
+            },
+            "topK": {
+              "applicable": false,
+              "baseline": "top-k",
+              "reason": "incomparable-retrieval-evidence"
+            }
+          },
+          "determinism": {
+            "executions": 3,
+            "matched": true
+          },
+          "tokens": {
+            "baselineInputTokens": 520,
+            "compiledTokens": 120,
+            "tokenReduction": 400,
+            "tokenReductionRatio": 0.7692307692307693,
+            "truncationBaselineTokens": 120,
+            "truncationTokenReduction": 0
+          },
+          "usage": {
+            "compiledTokens": 120,
+            "availableInputTokens": 140,
+            "unusedTokens": 20,
+            "renderingTokenDelta": 77,
+            "budgetViolation": false
+          },
+          "preservation": {
+            "requiredBlockRecall": 1,
+            "weightedFactCoverage": 1,
+            "criticalFactCoverage": 1,
+            "relevantBlockRecall": 1,
+            "irrelevantExclusionRate": 1,
+            "preservedFactIds": [
+              "fact:commander"
+            ],
+            "missingFactIds": []
+          },
+          "model": {
+            "state": "disabled",
+            "callOrder": []
+          }
+        }
+      ],
+      "reportHash": "sha256:d9a890463396cb0aa528ef76782a6a48aaa4070f48e262eca3f8a0f503722402"
+    }
+  },
+  "severeQualityLossCaseIds": [],
+  "performance": {
+    "state": "MEASURED",
+    "ciTimingGate": false,
+    "warmupIterations": 5,
+    "iterations": 20,
+    "clock": {
+      "id": "node-performance-now",
+      "version": "1"
+    },
+    "units": "milliseconds",
+    "compilerOnly": {
+      "datasetId": "ctxalloc-eval-v1",
+      "caseId": "case-05-budget-pressure",
+      "candidateCount": 13,
+      "tracePersistenceIncluded": false,
+      "latency": {
+        "count": 20,
+        "p50": 8.293665999999575,
+        "p95": 8.942730999999185,
+        "p99": 9.180288999999902,
+        "maximum": 9.180288999999902
+      },
+      "targetP95": 500
+    },
+    "localRetrievalAndCompile": {
+      "datasetId": "public-api-handbook",
+      "corpusBlockCount": 2,
+      "candidateCount": 1,
+      "sourceReadAndPreparationIncluded": true,
+      "tracePersistenceIncluded": true,
+      "traceWriteMode": "first write in warm-up, idempotent writes in measured iterations",
+      "latency": {
+        "count": 20,
+        "p50": 5.360968000000867,
+        "p95": 6.996721999999863,
+        "p99": 7.268894999999247,
+        "maximum": 7.268894999999247
+      },
+      "targetP95": 2500
+    }
+  },
+  "staging": {
+    "dockerRuntime": "NOT_RUN",
+    "exposure": "Host loopback only; no application authentication"
+  },
+  "qualityEvidence": {
+    "live": false,
+    "modelDisabledAndFakeExcluded": true
+  },
+  "sourceRevision": {
+    "head": "65623868a8a59cf67783a3e4e3aac2c4623159c2",
+    "dirty": false
+  },
+  "environment": {
+    "node": "v22.23.2",
+    "packageManager": "pnpm@10.33.0",
+    "os": "linux",
+    "osRelease": "6.12.95-1-MANJARO",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 5 5500U with Radeon Graphics",
+    "logicalCpuCount": 12,
+    "totalMemoryBytes": 7607300096
+  }
+}

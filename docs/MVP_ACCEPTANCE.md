@@ -15,11 +15,16 @@ Phase 19 merge and actual fetched main head:
 was **162 test files / 3515 tests**, all passing. Phase 20 starts from that commit
 on `codex/phase-20-http-api-mvp-acceptance`; no earlier commit is rewritten.
 
-The initial reference measurement used the Phase 20 working tree over that base
-(`sourceRevision.dirty: true`), Node **v22.23.2**, pnpm **10.33.0**, Linux
+The reference measurement executes clean implementation commit
+[`65623868a8a59cf67783a3e4e3aac2c4623159c2`](https://github.com/zinverno/ctxalloc/commit/65623868a8a59cf67783a3e4e3aac2c4623159c2)
+(`sourceRevision.dirty: false`). The full versioned machine report is committed
+as [phase20-reference.json](evidence/phase20-reference.json). The evidence-only
+follow-up changes documentation, not executable code; CI separately checks the
+final PR head.
+
+Reference environment: Node **v22.23.2**, pnpm **10.33.0**, Linux
 **6.12.95-1-MANJARO**, **x64**, **AMD Ryzen 5 5500U with Radeon Graphics**, 12 logical
-CPUs and **7,607,300,096 bytes** total memory. A clean committed reference run and
-its exact commit are recorded in the evidence manifest before PR handoff.
+CPUs and **7,607,300,096 bytes** total memory.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -148,14 +153,14 @@ for this reference report.
 
 ## Warm performance
 
-The initial reference run used the environment above, `SystemMonotonicClock`
+The committed reference run used the environment above, `SystemMonotonicClock`
 (`node-performance-now`, version 1), five warm-up iterations followed by twenty
 measured iterations. Percentiles use nearest rank. Units are milliseconds.
 
 | Measurement | p50 | p95 | p99 | Max | p95 target |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Compiler only | 8.230 | 8.941 | 8.984 | 8.984 | <= 500 |
-| Local retrieval + compile, including trace persistence | 5.275 | 7.321 | 7.832 | 7.832 | <= 2500 |
+| Compiler only | 8.294 | 8.943 | 9.180 | 9.180 | <= 500 |
+| Local retrieval + compile, including trace persistence | 5.361 | 6.997 | 7.269 | 7.269 | <= 2500 |
 
 Compiler-only uses validation `case-05-budget-pressure`, 13 candidates and no
 persistence. The local measurement uses the public sample Markdown handbook,
