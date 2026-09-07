@@ -40,3 +40,6 @@ jobs:
 
       - name: Measure deterministic MVP acceptance
         run: pnpm acceptance:mvp
+
+      - name: Diagnose frozen validation selection
+        run: pnpm diagnose:selection
