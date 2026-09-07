@@ -1,0 +1,2124 @@
+{
+  "schemaVersion": 1,
+  "dataset": {
+    "id": "ctxalloc-eval-v1",
+    "version": "1"
+  },
+  "datasetSplit": "validation",
+  "cases": [
+    {
+      "caseId": "case-04-conflicting-context",
+      "schemaVersion": 1,
+      "diagnostic": "compilation-decisions",
+      "compilationId": "sha256:8126bcb5e128b453bf5648bb92b3034b51b2389ce7eeffc69d6f56c8be142241",
+      "request": {
+        "id": "case-04-conflicting-context-request",
+        "fingerprint": "sha256:d6d633fc7a412c58e32b4e991d33d59e18c7a8882afd223757153c39adb06647",
+        "scope": {
+          "tenantId": "bench",
+          "workspaceId": "v1"
+        },
+        "referenceTime": "2026-06-01T12:00:00.000Z",
+        "queryHash": "sha256:f9301d88c737283606f71b18b34983a3cdd54df6524185089f9a4bd4863dd0bf",
+        "budget": {
+          "totalTokens": 400,
+          "reservedOutputTokens": 100
+        },
+        "candidateCount": 2,
+        "sourceDocumentCount": 1
+      },
+      "composition": {
+        "compiler": {
+          "id": "ctxalloc-eval",
+          "version": "1.0.0"
+        },
+        "policy": {
+          "compilation": {
+            "id": "ctxalloc-eval-v1",
+            "version": "1.0.0"
+          },
+          "scoring": {
+            "id": "scoring",
+            "version": "1.0.0"
+          },
+          "filtering": {
+            "id": "filtering",
+            "version": "1.0.0"
+          },
+          "allocation": {
+            "id": "allocation",
+            "version": "1.0.0"
+          },
+          "ordering": {
+            "id": "ordering",
+            "version": "1.0.0"
+          },
+          "rendering": {
+            "id": "rendering",
+            "version": "1.0.0"
+          }
+        },
+        "tokenizer": {
+          "id": "js-tiktoken:o200k_base",
+          "version": "1.0.21"
+        },
+        "tokenizerCoverage": "validation-and-rendering",
+        "renderer": {
+          "id": "ctxalloc-jsonl",
+          "version": "1"
+        }
+      },
+      "sources": [
+        {
+          "id": "doc:limits",
+          "sourceType": "markdown",
+          "contentHash": "sha256:73542c5835f6271e42a25d1aba3b39d98e1e85b0b8ee534b7dfa7263ea3d34bf"
+        }
+      ],
+      "admissionPolicy": {
+        "minimumTotalScore": 0,
+        "optionalSelection": "score-desc-greedy",
+        "categoryConstraints": [],
+        "recencyConfigured": false
+      },
+      "budgetUnit": "canonical-block-content-tokens",
+      "allocation": {
+        "availableInputTokens": 300,
+        "selectedBlockContentTokens": 30,
+        "unallocatedBlockContentTokens": 270,
+        "includedBlockIds": [
+          "blk:current-limit",
+          "blk:stale-limit"
+        ],
+        "excludedBlockIds": [],
+        "optionalEvictionOrder": [
+          "blk:stale-limit",
+          "blk:current-limit"
+        ]
+      },
+      "initialRendering": {
+        "renderedContextHash": "sha256:5b39158b5b6d7cc7216e61b96f071fec8754102a2b9a916c8714a6c6f844a653",
+        "renderedTokens": 79,
+        "fitsAvailableInputBudget": true
+      },
+      "groups": [
+        {
+          "canonical": {
+            "id": "blk:current-limit",
+            "sourceDocumentId": "doc:limits",
+            "sourceType": "markdown",
+            "tokenCount": 15,
+            "normalizedContentHash": "sha256:285b39a4a012617bb4bd05f4617a0973ccdb18ef2246ad85a458160470b469f4",
+            "required": false,
+            "priority": 900,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 59,
+              "startLine": 2
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:current-limit",
+              "sourceDocumentId": "doc:limits",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 59,
+                "startLine": 2
+              },
+              "normalizedContentHash": "sha256:285b39a4a012617bb4bd05f4617a0973ccdb18ef2246ad85a458160470b469f4",
+              "contentTokens": 15,
+              "compilerRequired": false,
+              "authoredPriority": 900,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.9,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.9,
+              "weight": 1,
+              "contribution": 0.9,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:current-limit",
+                  "priority": 900,
+                  "normalizedValue": 0.9
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.9,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 15,
+            "remainingBefore": 300,
+            "remainingAfter": 285
+          },
+          "finalDecision": {
+            "blockId": "blk:current-limit",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 0
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:stale-limit",
+            "sourceDocumentId": "doc:limits",
+            "sourceType": "markdown",
+            "tokenCount": 15,
+            "normalizedContentHash": "sha256:e6dde90f25e456c7c24526df6eae72fa0926b323ffd03544c665e7e449a48807",
+            "required": false,
+            "priority": 10,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 60,
+              "startLine": 1
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:stale-limit",
+              "sourceDocumentId": "doc:limits",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 60,
+                "startLine": 1
+              },
+              "normalizedContentHash": "sha256:e6dde90f25e456c7c24526df6eae72fa0926b323ffd03544c665e7e449a48807",
+              "contentTokens": 15,
+              "compilerRequired": false,
+              "authoredPriority": 10,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.01,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.01,
+              "weight": 1,
+              "contribution": 0.01,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:stale-limit",
+                  "priority": 10,
+                  "normalizedValue": 0.01
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.01,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 15,
+            "remainingBefore": 285,
+            "remainingAfter": 270
+          },
+          "finalDecision": {
+            "blockId": "blk:stale-limit",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 1
+          }
+        }
+      ],
+      "settlement": {
+        "strategy": "render-aware-v1",
+        "correctionApplied": false,
+        "initialRenderedTokens": 79,
+        "evictedBlockIds": [],
+        "fallbackSearch": {
+          "used": false,
+          "selectionsVisited": 0,
+          "maxSelections": 256
+        },
+        "decisions": [
+          {
+            "blockId": "blk:current-limit",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 0
+          },
+          {
+            "blockId": "blk:stale-limit",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 1
+          }
+        ],
+        "ordering": {
+          "orderedBlockIds": [
+            "blk:current-limit",
+            "blk:stale-limit"
+          ]
+        },
+        "rendering": {
+          "renderedContextHash": "sha256:5b39158b5b6d7cc7216e61b96f071fec8754102a2b9a916c8714a6c6f844a653",
+          "compiledTokens": 79
+        },
+        "usage": {
+          "availableInputTokens": 300,
+          "includedContentTokens": 30,
+          "unusedTokens": 221,
+          "renderingTokenDelta": 49
+        }
+      },
+      "usage": {
+        "candidateTokens": 30,
+        "includedContentTokens": 30,
+        "compiledTokens": 79,
+        "availableTokens": 300,
+        "unusedTokens": 221,
+        "renderingTokenDelta": 49
+      }
+    },
+    {
+      "caseId": "case-05-budget-pressure",
+      "schemaVersion": 1,
+      "diagnostic": "compilation-decisions",
+      "compilationId": "sha256:61383893c44398889ba89c973c52dc2ce5b1925306fb036717e47fdda2ec1fb6",
+      "request": {
+        "id": "case-05-budget-pressure-request",
+        "fingerprint": "sha256:85de71f2f89697dfe70763bba5dcf969d5b26133a3fe37abcaf5969d39fe931a",
+        "scope": {
+          "tenantId": "bench",
+          "workspaceId": "v1"
+        },
+        "referenceTime": "2026-06-01T12:00:00.000Z",
+        "queryHash": "sha256:d461ede9e805b1b07f183277723029d78227bec9ac6efd846fec11e4f385a0d5",
+        "budget": {
+          "totalTokens": 200,
+          "reservedOutputTokens": 60
+        },
+        "candidateCount": 13,
+        "sourceDocumentCount": 1
+      },
+      "composition": {
+        "compiler": {
+          "id": "ctxalloc-eval",
+          "version": "1.0.0"
+        },
+        "policy": {
+          "compilation": {
+            "id": "ctxalloc-eval-v1",
+            "version": "1.0.0"
+          },
+          "scoring": {
+            "id": "scoring",
+            "version": "1.0.0"
+          },
+          "filtering": {
+            "id": "filtering",
+            "version": "1.0.0"
+          },
+          "allocation": {
+            "id": "allocation",
+            "version": "1.0.0"
+          },
+          "ordering": {
+            "id": "ordering",
+            "version": "1.0.0"
+          },
+          "rendering": {
+            "id": "rendering",
+            "version": "1.0.0"
+          }
+        },
+        "tokenizer": {
+          "id": "js-tiktoken:o200k_base",
+          "version": "1.0.21"
+        },
+        "tokenizerCoverage": "validation-and-rendering",
+        "renderer": {
+          "id": "ctxalloc-jsonl",
+          "version": "1"
+        }
+      },
+      "sources": [
+        {
+          "id": "doc:incidents",
+          "sourceType": "markdown",
+          "contentHash": "sha256:c1cf6b9717a709f7e44658950ff45195220df75ef35249797bd1c655752dad0f"
+        }
+      ],
+      "admissionPolicy": {
+        "minimumTotalScore": 0,
+        "optionalSelection": "score-desc-greedy",
+        "categoryConstraints": [],
+        "recencyConfigured": false
+      },
+      "budgetUnit": "canonical-block-content-tokens",
+      "allocation": {
+        "availableInputTokens": 140,
+        "selectedBlockContentTokens": 127,
+        "unallocatedBlockContentTokens": 13,
+        "includedBlockIds": [
+          "blk:commander",
+          "blk:filler-01",
+          "blk:filler-02",
+          "blk:filler-03",
+          "blk:filler-04",
+          "blk:filler-05",
+          "blk:filler-06",
+          "blk:filler-07",
+          "blk:filler-08"
+        ],
+        "excludedBlockIds": [
+          "blk:filler-09",
+          "blk:filler-10",
+          "blk:filler-11",
+          "blk:filler-12"
+        ],
+        "optionalEvictionOrder": [
+          "blk:filler-08",
+          "blk:filler-07",
+          "blk:filler-06",
+          "blk:filler-05",
+          "blk:filler-04",
+          "blk:filler-03",
+          "blk:filler-02",
+          "blk:filler-01",
+          "blk:commander"
+        ]
+      },
+      "initialRendering": {
+        "renderedContextHash": "sha256:c5ba5c0f137fd62e1258c307121bbde194ffd5e2e11a8a6128337d803af542a8",
+        "renderedTokens": 360,
+        "fitsAvailableInputBudget": false
+      },
+      "groups": [
+        {
+          "canonical": {
+            "id": "blk:commander",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 15,
+            "normalizedContentHash": "sha256:968e518614e269b1356c673ee613e24d1f8188b7efaeeee4ea663adb7f9b1cfb",
+            "required": false,
+            "priority": 1000,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 62,
+              "startLine": 1
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:commander",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 62,
+                "startLine": 1
+              },
+              "normalizedContentHash": "sha256:968e518614e269b1356c673ee613e24d1f8188b7efaeeee4ea663adb7f9b1cfb",
+              "contentTokens": 15,
+              "compilerRequired": false,
+              "authoredPriority": 1000,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 1,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 1,
+              "weight": 1,
+              "contribution": 1,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:commander",
+                  "priority": 1000,
+                  "normalizedValue": 1
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 1,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 15,
+            "remainingBefore": 140,
+            "remainingAfter": 125
+          },
+          "finalDecision": {
+            "blockId": "blk:commander",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 0
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-01",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:0d9b72e063e7f21f261ce69c3153e3e8c3852edb0af284d2a17cf33785f1d672",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 76,
+              "startLine": 2
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-01",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 76,
+                "startLine": 2
+              },
+              "normalizedContentHash": "sha256:0d9b72e063e7f21f261ce69c3153e3e8c3852edb0af284d2a17cf33785f1d672",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-01",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 14,
+            "remainingBefore": 125,
+            "remainingAfter": 111
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-01",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 1
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-02",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:61b2c11e9b98dc523d0fac8d790fcdee57568e611eca0ef5bd72f1e8103235f6",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 76,
+              "startLine": 3
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-02",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 76,
+                "startLine": 3
+              },
+              "normalizedContentHash": "sha256:61b2c11e9b98dc523d0fac8d790fcdee57568e611eca0ef5bd72f1e8103235f6",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-02",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 14,
+            "remainingBefore": 111,
+            "remainingAfter": 97
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-02",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 2
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-03",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:cac94866f0f8aed115942e8254522c7fd16118a0fcaaec8fadb4b7cf499d25d0",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 76,
+              "startLine": 4
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-03",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 76,
+                "startLine": 4
+              },
+              "normalizedContentHash": "sha256:cac94866f0f8aed115942e8254522c7fd16118a0fcaaec8fadb4b7cf499d25d0",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-03",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 14,
+            "remainingBefore": 97,
+            "remainingAfter": 83
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-03",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-04",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:7a3b1bf393fe6f92e3dc0699e14a2dc7dc24b3994fe6b8d727c7a8dd949c7c6c",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 76,
+              "startLine": 5
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-04",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 76,
+                "startLine": 5
+              },
+              "normalizedContentHash": "sha256:7a3b1bf393fe6f92e3dc0699e14a2dc7dc24b3994fe6b8d727c7a8dd949c7c6c",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-04",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 14,
+            "remainingBefore": 83,
+            "remainingAfter": 69
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-04",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-05",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:4a2bf3392a027d29145637702c720a1aba01836fbd551235e9e6270bce970813",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 76,
+              "startLine": 6
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-05",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 76,
+                "startLine": 6
+              },
+              "normalizedContentHash": "sha256:4a2bf3392a027d29145637702c720a1aba01836fbd551235e9e6270bce970813",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-05",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 14,
+            "remainingBefore": 69,
+            "remainingAfter": 55
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-05",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-06",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:1f291b41d5170f9727329aafff33217672c1c38b0350bec9fa0e5e4cbc1c42df",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 76,
+              "startLine": 7
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-06",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 76,
+                "startLine": 7
+              },
+              "normalizedContentHash": "sha256:1f291b41d5170f9727329aafff33217672c1c38b0350bec9fa0e5e4cbc1c42df",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-06",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 14,
+            "remainingBefore": 55,
+            "remainingAfter": 41
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-06",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-07",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:03ed17ed56085eebf19edde902c0603be6762b659a132ec8ad736638b257c54d",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 76,
+              "startLine": 8
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-07",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 76,
+                "startLine": 8
+              },
+              "normalizedContentHash": "sha256:03ed17ed56085eebf19edde902c0603be6762b659a132ec8ad736638b257c54d",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-07",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 14,
+            "remainingBefore": 41,
+            "remainingAfter": 27
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-07",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-08",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:fc926cefca89171729e39d4ae795204aa2a4fcc6c72489025961f7d72d851521",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 76,
+              "startLine": 9
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-08",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 76,
+                "startLine": 9
+              },
+              "normalizedContentHash": "sha256:fc926cefca89171729e39d4ae795204aa2a4fcc6c72489025961f7d72d851521",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-08",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 14,
+            "remainingBefore": 27,
+            "remainingAfter": 13
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-08",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-09",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:69337f230c2f652e68dcecb3f6051dd902ff504fdfb16ccb430d3e86e0bbd6ee",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 76,
+              "startLine": 10
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-09",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 76,
+                "startLine": 10
+              },
+              "normalizedContentHash": "sha256:69337f230c2f652e68dcecb3f6051dd902ff504fdfb16ccb430d3e86e0bbd6ee",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-09",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "excluded",
+            "reason": "EXCLUDED_BUDGET_EXHAUSTED",
+            "contentTokens": 14,
+            "remainingTokens": 13
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-09",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_INITIAL_ALLOCATION",
+            "initialAllocationReason": "EXCLUDED_BUDGET_EXHAUSTED"
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-10",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:a11016fa730706a61fa72a49dccac3af745bb3938dbcc2f168a3c06fd8d5bccc",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 77,
+              "startLine": 11
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-10",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 77,
+                "startLine": 11
+              },
+              "normalizedContentHash": "sha256:a11016fa730706a61fa72a49dccac3af745bb3938dbcc2f168a3c06fd8d5bccc",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-10",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "excluded",
+            "reason": "EXCLUDED_BUDGET_EXHAUSTED",
+            "contentTokens": 14,
+            "remainingTokens": 13
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-10",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_INITIAL_ALLOCATION",
+            "initialAllocationReason": "EXCLUDED_BUDGET_EXHAUSTED"
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-11",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:62ad7583a04d33f6f926ff7908a8bd830f6c8ce1a708e91f7cbeb011a6eee77c",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 77,
+              "startLine": 12
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-11",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 77,
+                "startLine": 12
+              },
+              "normalizedContentHash": "sha256:62ad7583a04d33f6f926ff7908a8bd830f6c8ce1a708e91f7cbeb011a6eee77c",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-11",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "excluded",
+            "reason": "EXCLUDED_BUDGET_EXHAUSTED",
+            "contentTokens": 14,
+            "remainingTokens": 13
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-11",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_INITIAL_ALLOCATION",
+            "initialAllocationReason": "EXCLUDED_BUDGET_EXHAUSTED"
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:filler-12",
+            "sourceDocumentId": "doc:incidents",
+            "sourceType": "markdown",
+            "tokenCount": 14,
+            "normalizedContentHash": "sha256:0ede67225bd1efbb71c3d8d79041b3c72c409da61d751c0e608b56b4e7cb94f8",
+            "required": false,
+            "priority": 1,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 77,
+              "startLine": 13
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:filler-12",
+              "sourceDocumentId": "doc:incidents",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 77,
+                "startLine": 13
+              },
+              "normalizedContentHash": "sha256:0ede67225bd1efbb71c3d8d79041b3c72c409da61d751c0e608b56b4e7cb94f8",
+              "contentTokens": 14,
+              "compilerRequired": false,
+              "authoredPriority": 1,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": null
+            }
+          ],
+          "score": {
+            "total": 0.001,
+            "retrieval": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "evidence": []
+            },
+            "authoredPriority": {
+              "normalizedValue": 0.001,
+              "weight": 1,
+              "contribution": 0.001,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": [
+                {
+                  "blockId": "blk:filler-12",
+                  "priority": 1,
+                  "normalizedValue": 0.001
+                }
+              ]
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.001,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "excluded",
+            "reason": "EXCLUDED_BUDGET_EXHAUSTED",
+            "contentTokens": 14,
+            "remainingTokens": 13
+          },
+          "finalDecision": {
+            "blockId": "blk:filler-12",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_INITIAL_ALLOCATION",
+            "initialAllocationReason": "EXCLUDED_BUDGET_EXHAUSTED"
+          }
+        }
+      ],
+      "settlement": {
+        "strategy": "render-aware-v1",
+        "correctionApplied": true,
+        "initialRenderedTokens": 360,
+        "evictedBlockIds": [
+          "blk:filler-08",
+          "blk:filler-07",
+          "blk:filler-06",
+          "blk:filler-05",
+          "blk:filler-04",
+          "blk:filler-03"
+        ],
+        "fallbackSearch": {
+          "used": false,
+          "selectionsVisited": 0,
+          "maxSelections": 256
+        },
+        "decisions": [
+          {
+            "blockId": "blk:commander",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 0
+          },
+          {
+            "blockId": "blk:filler-01",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 1
+          },
+          {
+            "blockId": "blk:filler-02",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 2
+          },
+          {
+            "blockId": "blk:filler-03",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          },
+          {
+            "blockId": "blk:filler-04",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          },
+          {
+            "blockId": "blk:filler-05",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          },
+          {
+            "blockId": "blk:filler-06",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          },
+          {
+            "blockId": "blk:filler-07",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          },
+          {
+            "blockId": "blk:filler-08",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_RENDER_AWARE_CORRECTION"
+          },
+          {
+            "blockId": "blk:filler-09",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_INITIAL_ALLOCATION",
+            "initialAllocationReason": "EXCLUDED_BUDGET_EXHAUSTED"
+          },
+          {
+            "blockId": "blk:filler-10",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_INITIAL_ALLOCATION",
+            "initialAllocationReason": "EXCLUDED_BUDGET_EXHAUSTED"
+          },
+          {
+            "blockId": "blk:filler-11",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_INITIAL_ALLOCATION",
+            "initialAllocationReason": "EXCLUDED_BUDGET_EXHAUSTED"
+          },
+          {
+            "blockId": "blk:filler-12",
+            "disposition": "excluded",
+            "reason": "EXCLUDED_INITIAL_ALLOCATION",
+            "initialAllocationReason": "EXCLUDED_BUDGET_EXHAUSTED"
+          }
+        ],
+        "ordering": {
+          "orderedBlockIds": [
+            "blk:commander",
+            "blk:filler-01",
+            "blk:filler-02"
+          ]
+        },
+        "rendering": {
+          "renderedContextHash": "sha256:2cdcf3a50c31f185d798d97c614e240e77830900da83b2dc55ffc5c81d187cff",
+          "compiledTokens": 120
+        },
+        "usage": {
+          "availableInputTokens": 140,
+          "includedContentTokens": 43,
+          "unusedTokens": 20,
+          "renderingTokenDelta": 77
+        }
+      },
+      "usage": {
+        "candidateTokens": 183,
+        "includedContentTokens": 43,
+        "compiledTokens": 120,
+        "availableTokens": 140,
+        "unusedTokens": 20,
+        "renderingTokenDelta": 77
+      }
+    },
+    {
+      "caseId": "case-12-retrieval-noise",
+      "schemaVersion": 1,
+      "diagnostic": "compilation-decisions",
+      "compilationId": "sha256:969f114ff97f26f714521425503efdd3f34dfe9278e4149a66f19bf5adc00ffa",
+      "request": {
+        "id": "case-12-retrieval-noise-request",
+        "fingerprint": "sha256:5a944d7226a77cb8f232c0b0118458324f6701b0ac133547a3f929f21a646f3c",
+        "scope": {
+          "tenantId": "bench",
+          "workspaceId": "v1"
+        },
+        "referenceTime": "2026-06-01T12:00:00.000Z",
+        "queryHash": "sha256:b12181b4d630e8d2b401581daba04a18211bc7939201924c2916c7fad3386c85",
+        "budget": {
+          "totalTokens": 400,
+          "reservedOutputTokens": 100
+        },
+        "candidateCount": 3,
+        "sourceDocumentCount": 1
+      },
+      "composition": {
+        "compiler": {
+          "id": "ctxalloc-eval",
+          "version": "1.0.0"
+        },
+        "policy": {
+          "compilation": {
+            "id": "ctxalloc-eval-v1",
+            "version": "1.0.0"
+          },
+          "scoring": {
+            "id": "scoring",
+            "version": "1.0.0"
+          },
+          "filtering": {
+            "id": "filtering",
+            "version": "1.0.0"
+          },
+          "allocation": {
+            "id": "allocation",
+            "version": "1.0.0"
+          },
+          "ordering": {
+            "id": "ordering",
+            "version": "1.0.0"
+          },
+          "rendering": {
+            "id": "rendering",
+            "version": "1.0.0"
+          }
+        },
+        "tokenizer": {
+          "id": "js-tiktoken:o200k_base",
+          "version": "1.0.21"
+        },
+        "tokenizerCoverage": "validation-and-rendering",
+        "renderer": {
+          "id": "ctxalloc-jsonl",
+          "version": "1"
+        }
+      },
+      "sources": [
+        {
+          "id": "doc:cache",
+          "sourceType": "markdown",
+          "contentHash": "sha256:e4b2c6186c74be571cee200d56accec40c0a3c829eda30e92016cd78a99b89fc"
+        }
+      ],
+      "admissionPolicy": {
+        "minimumTotalScore": 0,
+        "optionalSelection": "score-desc-greedy",
+        "categoryConstraints": [],
+        "recencyConfigured": false
+      },
+      "budgetUnit": "canonical-block-content-tokens",
+      "allocation": {
+        "availableInputTokens": 300,
+        "selectedBlockContentTokens": 30,
+        "unallocatedBlockContentTokens": 270,
+        "includedBlockIds": [
+          "blk:purge",
+          "blk:warm",
+          "blk:calendar"
+        ],
+        "excludedBlockIds": [],
+        "optionalEvictionOrder": [
+          "blk:calendar",
+          "blk:warm",
+          "blk:purge"
+        ]
+      },
+      "initialRendering": {
+        "renderedContextHash": "sha256:a03fdc4621afbdafe2d6a0280aacf32a6c7ec4a11b93f013aee637ed97a1ef0e",
+        "renderedTokens": 100,
+        "fitsAvailableInputBudget": true
+      },
+      "groups": [
+        {
+          "canonical": {
+            "id": "blk:calendar",
+            "sourceDocumentId": "doc:cache",
+            "sourceType": "markdown",
+            "tokenCount": 10,
+            "normalizedContentHash": "sha256:2beeaf8669722a5b4104f3c67c7efa143877c7f48cdd76d4560d80a28b479a1b",
+            "required": false,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 50,
+              "startLine": 3
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:calendar",
+              "sourceDocumentId": "doc:cache",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 50,
+                "startLine": 3
+              },
+              "normalizedContentHash": "sha256:2beeaf8669722a5b4104f3c67c7efa143877c7f48cdd76d4560d80a28b479a1b",
+              "contentTokens": 10,
+              "compilerRequired": false,
+              "authoredPriority": null,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": {
+                "providerId": "bench-retriever",
+                "providerVersion": "1",
+                "rank": 2,
+                "score": {
+                  "value": 0.11,
+                  "semantics": "cosine-similarity",
+                  "higherIsBetter": true
+                }
+              }
+            }
+          ],
+          "score": {
+            "total": 0.11,
+            "retrieval": {
+              "normalizedValue": 0.11,
+              "weight": 1,
+              "contribution": 0.11,
+              "aggregation": "max",
+              "evidence": [
+                {
+                  "blockId": "blk:calendar",
+                  "providerId": "bench-retriever",
+                  "providerVersion": "1",
+                  "semantics": "cosine-similarity",
+                  "higherIsBetter": true,
+                  "rawValue": 0.11,
+                  "normalizedValue": 0.11,
+                  "ruleId": "bench-cosine"
+                }
+              ]
+            },
+            "authoredPriority": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": []
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.11,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 10,
+            "remainingBefore": 280,
+            "remainingAfter": 270
+          },
+          "finalDecision": {
+            "blockId": "blk:calendar",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 1
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:purge",
+            "sourceDocumentId": "doc:cache",
+            "sourceType": "markdown",
+            "tokenCount": 12,
+            "normalizedContentHash": "sha256:a5ff64a3c677ae48df5cedc03d9ce94c524376b300a5d9ddd526960bef411eb2",
+            "required": false,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 58,
+              "startLine": 1
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:purge",
+              "sourceDocumentId": "doc:cache",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 58,
+                "startLine": 1
+              },
+              "normalizedContentHash": "sha256:a5ff64a3c677ae48df5cedc03d9ce94c524376b300a5d9ddd526960bef411eb2",
+              "contentTokens": 12,
+              "compilerRequired": false,
+              "authoredPriority": null,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": {
+                "providerId": "bench-retriever",
+                "providerVersion": "1",
+                "rank": 0,
+                "score": {
+                  "value": 0.91,
+                  "semantics": "cosine-similarity",
+                  "higherIsBetter": true
+                }
+              }
+            }
+          ],
+          "score": {
+            "total": 0.91,
+            "retrieval": {
+              "normalizedValue": 0.91,
+              "weight": 1,
+              "contribution": 0.91,
+              "aggregation": "max",
+              "evidence": [
+                {
+                  "blockId": "blk:purge",
+                  "providerId": "bench-retriever",
+                  "providerVersion": "1",
+                  "semantics": "cosine-similarity",
+                  "higherIsBetter": true,
+                  "rawValue": 0.91,
+                  "normalizedValue": 0.91,
+                  "ruleId": "bench-cosine"
+                }
+              ]
+            },
+            "authoredPriority": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": []
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.91,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 12,
+            "remainingBefore": 300,
+            "remainingAfter": 288
+          },
+          "finalDecision": {
+            "blockId": "blk:purge",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 2
+          }
+        },
+        {
+          "canonical": {
+            "id": "blk:warm",
+            "sourceDocumentId": "doc:cache",
+            "sourceType": "markdown",
+            "tokenCount": 8,
+            "normalizedContentHash": "sha256:e8d89fa91c88bf569f055e7e4fcfda1dca62659ac6eb54784c8f82fe50d734bd",
+            "required": false,
+            "sourceLocation": {
+              "kind": "text-range",
+              "startOffset": 0,
+              "endOffset": 39,
+              "startLine": 2
+            }
+          },
+          "canonicalSelectionReason": "single-block",
+          "members": [
+            {
+              "blockId": "blk:warm",
+              "sourceDocumentId": "doc:cache",
+              "sourceType": "markdown",
+              "sourceLocation": {
+                "kind": "text-range",
+                "startOffset": 0,
+                "endOffset": 39,
+                "startLine": 2
+              },
+              "normalizedContentHash": "sha256:e8d89fa91c88bf569f055e7e4fcfda1dca62659ac6eb54784c8f82fe50d734bd",
+              "contentTokens": 8,
+              "compilerRequired": false,
+              "authoredPriority": null,
+              "category": null,
+              "createdAt": null,
+              "updatedAt": null,
+              "scopeMatchesRequest": true,
+              "isCanonicalBlock": true,
+              "matchReason": "same-block-id",
+              "retrieval": {
+                "providerId": "bench-retriever",
+                "providerVersion": "1",
+                "rank": 1,
+                "score": {
+                  "value": 0.62,
+                  "semantics": "cosine-similarity",
+                  "higherIsBetter": true
+                }
+              }
+            }
+          ],
+          "score": {
+            "total": 0.62,
+            "retrieval": {
+              "normalizedValue": 0.62,
+              "weight": 1,
+              "contribution": 0.62,
+              "aggregation": "max",
+              "evidence": [
+                {
+                  "blockId": "blk:warm",
+                  "providerId": "bench-retriever",
+                  "providerVersion": "1",
+                  "semantics": "cosine-similarity",
+                  "higherIsBetter": true,
+                  "rawValue": 0.62,
+                  "normalizedValue": 0.62,
+                  "ruleId": "bench-cosine"
+                }
+              ]
+            },
+            "authoredPriority": {
+              "normalizedValue": 0,
+              "weight": 1,
+              "contribution": 0,
+              "aggregation": "max",
+              "min": 0,
+              "max": 1000,
+              "evidence": []
+            }
+          },
+          "filtering": {
+            "decision": "eligible",
+            "reason": "ELIGIBLE_POLICY",
+            "scoreTotal": 0.62,
+            "minimumTotalScore": 0
+          },
+          "initialAllocation": {
+            "decision": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "contentTokens": 8,
+            "remainingBefore": 288,
+            "remainingAfter": 280
+          },
+          "finalDecision": {
+            "blockId": "blk:warm",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 0
+          }
+        }
+      ],
+      "settlement": {
+        "strategy": "render-aware-v1",
+        "correctionApplied": false,
+        "initialRenderedTokens": 100,
+        "evictedBlockIds": [],
+        "fallbackSearch": {
+          "used": false,
+          "selectionsVisited": 0,
+          "maxSelections": 256
+        },
+        "decisions": [
+          {
+            "blockId": "blk:calendar",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 1
+          },
+          {
+            "blockId": "blk:purge",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 2
+          },
+          {
+            "blockId": "blk:warm",
+            "disposition": "included",
+            "reason": "INCLUDED_SCORE_ORDER",
+            "renderPosition": 0
+          }
+        ],
+        "ordering": {
+          "orderedBlockIds": [
+            "blk:warm",
+            "blk:calendar",
+            "blk:purge"
+          ]
+        },
+        "rendering": {
+          "renderedContextHash": "sha256:a03fdc4621afbdafe2d6a0280aacf32a6c7ec4a11b93f013aee637ed97a1ef0e",
+          "compiledTokens": 100
+        },
+        "usage": {
+          "availableInputTokens": 300,
+          "includedContentTokens": 30,
+          "unusedTokens": 200,
+          "renderingTokenDelta": 70
+        }
+      },
+      "usage": {
+        "candidateTokens": 30,
+        "includedContentTokens": 30,
+        "compiledTokens": 100,
+        "availableTokens": 300,
+        "unusedTokens": 200,
+        "renderingTokenDelta": 70
+      }
+    }
+  ]
+}
