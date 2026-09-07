@@ -73,6 +73,25 @@ A report that mixes them — for example ranking compilations by an average of p
 
 ---
 
+## 2.2 Admission Is a Caller Interpretation of Utility
+
+An explicit `minimumTotalScore` sets an inclusive admission boundary on the
+paired scoring policy's utility. It is neither a new answer-quality score nor a
+universal probability. Ranking establishes relative preference; meeting admission
+establishes the caller's stated evidence criterion. Applicability declarations
+are independent of both, and must not be reported as score or budget exclusions
+(DEC-044). Required obligations bypass numerical admission.
+
+`ctxalloc-admission-development-v1` exercises independently authored caller
+profiles and scoped applicability. Its exact admission/final-selection matches,
+required-group preservation, wrapper accounting and token counts are DEVELOPMENT
+contract checks. Missing-evidence tradeoffs remain visible. There is no new v1
+metric formula, threshold or split, and no product-validation PASS derived from
+this corpus. The profiles' rubric-derived cutoffs are not empirical provider
+calibration. A separate held-out Phase 21C set is required after profiles freeze.
+
+---
+
 # 3. Evaluation Levels
 
 Evaluation is divided into four levels.

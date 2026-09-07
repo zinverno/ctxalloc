@@ -5809,3 +5809,114 @@ indexes, embeddings/vector DBs, file watching/jobs, evaluation-report persistenc
 model gateway/routing, polished UI, distributed orchestration and production
 high availability are not Phase 20 features. Missing product evidence is not
 permission to add these capabilities or to claim the hypothesis passed.
+
+---
+
+## DEC-044: Separate Caller Admission From Scoped Applicability Declarations
+
+**Status:** Accepted for Phase 21B implementation. Recorded before behavior changes.
+
+**Context.** Phase 21A (merged baseline
+`c45c73739ac1305a8e83edcbbd743637fee3a245`) demonstrated that ranking does not
+establish dispensability. Its frozen policy admits scores >= 0. DEC-036 already
+provides a versioned inclusive admission threshold and required bypass; its hard
+exclusion language was deferred pending duplicate-group semantics.
+
+**Admission decision.** Reuse `CompilationPolicy` and
+`CandidateFilteringPolicy.minimumTotalScore`; do not add a second scoring or
+allocation stage. A caller selecting a threshold claims that totals meeting it
+supply sufficient utility under the paired, versioned scoring contract to enter
+allocation. This is a caller assertion, not a probability, validity test,
+guarantee of final inclusion, or proof of answer sufficiency. The caller owns
+normalization, weights, interpretation of missing evidence, and policy changes.
+No global cutoff is justified for arbitrary provider scores. Existing permissive
+policies stay valid and unchanged. Required groups bypass score admission.
+
+Independent DEVELOPMENT-ONLY profiles use an authored support rubric: 0 = no
+identified contribution; 1 = background only; 2 = supports a requested subtask;
+3 = directly answers; 4 = decisive support. Authored-only and a synthetic
+provider's explicitly matching evidence-grade contract normalize [0,4], weight
+1, and require at least grade 2, hence threshold 2/4 = 0.5. A combined profile
+requires one complete support unit: threshold 1 on the sum of two independently
+owned normalized components; two grade-2 contributions or one grade-4 contribution
+qualify. These are contract-derived development settings, not empirically
+calibrated probabilities or recommendations for BM25/cosine scores. Missing
+numeric evidence supplies no positive support under these explicitly restrictive
+profiles; it does not assert irrelevance. A curated-history profile deliberately
+admits absent/low numeric evidence because its caller owns candidate curation.
+No threshold, answer, budget or policy is derived from frozen v1 validation.
+
+**Applicability decision.** Add an opt-in filtering schema version 2 alongside
+unchanged version 1. It retains optional `minimumTotalScore` and requires:
+
+```ts
+applicability: {
+  scope: Scope;
+  exclusions: readonly {
+    blockId: ContextBlockId;
+    reason: 'inapplicable' | 'superseded';
+  }[];
+}
+```
+
+This is an explicit caller-owned, request-bound assertion in compiler policy,
+not arbitrary source/block/retrieval metadata. CLI/API/library callers may supply
+it through their existing explicit policy slot. No adapter copies natural
+language or metadata into it. `policyId` / `policyVersion` identify its authority
+and semantics; exact configuration participates in the request fingerprint.
+
+A declaration addresses the exact normalized-content **group** containing the
+named candidate block, regardless of which member becomes canonical. It declares
+that group's content unusable for this request, not that one provenance record
+is bad. Every duplicate wrapper and its lineage remains in the trace. A caller
+needing source-specific access control must not use this contract.
+
+Validation precedes any exclusion: the full candidate batch must pass existing
+scope/provenance validation; the applicability scope must equal the scored batch
+scope; every declared id must exist among that batch's members. Duplicate ids in
+the policy are invalid. Different declared members of one group may share one
+reason; contradictory reasons reject the batch rather than choose one by order.
+A group with **any compiler-required member** conflicts with an exclusion and
+fails with `required_applicability_conflict`. There is no partial compilation,
+required removal, score boost, or fallback to the supposedly unusable content.
+Required groups without that conflict retain admission bypass and existing
+impossible-budget failure behavior. Evaluation obligations never enter policy.
+
+The narrower representation deliberately has **no `supersedes` edge**. Self
+references, cycles and replacement references cannot be expressed; extra fields
+are rejected, not traversed or interpreted. `reason: 'superseded'` records the
+caller's known disposition only. It neither proves a replacement exists nor
+promises one will be admitted or fit. A needed replacement is a separately
+explicit required obligation. General replacement graphs, transitive resolution,
+authority comparison, and applicability inferred from dates/content are deferred.
+Unresolved exclusion targets fail with `missing_applicability_target`.
+Foreign-scope candidates reject before filtering and a foreign applicability
+scope fails with `applicability_scope_mismatch`; neither can suppress local data.
+
+**Ownership and trace.** CandidateFilter remains the sole eligibility owner.
+It resolves declarations over already validated/deduplicated groups, then emits
+`FILTERED_INAPPLICABLE` or `FILTERED_SUPERSEDED` with sorted declared member ids.
+These specific reasons also survive final settlement. Score rejection retains
+its existing `FILTERED_SCORE_BELOW_MINIMUM` evidence; allocation and rendering
+rules are unchanged. All wrappers remain accounted for, and correction cannot
+reintroduce filtered groups. No source text, metadata, free-text explanation,
+clock, retrieval, model call, or token-price heuristic is read by the filter.
+
+**Versioning.** Version-1 filtering continues producing trace schema 2 with
+unchanged output/identity. Opt-in version-2 filtering produces trace schema 3 to
+represent the new filtering/final reasons. The stored-trace reader accepts both
+2 and 3, but rejects schema-3-only reasons in a schema-2 record. No old row is
+rewritten, no storage envelope or database schema changes, and unsupported future
+versions still fail explicitly. Older binaries cannot read schema 3: deploy the
+new reader before enabling version-2 policies; rollback requires disabling those
+policies and retaining the newer reader for their audit records.
+
+**Consequences and alternatives.** This resolves group-wide hard exclusion
+without overloading utility scores or treating the budget as a utilization
+objective. Required conflicts fail closed. It rejects ambiguous source-level
+filters, arbitrary predicates, source text instructions and graph inference.
+Admission policy profiles are complete existing typed/versioned policies, so a
+new profile registry or kernel model is unnecessary. Independent development
+examples justify contract behavior only. Frozen evaluation v1 remains historical
+regression evidence; Phase 21C must freeze a separate held-out set after these
+contracts and profiles are fixed.

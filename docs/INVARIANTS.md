@@ -520,6 +520,11 @@ When required and optional blocks contain equivalent content, the required block
 
 The required status must survive deduplication.
 
+An explicit group-wide applicability exclusion that addresses any member of a
+required duplicate group must fail the compilation. It must never hide the
+required obligation by dropping another member or changing the canonical block
+(DEC-044).
+
 ---
 
 ## INV-DEDUP-003: Deduplication Does Not Lose Provenance
@@ -1007,6 +1012,11 @@ Persisted domain objects must include schema version information.
 
 Unsupported future schema versions must fail clearly.
 
+DEC-044 retains trace schema 2 for legacy policies and adds opt-in schema 3 for
+applicability reasons. The reader must preserve both versions exactly and reject
+schema-3-only reasons in schema 2; no automatic rewrite of historical records is
+permitted.
+
 ---
 
 # 14. Evaluation Invariants
@@ -1201,3 +1211,13 @@ compiler selection rule.
 
 Regressions live in `tests/api`, the shared application orchestration tests, and
 `tests/foundation/http-staging-boundaries.test.ts`.
+
+
+## INV-APPLICABILITY-001: Unusable Context Requires Explicit Scoped Caller Policy
+
+Ranking, token capacity, dates, words and arbitrary metadata must not create a
+hard applicability exclusion. Each exclusion must name a validated in-scope
+candidate's exact-content group under a matching explicit policy scope. Every
+wrapper remains traceable, with the specific disposition and declared member ids.
+Missing targets and contradictory group declarations fail explicitly. Unsupported
+replacement/self/cycle fields must not become executable relationships (DEC-044).

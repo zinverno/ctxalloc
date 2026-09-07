@@ -15,7 +15,11 @@ import {
   type CategoryAllocationConstraint,
 } from './budget-allocator.js';
 import { CandidateDeduplicator } from './candidate-deduplicator.js';
-import { CandidateFilter, type FilteredCandidateSet } from './candidate-filter.js';
+import {
+  CandidateFilter,
+  CandidateFilteringError,
+  type FilteredCandidateSet,
+} from './candidate-filter.js';
 import {
   CandidateScorer,
   CandidateScoringError,
@@ -253,9 +257,9 @@ export interface CompilationResult {
  *
  * The vocabulary names every point at which the pipeline can stop, so a consumer
  * can route a failure without parsing a message. `deduplication`, `filtering`,
- * and `ordering` are listed for completeness of the contract: those stages
- * consume proved stage contracts under a validated policy and have no failure
- * mode of their own today.
+ * and `ordering` consume proved stage contracts. Filtering schema 2 additionally
+ * rejects contradictory applicability assertions (DEC-044); deduplication and
+ * ordering have no independent failure mode on their proved inputs.
  */
 export type ContextCompilationStage =
   | 'configuration'
@@ -672,6 +676,7 @@ export class ContextCompiler {
       if (
         error instanceof CandidateValidationError ||
         error instanceof CandidateScoringError ||
+        error instanceof CandidateFilteringError ||
         error instanceof BudgetAllocationError ||
         error instanceof ContextRenderingError ||
         error instanceof CompilationTraceError
@@ -1535,7 +1540,8 @@ function* subsetsOfSize(
  * allocator verdicts are read, never rewritten: they stay exactly where the
  * snapshot recorded them (INV-TRACE-001, INV-TRACE-006).
  *
- * Filtered groups keep `FILTERED_POLICY`: the correction never reconsiders them,
+ * Score-filtered groups keep `FILTERED_POLICY`; applicability retains its specific
+ * reason. The correction never reconsiders filtered groups,
  * because eligibility is a precondition of selection.
  *
  * An exclusion is attributed to whichever decision actually made it. On the
@@ -1558,7 +1564,14 @@ function finalDecisions(
   return run.snapshot.groups.map((group): CompilationTraceFinalDecision => {
     const blockId = group.canonical.id;
     if (group.filtering.decision === 'filtered') {
-      return { blockId, disposition: 'filtered', reason: 'FILTERED_POLICY' };
+      return {
+        blockId,
+        disposition: 'filtered',
+        reason:
+          group.filtering.reason === 'FILTERED_SCORE_BELOW_MINIMUM'
+            ? 'FILTERED_POLICY'
+            : group.filtering.reason,
+      };
     }
 
     const renderPosition = renderPositions.get(blockId);

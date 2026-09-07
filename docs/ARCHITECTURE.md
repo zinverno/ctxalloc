@@ -1234,7 +1234,7 @@ Whether the required content actually fits stays the allocator's question
 
 #### One decision per candidate
 
-Every scored candidate finishes as exactly one of (INV-TRACE-001,
+Under filtering schema 1, every scored candidate finishes as exactly one of (INV-TRACE-001,
 INV-TRACE-002):
 
 ```text
@@ -1250,8 +1250,9 @@ impossible pairing cannot be constructed.
 
 #### What the filter may read
 
-Exactly three things: `score.total`, `canonicalBlock.attributes.required`, and
-its own validated policy.
+Schema 1 reads exactly `score.total`, `canonicalBlock.attributes.required`, and
+its own validated policy. Opt-in schema 2 additionally resolves scoped declarations
+over duplicate-group member ids and required flags (DEC-044).
 
 It reads no raw retrieval field, rank, provider identity, source metadata, title,
 `sourceType`, category, authored priority, timestamp, `tokenCount`, token budget,
@@ -1275,6 +1276,37 @@ reachable whether or not it survived. The component changes no allocation
 decision, evicts nothing, renders nothing, and builds no trace, and it is not an
 access-control boundary: scope isolation belongs to request validation and
 `CandidateValidator` (INV-SCOPE-003, INV-SEC-004).
+
+#### Opt-in applicability and admission (DEC-044)
+
+Filtering schema 2 adds `applicability: { scope, exclusions }`, with each exclusion
+carrying a `blockId` and a closed reason `inapplicable` or `superseded`. It is
+request-bound caller policy, never a predicate over arbitrary source metadata.
+The existing optional `minimumTotalScore` remains a separate numerical admission
+criterion. Full versioned `CompilationPolicy` records already bind the scoring
+and filtering contracts; no profile registry or new allocator stage is required.
+
+After complete candidate/scope validation, the filter checks that the declared
+scope equals the batch scope and every target identifies a member of a known
+duplicate group. A declaration excludes that entire exact-content group. Equal
+reasons across members coalesce with sorted target ids. Missing ids, conflicting
+reasons, or any required member fail explicitly before producing decisions.
+Required groups without such a conflict keep their unconditional score bypass.
+
+`FILTERED_INAPPLICABLE` and `FILTERED_SUPERSEDED` carry declared member ids and
+remain specific in final settlement. There are no replacement edges, transitive
+resolution, date/text interpretation, or assurance that another fact is present.
+Unsupported edge/self/cycle fields are rejected. The caller must explicitly
+require any necessary replacement. Foreign candidates still reject upstream;
+foreign policy scope also rejects, so it cannot suppress local data.
+
+Schema-1 policies retain byte-identical schema-2 traces. Schema-2 policies emit
+trace schema 3, and the persisted reader accepts both 2 and 3 without rewriting
+old rows. New reasons are rejected in a schema-2 record. SQLite envelopes and
+schema stay unchanged. Deploy the reader before opting into the new policy;
+older binaries cannot read new traces. See DEC-044 and
+[Phase 21B](PHASE21B_ADMISSION_SEMANTICS.md) for the declaration contract, profiles,
+independent development evidence and rollback boundary.
 
 ### 6.4 BudgetAllocator
 
@@ -1736,7 +1768,8 @@ property this stage can verify (DEC-035).
 
 ### 6.7 TraceBuilder
 
-Status: implemented (DEC-037), emitting schema version 2 (DEC-038).
+Status: implemented (DEC-037), emitting schema version 2 for legacy filtering
+(DEC-038), and opt-in version 3 for applicability policies (DEC-044).
 
 Responsibilities:
 

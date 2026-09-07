@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { LocalSourceRegistryService } from '@ctxalloc/application';
 import { SQLiteControlStore } from '@ctxalloc/adapters';
-import { SettledCompilationTraceValidator } from '@ctxalloc/compiler';
+import { CompilationPolicyValidator, SettledCompilationTraceValidator } from '@ctxalloc/compiler';
 import { O200kBaseTokenizer } from '@ctxalloc/tokenization';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadApiConfig } from '../../apps/api/src/config.js';
@@ -13,6 +13,7 @@ import {
   cliConfig,
   compilationRequest,
   createWorkspace,
+  failureOf,
   registration,
   SCOPE,
   successOf,
@@ -68,6 +69,110 @@ interface CompileOutput {
   traceStored: true;
 }
 describe('real HTTP compile, persistence and evaluation', () => {
+  it('accepts caller applicability through CLI/HTTP and reads schema-2/3 traces after SQLite restart', async () => {
+    const input = compilationRequest({ id: 'applicability-integration' });
+    const old = await send(running.port, '/v1/context/compile', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    expect(old.status).toBe(200);
+    const legacy = new SettledCompilationTraceValidator().validate(
+      (await send(running.port, `/v1/traces/${String(old.json['compilationId'])}?${query(SCOPE)}`))
+        .json,
+    );
+    expect(legacy.schemaVersion).toBe(2);
+    const target = legacy.settlement.ordering.orderedBlockIds[0]!;
+    expect(target).toBeDefined();
+    const configured = new CompilationPolicyValidator().validate(input['policy']);
+    const request = {
+      ...input,
+      policy: {
+        ...configured,
+        filtering: {
+          ...configured.filtering,
+          schemaVersion: 2,
+          policyVersion: '2',
+          applicability: { scope: SCOPE, exclusions: [{ blockId: target, reason: 'superseded' }] },
+        },
+      },
+    };
+    const result = await send(running.port, '/v1/context/compile', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+    expect(result.status).toBe(200);
+    const traceUrl = `/v1/traces/${String(result.json['compilationId'])}?${query(SCOPE)}`;
+    const trace = new SettledCompilationTraceValidator().validate(
+      (await send(running.port, traceUrl)).json,
+    );
+    expect(trace.schemaVersion).toBe(3);
+    expect(trace.settlement.decisions.find((d) => d.blockId === target)?.reason).toBe(
+      'FILTERED_SUPERSEDED',
+    );
+    expect(trace.settlement.ordering.orderedBlockIds).not.toContain(target);
+    const cliResult = successOf(
+      await cli(
+        'compile',
+        '--config',
+        workspace.write(
+          'applicability-cli-config.json',
+          cliConfig({ databasePath: workspace.databasePath, sourceRoot: workspace.sourceRoot }),
+        ),
+        '--request',
+        workspace.write('applicability.json', request),
+      ),
+    );
+    expect(cliResult).toEqual(result.json);
+    await running.close();
+    running = await startApiServer(loadApiConfig(workspace.configPath));
+    expect((await send(running.port, traceUrl)).json).toEqual(trace);
+    expect(
+      (await send(running.port, `/v1/traces/${legacy.compilationId}?${query(SCOPE)}`)).json,
+    ).toEqual(legacy);
+    expect(
+      (
+        await send(
+          running.port,
+          `/v1/traces/${trace.compilationId}?tenantId=foreign&workspaceId=foreign`,
+        )
+      ).status,
+    ).toBe(404);
+    const invalid = {
+      ...request,
+      policy: {
+        ...request.policy,
+        filtering: {
+          ...request.policy.filtering,
+          applicability: {
+            scope: { ...SCOPE, projectId: 'foreign' },
+            exclusions: [{ blockId: target, reason: 'superseded' }],
+          },
+        },
+      },
+    };
+    const rejected = await send(running.port, '/v1/context/compile', {
+      method: 'POST',
+      body: JSON.stringify(invalid),
+    });
+    expect(rejected.status).toBe(400);
+    expect(rejected.text).toContain('applicability_scope_mismatch');
+    expect(rejected.text).not.toContain(target);
+    const cliRejected = failureOf(
+      await cli(
+        'compile',
+        '--config',
+        join(workspace.root, 'applicability-cli-config.json'),
+        '--request',
+        workspace.write('invalid-applicability.json', invalid),
+      ),
+    );
+    expect(cliRejected.stage).toBe('compilation');
+    expect(cliRejected.issues).toEqual([
+      expect.objectContaining({ code: 'applicability_scope_mismatch' }),
+    ]);
+    expect(JSON.stringify(cliRejected)).not.toContain(target);
+  });
+
   it.each(['markdown', 'conversation'])(
     '%s compiles, persists across restart, and retains privacy',
     async (kind) => {

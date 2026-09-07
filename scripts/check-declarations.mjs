@@ -69,6 +69,7 @@ const DECLARATIONS = [
   'packages/compiler/dist/budget-allocator.d.ts',
   'packages/compiler/dist/context-orderer.d.ts',
   'packages/compiler/dist/context-renderer.d.ts',
+  'packages/compiler/dist/candidate-applicability.d.ts',
   'packages/compiler/dist/candidate-filter.d.ts',
   'packages/compiler/dist/compilation-policy.d.ts',
   'packages/compiler/dist/compilation-request.d.ts',
@@ -1973,8 +1974,28 @@ requireContains(
 );
 requireContains(
   'packages/compiler/dist/candidate-filter.d.ts',
-  'interface CandidateFilteringPolicy',
+  'type CandidateFilteringPolicy = LegacyCandidateFilteringPolicy | ApplicabilityCandidateFilteringPolicy;',
 );
+// DEC-044 retains the legacy branch and exposes a separate scoped opt-in branch.
+for (const member of [
+  'APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION = 2',
+  'interface LegacyCandidateFilteringPolicy extends FilteringPolicyBase',
+  'readonly schemaVersion: typeof CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION;',
+  'interface ApplicabilityCandidateFilteringPolicy extends FilteringPolicyBase',
+  'readonly schemaVersion: typeof APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION;',
+  'readonly applicability: CandidateApplicability;',
+  'interface ApplicabilityFilteredCandidateDecision extends ApplicabilityExclusionEvidence',
+])
+  requireContains('packages/compiler/dist/candidate-filter.d.ts', member);
+for (const member of [
+  'interface CandidateApplicability',
+  'readonly scope: Scope;',
+  'readonly blockId: ContextBlockId;',
+  "readonly reason: 'inapplicable' | 'superseded';",
+  "readonly reason: 'FILTERED_INAPPLICABLE' | 'FILTERED_SUPERSEDED';",
+  'readonly declaredBlockIds: readonly ContextBlockId[];',
+])
+  requireContains('packages/compiler/dist/candidate-applicability.d.ts', member);
 // The complete v1 filtering language: an identity and one optional threshold.
 requireContains(
   'packages/compiler/dist/candidate-filter.d.ts',
@@ -2212,6 +2233,10 @@ requireContains(
   'packages/compiler/dist/compilation-trace.d.ts',
   'COMPILATION_TRACE_SCHEMA_VERSION = 2',
 );
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION = 3',
+);
 requireContains('packages/compiler/dist/compilation-trace.d.ts', 'declare class TraceBuilder');
 requireContains('packages/compiler/dist/compilation-trace.d.ts', 'constructor(config: unknown);');
 requireContains(
@@ -2245,12 +2270,12 @@ for (const member of [
 ]) {
   requireContains('packages/compiler/dist/compilation-trace.d.ts', member);
 }
-// The schema version is the exact literal 2, and the two variants are
+// Trace versions are exactly legacy 2 and opt-in 3 (DEC-044). The two variants are
 // discriminated on `settled`: an unsettled trace can carry no settlement and no
 // compilation identity, and a settled one requires both (DEC-038).
 requireContains(
   'packages/compiler/dist/compilation-trace.d.ts',
-  'readonly schemaVersion: typeof COMPILATION_TRACE_SCHEMA_VERSION;',
+  'readonly schemaVersion: typeof COMPILATION_TRACE_SCHEMA_VERSION | typeof APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION;',
 );
 for (const member of [
   'interface CompilationTraceBase',
@@ -2685,6 +2710,7 @@ for (const relativePath of [
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/candidate-applicability.d.ts',
   'packages/compiler/dist/candidate-filter.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
   'packages/compiler/dist/context-orderer.d.ts',
@@ -2723,6 +2749,7 @@ for (const relativePath of [
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/candidate-applicability.d.ts',
   'packages/compiler/dist/candidate-filter.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
   'packages/compiler/dist/context-orderer.d.ts',

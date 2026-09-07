@@ -143,7 +143,7 @@ export function diagnoseCompilation(input: unknown, config: unknown, tokenizer: 
     };
   });
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: request.policy.filtering.schemaVersion,
     diagnostic: 'compilation-decisions' as const,
     compilationId,
     request: trace.request,
@@ -154,6 +154,9 @@ export function diagnoseCompilation(input: unknown, config: unknown, tokenizer: 
       optionalSelection: request.policy.allocation.optionalSelection,
       categoryConstraints: request.policy.allocation.categoryConstraints ?? [],
       recencyConfigured: request.policy.scoring.recency !== undefined,
+      ...(request.policy.filtering.schemaVersion === 2
+        ? { applicability: request.policy.filtering.applicability }
+        : {}),
     },
     budgetUnit: 'canonical-block-content-tokens' as const,
     allocation: trace.allocation,
