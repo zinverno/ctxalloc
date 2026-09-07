@@ -43,3 +43,6 @@ jobs:
 
       - name: Diagnose frozen validation selection
         run: pnpm diagnose:selection
+
+      - name: Evaluate development admission semantics
+        run: pnpm development:admission
