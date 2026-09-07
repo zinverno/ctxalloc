@@ -102,6 +102,10 @@ export {
 } from './budget-allocator.js';
 export {
   CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION,
+  APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION,
+  type LegacyCandidateFilteringPolicy,
+  type ApplicabilityCandidateFilteringPolicy,
+  type ApplicabilityFilteredCandidateDecision,
   CandidateFilter,
   CandidateFilteringError,
   type CandidateFilteringDecision,
@@ -180,6 +184,8 @@ export {
 } from './candidate-validator.js';
 export {
   COMPILATION_TRACE_SCHEMA_VERSION,
+  APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION,
+  type CompilationTraceApplicabilityDecision,
   CompilationTraceError,
   TraceBuilder,
   type CompilationTrace,
@@ -264,3 +270,9 @@ export {
   fingerprintCompilationRequest,
   type CompilationRequestFingerprint,
 } from './request-fingerprint.js';
+
+export {
+  type CandidateApplicability,
+  type CandidateApplicabilityIssueCode,
+  type ApplicabilityExclusionEvidence,
+} from './candidate-applicability.js';

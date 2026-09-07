@@ -9,6 +9,11 @@ import { API_CONTRACT_VERSION } from './index.js';
 
 const MESSAGES = {
   invalid_request: 'The request is invalid.',
+  applicability_scope_mismatch: 'Applicability scope must equal the request scope.',
+  missing_applicability_target: 'An applicability target is absent from the candidate batch.',
+  conflicting_applicability_declarations:
+    'A duplicate group has conflicting applicability declarations.',
+  required_applicability_conflict: 'An applicability exclusion conflicts with a required group.',
   invalid_config: 'The API configuration is invalid or unreadable.',
   not_found: 'The requested resource was not found.',
   method_not_allowed: 'The method is not allowed for this resource.',
@@ -55,6 +60,17 @@ export function toApiError(cause: unknown): ApiError {
       return new ApiError(400, 'invalid_request');
     if (cause instanceof ContextCompilationError && cause.stage === 'request-validation')
       return new ApiError(400, 'invalid_request');
+    if (cause instanceof ContextCompilationError && cause.stage === 'filtering') {
+      // Map only the defined caller failures; never echo component issue text.
+      const code = [
+        'applicability_scope_mismatch',
+        'missing_applicability_target',
+        'conflicting_applicability_declarations',
+        'required_applicability_conflict',
+      ] as const;
+      const matched = code.find((candidate) => candidate === cause.issues[0]?.code);
+      if (matched !== undefined) return new ApiError(400, matched, 'compilation');
+    }
     if (cause instanceof CompilationTracePersistenceError)
       return new ApiError(500, 'trace_store_failed', 'trace-store');
     if (

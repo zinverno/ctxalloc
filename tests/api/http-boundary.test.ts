@@ -1,3 +1,4 @@
+import { ContextCompilationError } from '@ctxalloc/compiler';
 import { connect } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { listenApi } from '../../apps/api/src/server.js';
@@ -216,4 +217,32 @@ it('serialization failures and thrown proxies cannot leak native wording', () =>
   expect(toApiError(proxy.proxy).envelope()).toEqual(
     toApiError(new Error('/secret QUERY SQLITE_BUSY')).envelope(),
   );
+});
+
+it.each([
+  'applicability_scope_mismatch',
+  'missing_applicability_target',
+  'conflicting_applicability_declarations',
+  'required_applicability_conflict',
+])('maps caller filtering failure %s without copying private evidence', (code) => {
+  const issues = [
+    { code, path: ['private-id'], pointer: 'private-id', message: '/secret SQL query' },
+  ];
+  const mapped = toApiError(new ContextCompilationError('filtering', issues));
+  expect(mapped.status).toBe(400);
+  expect(mapped.envelope().error).toMatchObject({
+    code,
+    stage: 'compilation',
+    issues: [{ code, path: '' }],
+  });
+  expect(JSON.stringify(mapped.envelope())).not.toMatch(/private-id|secret|SQL/);
+  expect(toApiError(new ContextCompilationError('scoring', issues)).status).toBe(500);
+});
+
+it('keeps unknown filtering failures opaque and operational', () => {
+  const cause = new ContextCompilationError('filtering', [
+    { code: 'unknown', path: [], pointer: '', message: '/secret' },
+  ]);
+  expect(toApiError(cause).status).toBe(500);
+  expect(toApiError(cause).envelope().error.code).toBe('internal_error');
 });

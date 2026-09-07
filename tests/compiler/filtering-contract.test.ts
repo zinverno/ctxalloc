@@ -231,6 +231,11 @@ describe('CandidateFilter decision contract', () => {
           expect(decision.scoreTotal).toBeLessThan(minimum);
           break;
         }
+        case 'FILTERED_INAPPLICABLE':
+        case 'FILTERED_SUPERSEDED': {
+          expect(decision.declaredBlockIds.length).toBeGreaterThan(0);
+          break;
+        }
         default: {
           const exhaustive: never = decision;
           throw new Error(`unhandled decision ${JSON.stringify(exhaustive)}`);

@@ -21,6 +21,7 @@ import type {
   IncludedCandidateDecision,
 } from './budget-allocator.js';
 import type { CandidateFilteringDecision, FilteredCandidateSet } from './candidate-filter.js';
+import type { ApplicabilityExclusionEvidence } from './candidate-applicability.js';
 import type {
   CanonicalSelectionReason,
   DeduplicatedCandidate,
@@ -134,6 +135,8 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
  * correct moment to bump (INV-STORE-004).
  */
 export const COMPILATION_TRACE_SCHEMA_VERSION = 2;
+/** Opt-in filtering schema 2 records applicability reasons without rewriting v2 traces. */
+export const APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION = 3;
 
 /** Preimage version of `CompilationTraceRequest.queryHash`. */
 const QUERY_HASH_VERSION = 1;
@@ -406,10 +409,15 @@ export interface CompilationTraceFilteredDecision {
  * impossible pairing cannot be constructed here any more than it can at the
  * stage that produced it (DEC-036).
  */
+export interface CompilationTraceApplicabilityDecision extends ApplicabilityExclusionEvidence {
+  readonly decision: 'filtered';
+}
+
 export type CompilationTraceFilteringDecision =
   | CompilationTraceRequiredEligibleDecision
   | CompilationTracePolicyEligibleDecision
-  | CompilationTraceFilteredDecision;
+  | CompilationTraceFilteredDecision
+  | CompilationTraceApplicabilityDecision;
 
 /** A group the allocator selected, with only an inclusion reason. */
 export interface CompilationTraceIncludedDecision {
@@ -573,7 +581,7 @@ export type CompilationTraceFinalDisposition = 'filtered' | 'included' | 'exclud
 export interface CompilationTraceFinalFilteredDecision {
   readonly blockId: ContextBlockId;
   readonly disposition: 'filtered';
-  readonly reason: 'FILTERED_POLICY';
+  readonly reason: 'FILTERED_POLICY' | 'FILTERED_INAPPLICABLE' | 'FILTERED_SUPERSEDED';
 }
 
 /**
@@ -767,7 +775,8 @@ export interface CompilationTraceSettlement {
  * rather than present with an `undefined` value.
  */
 export interface CompilationTraceBase {
-  readonly schemaVersion: typeof COMPILATION_TRACE_SCHEMA_VERSION;
+  readonly schemaVersion:
+    typeof COMPILATION_TRACE_SCHEMA_VERSION | typeof APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION;
 
   readonly request: CompilationTraceRequest;
   readonly sources: readonly CompilationTraceSource[];
@@ -1763,6 +1772,13 @@ function traceFilteringDecision(
           ? {}
           : { minimumTotalScore: decision.minimumTotalScore }),
       };
+    case 'FILTERED_INAPPLICABLE':
+    case 'FILTERED_SUPERSEDED':
+      return {
+        decision: 'filtered',
+        reason: decision.reason,
+        declaredBlockIds: decision.declaredBlockIds,
+      };
     case 'FILTERED_SCORE_BELOW_MINIMUM':
       return {
         decision: 'filtered',
@@ -1952,7 +1968,10 @@ export class TraceBuilder {
     }
 
     const trace: UnsettledCompilationTrace = {
-      schemaVersion: COMPILATION_TRACE_SCHEMA_VERSION,
+      schemaVersion:
+        request.policy.filtering.schemaVersion === 2
+          ? APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION
+          : COMPILATION_TRACE_SCHEMA_VERSION,
       // The builder traces one measured attempt and nothing more. Settling a
       // compilation belongs to `ContextCompiler`, which owns the correction and
       // the same-tokenizer composition (ARCHITECTURE 7.2, DEC-038).

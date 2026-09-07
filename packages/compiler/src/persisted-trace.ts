@@ -13,6 +13,7 @@ import {
 import { z } from 'zod';
 import {
   COMPILATION_TRACE_SCHEMA_VERSION,
+  APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION,
   type SettledCompilationTrace,
 } from './compilation-trace.js';
 
@@ -608,6 +609,16 @@ const FilteringDecisionSchema = z.discriminatedUnion('reason', [
   }),
   z.strictObject({
     decision: z.literal('filtered'),
+    reason: z.literal('FILTERED_INAPPLICABLE'),
+    declaredBlockIds: z.array(ContextBlockIdSchema).min(1),
+  }),
+  z.strictObject({
+    decision: z.literal('filtered'),
+    reason: z.literal('FILTERED_SUPERSEDED'),
+    declaredBlockIds: z.array(ContextBlockIdSchema).min(1),
+  }),
+  z.strictObject({
+    decision: z.literal('filtered'),
     reason: z.literal('FILTERED_SCORE_BELOW_MINIMUM'),
     scoreTotal: finiteNumber,
     minimumTotalScore: finiteNumber,
@@ -645,7 +656,7 @@ const FinalDecisionSchema = z.discriminatedUnion('disposition', [
   z.strictObject({
     blockId: ContextBlockIdSchema,
     disposition: z.literal('filtered'),
-    reason: z.literal('FILTERED_POLICY'),
+    reason: z.enum(['FILTERED_POLICY', 'FILTERED_INAPPLICABLE', 'FILTERED_SUPERSEDED']),
   }),
   z.strictObject({
     blockId: ContextBlockIdSchema,
@@ -699,8 +710,11 @@ const SettlementSchema = z.strictObject({
  * that may stand as the audit trail of a completed compilation from a snapshot
  * of one measured attempt (DEC-038).
  */
-const SettledTraceSchema = z.strictObject({
-  schemaVersion: z.literal(COMPILATION_TRACE_SCHEMA_VERSION),
+const SettledTraceShapeSchema = z.strictObject({
+  schemaVersion: z.union([
+    z.literal(COMPILATION_TRACE_SCHEMA_VERSION),
+    z.literal(APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION),
+  ]),
   settled: z.literal(true),
   compilationId: digest,
 
@@ -761,6 +775,31 @@ const SettledTraceSchema = z.strictObject({
   settlement: SettlementSchema,
 });
 
+const SettledTraceSchema = SettledTraceShapeSchema.superRefine((trace, ctx) => {
+  if (trace.schemaVersion !== COMPILATION_TRACE_SCHEMA_VERSION) return;
+  trace.groups.forEach((group, index) => {
+    if (
+      group.filtering.reason === 'FILTERED_INAPPLICABLE' ||
+      group.filtering.reason === 'FILTERED_SUPERSEDED'
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['groups', index, 'filtering'],
+        message: 'applicability evidence requires trace schema 3',
+      });
+    }
+  });
+  trace.settlement.decisions.forEach((decision, index) => {
+    if (decision.reason === 'FILTERED_INAPPLICABLE' || decision.reason === 'FILTERED_SUPERSEDED') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['settlement', 'decisions', index],
+        message: 'applicability evidence requires trace schema 3',
+      });
+    }
+  });
+});
+
 /* -------------------------------------------------------------------------- */
 /* Validator                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -790,8 +829,12 @@ function ownValue(value: unknown, key: string): unknown {
  * one behind an interface, exactly as it holds the other kernel stages.
  */
 export class SettledCompilationTraceValidator {
-  /** The trace schema version this validator accepts, and the only one. */
+  /** Legacy supported version, retained for existing callers. See supportedSchemaVersions. */
   readonly supportedSchemaVersion = COMPILATION_TRACE_SCHEMA_VERSION;
+  readonly supportedSchemaVersions = [
+    COMPILATION_TRACE_SCHEMA_VERSION,
+    APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION,
+  ] as const;
 
   /**
    * Returns a **passive validated snapshot** of the supplied record, proven to be
@@ -892,11 +935,15 @@ function validatedSnapshotOf(input: unknown): SettledCompilationTrace {
   }
 
   const version = ownValue(snapshot, 'schemaVersion');
-  if (typeof version === 'number' && version !== COMPILATION_TRACE_SCHEMA_VERSION) {
+  if (
+    typeof version === 'number' &&
+    version !== COMPILATION_TRACE_SCHEMA_VERSION &&
+    version !== APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION
+  ) {
     throw new PersistedCompilationTraceError([
       issue(
         ['schemaVersion'],
-        `trace schema version ${String(version)} is not supported: this build reads version ${String(COMPILATION_TRACE_SCHEMA_VERSION)}`,
+        `trace schema version ${String(version)} is not supported: this build reads versions 2 and 3`,
         'unsupported_schema_version',
       ),
     ]);

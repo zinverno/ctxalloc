@@ -330,6 +330,13 @@ The compiler decides what enters the final context.
 
 A high retrieval score does not automatically guarantee inclusion.
 
+Ranking expresses preference. Admission expresses an explicit caller-owned
+evidence criterion under a versioned policy, not a universal probability. An
+applicability declaration separately identifies content unusable for this
+request. The compiler does not infer these declarations from text, dates or
+numeric priority. A declaration that conflicts with a compiler-required group
+fails explicitly; it never silently removes the obligation (DEC-044).
+
 ### 9.3 Prefer Removal Over Rewriting
 
 The MVP should prefer:

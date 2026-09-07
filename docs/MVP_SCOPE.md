@@ -299,6 +299,11 @@ contract. No redundancy or near-duplicate score exists.
 
 Policy filtering is the separate responsibility of `CandidateFilter` below.
 
+Phase 21B (DEC-044) reuses its explicit threshold for caller admission and adds
+opt-in scoped applicability declarations over exact duplicate groups. General
+supersession graphs and inferred semantic applicability remain outside the
+implemented contract. See [Phase 21B](PHASE21B_ADMISSION_SEMANTICS.md).
+
 See DEC-032.
 
 ---

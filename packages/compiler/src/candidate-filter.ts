@@ -1,11 +1,20 @@
 import {
+  ContextBlockIdSchema,
+  ScopeSchema,
   findLoneSurrogate,
   safeParse,
+  scopesEqual,
+  type ContextBlockId,
   type ValidationIssue,
   type ValidationResult,
 } from '@ctxalloc/domain';
 import { z } from 'zod';
 import type { ScoredCandidate, ScoredCandidateSet } from './candidate-scorer.js';
+import type {
+  CandidateApplicability,
+  CandidateApplicabilityIssueCode,
+  ApplicabilityExclusionEvidence,
+} from './candidate-applicability.js';
 
 /**
  * Deterministic policy filtering (DEC-036).
@@ -27,11 +36,11 @@ import type { ScoredCandidate, ScoredCandidateSet } from './candidate-scorer.js'
  * INV-DET-003, INV-DET-004, INV-DEP-002). Its only injected dependency is an
  * explicit versioned filtering policy.
  *
- * It reads exactly three things: `score.total`, `canonicalBlock.attributes.required`,
+ * Version 1 reads exactly three things: `score.total`, `canonicalBlock.attributes.required`,
  * and its own validated policy. Provider identity, rank, raw provider score,
  * source metadata, source type, category, authored priority, timestamps,
  * `tokenCount`, the token budget, the rendered cost, and the query are all
- * deliberately unreachable from here. Every one of them either already fed
+ * deliberately unreachable from version 1. Every one of them either already fed
  * `CandidateScorer` or belongs to a later stage, and reading one again would put
  * one signal under two owners (INV-DEP-003).
  *
@@ -47,6 +56,8 @@ import type { ScoredCandidate, ScoredCandidateSet } from './candidate-scorer.js'
 
 /** Current schema version of `CandidateFilteringPolicy` (INV-STORE-004). */
 export const CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION = 1;
+/** Opt-in scoped applicability declarations; legacy schema 1 remains unchanged. */
+export const APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION = 2;
 
 /**
  * The complete filtering language of schema version 1: one optional minimum
@@ -64,11 +75,10 @@ export const CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION = 1;
  * have one owner: they are configured signals of `CandidateScoringPolicy` and
  * they reach this stage already normalized into `score.total`. Version 1
  * consumes that group-level result and nothing else. A hard exclusion language
- * is deferred until post-deduplication group semantics are decided, not
- * approximated here.
+ * was deferred in version 1. Opt-in schema 2 now defines the narrow group-wide
+ * applicability contract in DEC-044, without interpreting those scoring signals.
  */
-export interface CandidateFilteringPolicy {
-  readonly schemaVersion: typeof CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION;
+interface FilteringPolicyBase {
   readonly policyId: string;
   readonly policyVersion: string;
   /**
@@ -82,6 +92,20 @@ export interface CandidateFilteringPolicy {
   readonly minimumTotalScore?: number | undefined;
 }
 
+/** The original score-only policy remains a distinct closed schema. */
+export interface LegacyCandidateFilteringPolicy extends FilteringPolicyBase {
+  readonly schemaVersion: typeof CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION;
+}
+
+/** DEC-044: explicit applicability is separate from numerical admission. */
+export interface ApplicabilityCandidateFilteringPolicy extends FilteringPolicyBase {
+  readonly schemaVersion: typeof APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION;
+  readonly applicability: CandidateApplicability;
+}
+
+export type CandidateFilteringPolicy =
+  LegacyCandidateFilteringPolicy | ApplicabilityCandidateFilteringPolicy;
+
 /**
  * Machine-readable reason for one filtering decision (INV-TRACE-002).
  *
@@ -93,7 +117,10 @@ export interface CandidateFilteringPolicy {
  * below the configured minimum.
  */
 export type CandidateFilteringDecisionReason =
-  'ELIGIBLE_REQUIRED' | 'ELIGIBLE_POLICY' | 'FILTERED_SCORE_BELOW_MINIMUM';
+  | 'ELIGIBLE_REQUIRED'
+  | 'ELIGIBLE_POLICY'
+  | 'FILTERED_SCORE_BELOW_MINIMUM'
+  | ApplicabilityExclusionEvidence['reason'];
 
 /**
  * A required candidate, admitted without consulting its score.
@@ -143,8 +170,16 @@ export interface FilteredCandidateDecision {
  * required candidate carrying a threshold it never faced, a filtered decision
  * with no minimum to be below — cannot be constructed.
  */
+export interface ApplicabilityFilteredCandidateDecision extends ApplicabilityExclusionEvidence {
+  readonly candidate: ScoredCandidate;
+  readonly decision: 'filtered';
+}
+
 export type CandidateFilteringDecision =
-  RequiredEligibleCandidateDecision | PolicyEligibleCandidateDecision | FilteredCandidateDecision;
+  | RequiredEligibleCandidateDecision
+  | PolicyEligibleCandidateDecision
+  | FilteredCandidateDecision
+  | ApplicabilityFilteredCandidateDecision;
 
 /**
  * The filtered batch: an ephemeral compiler-stage result, never persisted, so it
@@ -171,11 +206,12 @@ export interface FilteredCandidateSet {
 /**
  * Machine-readable categories of a filtering problem.
  *
+ * Version 2 also rejects invalid scoped applicability assertions before decisions.
  * Version 1 can fail in one way only: the injected policy is not a valid
- * `CandidateFilteringPolicy`. Filtering a valid batch under a valid policy
+ * `CandidateFilteringPolicy`. Version-1 filtering of a valid batch
  * cannot fail — it reads two already-validated values and compares numbers.
  */
-export type CandidateFilteringIssueCode = 'invalid_policy';
+export type CandidateFilteringIssueCode = 'invalid_policy' | CandidateApplicabilityIssueCode;
 
 /**
  * The single error this component raises.
@@ -230,7 +266,7 @@ const policyString = z
  * threshold could only ever be a no-op written by someone who believed it did
  * something.
  */
-const CandidateFilteringPolicySchema = z.strictObject({
+const LegacyFilteringPolicySchema = z.strictObject({
   schemaVersion: z.literal(CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION),
   policyId: policyString,
   policyVersion: policyString,
@@ -241,6 +277,38 @@ const CandidateFilteringPolicySchema = z.strictObject({
     })
     .optional(),
 });
+
+/** Internal schema: callers enter through the filtering policy validator. */
+const CandidateApplicabilitySchema = z.strictObject({
+  scope: ScopeSchema,
+  exclusions: z
+    .array(
+      z.strictObject({
+        blockId: ContextBlockIdSchema,
+        reason: z.enum(['inapplicable', 'superseded']),
+      }),
+    )
+    .superRefine((entries, ctx) => {
+      const seen = new Set<string>();
+      entries.forEach((entry, index) => {
+        if (seen.has(entry.blockId))
+          ctx.addIssue({
+            code: 'custom',
+            path: [index, 'blockId'],
+            message: 'must not repeat an exclusion target',
+          });
+        seen.add(entry.blockId);
+      });
+    }),
+});
+
+const CandidateFilteringPolicySchema = z.discriminatedUnion('schemaVersion', [
+  LegacyFilteringPolicySchema,
+  LegacyFilteringPolicySchema.extend({
+    schemaVersion: z.literal(APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION),
+    applicability: CandidateApplicabilitySchema,
+  }),
+]);
 
 /**
  * Validates one filtering policy and returns it, or the structured issues that
@@ -266,6 +334,92 @@ export function parseCandidateFilteringPolicy(
     };
   }
   return { ok: true, value: parsed.value };
+}
+
+function applicabilityIssue(
+  code: CandidateApplicabilityIssueCode,
+  message: string,
+): ValidationIssue {
+  return { code, path: ['applicability'], pointer: 'applicability', message };
+}
+
+/**
+ * Resolve group assertions after full candidate validation and exact deduplication.
+ * No member disappears, no required flag is rewritten, and no replacement graph
+ * is traversed. Reject the complete batch on ambiguity before issuing decisions.
+ */
+function resolveApplicability(
+  policy: CandidateApplicability,
+  input: ScoredCandidateSet,
+): ValidationResult<ReadonlyMap<string, ApplicabilityExclusionEvidence>> {
+  if (!scopesEqual(policy.scope, input.scope))
+    return {
+      ok: false,
+      issues: [
+        applicabilityIssue(
+          'applicability_scope_mismatch',
+          'applicability scope must equal the request scope',
+        ),
+      ],
+    };
+  const groups = new Map<string, { id: ContextBlockId; required: boolean }>();
+  for (const group of input.candidates) {
+    const summary = {
+      id: group.candidate.canonicalBlock.id,
+      required: group.candidate.members.some(
+        (member) => member.candidate.block.attributes.required === true,
+      ),
+    };
+    for (const member of group.candidate.members) groups.set(member.candidate.block.id, summary);
+  }
+  // These arrays are owned here. Append once per declaration instead of copying
+  // the entire growing group for each member of a large duplicate set.
+  const resolved = new Map<
+    string,
+    { reason: ApplicabilityExclusionEvidence['reason']; declaredBlockIds: ContextBlockId[] }
+  >();
+  const issues: ValidationIssue[] = [];
+  // Sort only the owned traversal; policy and scored order remain untouched.
+  const entries = [...policy.exclusions].sort((a, b) =>
+    a.blockId < b.blockId ? -1 : a.blockId > b.blockId ? 1 : 0,
+  );
+  for (const entry of entries) {
+    const group = groups.get(entry.blockId);
+    if (group === undefined) {
+      issues.push(
+        applicabilityIssue(
+          'missing_applicability_target',
+          'every exclusion target must belong to the validated candidate batch',
+        ),
+      );
+      continue;
+    }
+    if (group.required) {
+      issues.push(
+        applicabilityIssue(
+          'required_applicability_conflict',
+          'an applicability exclusion must not address a group with a required member',
+        ),
+      );
+      continue;
+    }
+    const id = group.id;
+    const reason =
+      entry.reason === 'inapplicable' ? 'FILTERED_INAPPLICABLE' : 'FILTERED_SUPERSEDED';
+    const previous = resolved.get(id);
+    if (previous !== undefined && previous.reason !== reason) {
+      issues.push(
+        applicabilityIssue(
+          'conflicting_applicability_declarations',
+          'one duplicate group must not receive different applicability reasons',
+        ),
+      );
+      continue;
+    }
+    if (previous === undefined) resolved.set(id, { reason, declaredBlockIds: [entry.blockId] });
+    else previous.declaredBlockIds.push(entry.blockId);
+  }
+  return issues.length > 0 ? { ok: false, issues } : { ok: true, value: resolved };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -302,13 +456,21 @@ export class CandidateFilter {
    * follows the input order too: nothing is sorted here, and the scorer's
    * comparator is not duplicated (INV-DET-002, INV-DET-005).
    *
-   * Filtering a valid batch cannot fail. There is no partial result and no
-   * failure mode: a policy problem was already rejected at construction.
+   * Version 1 cannot fail here. Version 2 rejects inconsistent applicability
+   * assertions before producing any result (DEC-044).
    */
   filter(input: ScoredCandidateSet): FilteredCandidateSet {
-    const decisions: readonly CandidateFilteringDecision[] = input.candidates.map((candidate) =>
-      this.#decide(candidate),
-    );
+    const applicability =
+      this.#policy.schemaVersion === APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION
+        ? resolveApplicability(this.#policy.applicability, input)
+        : { ok: true as const, value: new Map<string, ApplicabilityExclusionEvidence>() };
+    if (!applicability.ok) throw new CandidateFilteringError(applicability.issues);
+    const decisions: readonly CandidateFilteringDecision[] = input.candidates.map((candidate) => {
+      const exclusion = applicability.value.get(candidate.candidate.canonicalBlock.id);
+      return exclusion === undefined
+        ? this.#decide(candidate)
+        : { candidate, decision: 'filtered', ...exclusion };
+    });
     const eligible: readonly ScoredCandidate[] = decisions
       .filter((decision) => decision.decision === 'eligible')
       .map((decision) => decision.candidate);
