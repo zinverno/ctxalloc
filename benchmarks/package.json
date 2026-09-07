@@ -1,0 +1,15 @@
+{
+  "name": "@ctxalloc/benchmarks",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ctxalloc/adapters": "workspace:*",
+    "@ctxalloc/application": "workspace:*",
+    "@ctxalloc/compiler": "workspace:*",
+    "@ctxalloc/domain": "workspace:*",
+    "@ctxalloc/evaluation": "workspace:*",
+    "@ctxalloc/ports": "workspace:*",
+    "@ctxalloc/tokenization": "workspace:*"
+  }
+}

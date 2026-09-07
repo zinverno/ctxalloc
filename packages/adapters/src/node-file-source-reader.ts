@@ -1,5 +1,8 @@
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { constants } from 'node:fs';
+import { open, realpath, stat } from 'node:fs/promises';
+import { findLoneSurrogate } from '@ctxalloc/domain';
+import { exactDataRecord, ownDataValue } from './passive-inspection.js';
+import { isAbsolute, resolve, sep, win32 } from 'node:path';
 import type { SourceReadRequest, SourceReadResult, SourceReader } from '@ctxalloc/ports';
 
 /**
@@ -74,7 +77,7 @@ export type NodeFileSourceReaderErrorCode =
 /**
  * The single error this adapter raises.
  *
- * It carries a stable code and the exact locator that was requested. It
+ * It carries a stable code and a relative locator when one was requested. It
  * deliberately does not carry the underlying `Error`, its `errno`, the resolved
  * absolute path, or any part of the file's content: the first two are runtime
  * types the port forbids to escape, and the last two are information the caller
@@ -89,7 +92,7 @@ export class NodeFileSourceReaderError extends Error {
     super(message);
     this.name = 'NodeFileSourceReaderError';
     this.code = code;
-    this.locator = locator;
+    this.locator = isAbsolute(locator) || win32.isAbsolute(locator) ? '' : locator;
   }
 }
 
@@ -101,16 +104,6 @@ const CONFIG_KEYS: readonly string[] = ['maxBytes', 'rootDirectory'];
 
 /** The complete set of read-request fields. Anything else is rejected. */
 const REQUEST_KEYS: readonly string[] = ['locator'];
-
-/** Bounded rendering of a locator for a message, so a long path cannot flood a log. */
-const LOCATOR_PREVIEW_CODE_POINTS = 120;
-
-function previewLocator(locator: string): string {
-  const codePoints = [...locator];
-  if (codePoints.length <= LOCATOR_PREVIEW_CODE_POINTS) return JSON.stringify(locator);
-  const head = codePoints.slice(0, LOCATOR_PREVIEW_CODE_POINTS).join('');
-  return `${JSON.stringify(head)}... (${String(codePoints.length)} code points)`;
-}
 
 /**
  * True when `candidate` is `root` itself or lies underneath it.
@@ -127,7 +120,7 @@ function isInside(root: string, candidate: string): boolean {
 /** The operating system error code of a rejected filesystem call, when it has one. */
 function errorCodeOf(cause: unknown): string | null {
   if (typeof cause !== 'object' || cause === null) return null;
-  const code: unknown = (cause as { code?: unknown }).code;
+  const code = ownDataValue(cause, 'code');
   return typeof code === 'string' ? code : null;
 }
 
@@ -150,24 +143,14 @@ export class NodeFileSourceReader implements SourceReader {
    * @throws {NodeFileSourceReaderError} when the configuration is not usable.
    */
   constructor(config: unknown) {
-    if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    const record = exactDataRecord(config, CONFIG_KEYS);
+    if (record === null) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_CONFIG',
-        'NodeFileSourceReader configuration must be an object.',
+        'NodeFileSourceReader configuration must be an exact passive record with no missing or unknown fields.',
       );
     }
-
-    const unknownKeys = Object.keys(config)
-      .filter((key) => !CONFIG_KEYS.includes(key))
-      .sort();
-    if (unknownKeys.length > 0) {
-      throw new NodeFileSourceReaderError(
-        'NODE_FILE_SOURCE_READER_INVALID_CONFIG',
-        `NodeFileSourceReader configuration has unknown field(s): ${unknownKeys.join(', ')}.`,
-      );
-    }
-
-    const { rootDirectory, maxBytes } = config as Partial<NodeFileSourceReaderConfig>;
+    const { rootDirectory, maxBytes } = record;
 
     if (typeof rootDirectory !== 'string' || rootDirectory.trim().length === 0) {
       throw new NodeFileSourceReaderError(
@@ -175,16 +158,16 @@ export class NodeFileSourceReader implements SourceReader {
         'NodeFileSourceReader rootDirectory must not be empty or whitespace-only.',
       );
     }
-    if (rootDirectory.includes(NUL)) {
+    if (rootDirectory.includes(NUL) || findLoneSurrogate(rootDirectory) !== null) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_CONFIG',
-        'NodeFileSourceReader rootDirectory must not contain a NUL code unit.',
+        'NodeFileSourceReader rootDirectory must be well-formed UTF-16 without NUL.',
       );
     }
     if (typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_CONFIG',
-        `NodeFileSourceReader maxBytes must be a positive safe integer, received ${String(maxBytes)}.`,
+        'NodeFileSourceReader maxBytes must be a positive safe integer.',
       );
     }
 
@@ -218,22 +201,14 @@ export class NodeFileSourceReader implements SourceReader {
    * (INV-BLOCK-005).
    */
   #validateLocator(request: SourceReadRequest): string {
-    if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+    const record = exactDataRecord(request, REQUEST_KEYS);
+    if (record === null) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_REQUEST',
-        'NodeFileSourceReader request must be an object carrying a locator.',
+        'NodeFileSourceReader request must be an exact passive record.',
       );
     }
-    const unknownKeys = Object.keys(request)
-      .filter((key) => !REQUEST_KEYS.includes(key))
-      .sort();
-    if (unknownKeys.length > 0) {
-      throw new NodeFileSourceReaderError(
-        'NODE_FILE_SOURCE_READER_INVALID_REQUEST',
-        `NodeFileSourceReader request has unknown field(s): ${unknownKeys.join(', ')}.`,
-      );
-    }
-    const locator: unknown = request.locator;
+    const locator = record.locator;
     if (typeof locator !== 'string') {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_INVALID_REQUEST',
@@ -247,20 +222,26 @@ export class NodeFileSourceReader implements SourceReader {
         locator,
       );
     }
-    if (locator.includes(NUL)) {
+    if (locator.includes(NUL) || findLoneSurrogate(locator) !== null) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_LOCATOR_INVALID',
-        'NodeFileSourceReader locator must not contain a NUL code unit.',
+        'NodeFileSourceReader locator must be well-formed UTF-16 without NUL.',
         locator,
       );
     }
     // A locator names a source *inside* the configured root. An absolute path
     // would ignore the root rather than be confined by it.
-    if (isAbsolute(locator)) {
+    if (isAbsolute(locator) || win32.isAbsolute(locator)) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_LOCATOR_ABSOLUTE',
-        `NodeFileSourceReader locator must be relative to the configured root: ${previewLocator(locator)}.`,
+        'NodeFileSourceReader could not read the requested source.',
         locator,
+      );
+    }
+    if (locator.includes('\\')) {
+      throw new NodeFileSourceReaderError(
+        'NODE_FILE_SOURCE_READER_LOCATOR_INVALID',
+        'NodeFileSourceReader locator must use forward slash separators.',
       );
     }
     return locator;
@@ -279,7 +260,7 @@ export class NodeFileSourceReader implements SourceReader {
     if (!isInside(this.#rootDirectory, lexical)) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_LOCATOR_OUTSIDE_ROOT',
-        `NodeFileSourceReader locator resolves outside the configured root: ${previewLocator(locator)}.`,
+        'NodeFileSourceReader could not read the requested source.',
         locator,
       );
     }
@@ -303,13 +284,13 @@ export class NodeFileSourceReader implements SourceReader {
       if (code === 'ENOENT' || code === 'ENOTDIR') {
         throw new NodeFileSourceReaderError(
           'NODE_FILE_SOURCE_READER_SOURCE_NOT_FOUND',
-          `NodeFileSourceReader found no source at ${previewLocator(locator)}.`,
+          'NodeFileSourceReader could not read the requested source.',
           locator,
         );
       }
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_READ_FAILED',
-        `NodeFileSourceReader could not resolve ${previewLocator(locator)}.`,
+        'NodeFileSourceReader could not read the requested source.',
         locator,
       );
     }
@@ -317,7 +298,7 @@ export class NodeFileSourceReader implements SourceReader {
     if (!isInside(realRoot, realTarget)) {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_LOCATOR_OUTSIDE_ROOT',
-        `NodeFileSourceReader locator resolves outside the configured root: ${previewLocator(locator)}.`,
+        'NodeFileSourceReader could not read the requested source.',
         locator,
       );
     }
@@ -325,83 +306,85 @@ export class NodeFileSourceReader implements SourceReader {
   }
 
   /**
-   * Reads the file, checking the size limit before and after.
-   *
-   * The check is repeated because `stat` describes the file at one instant and
-   * the read happens at another. A file that grew in between would otherwise
-   * enter the pipeline above the configured limit.
+   * Check the opened regular file, then read at most maxBytes + one probe byte.
+   * O_NONBLOCK avoids waiting on a FIFO swapped in after the path check;
+   * O_NOFOLLOW refuses a final-component symlink swapped in after realpath.
+   * Ancestor directories must remain operator-controlled: portable Node has no
+   * openat directory-handle walk, so this is not an adversarial filesystem sandbox.
    */
   async #readBytes(locator: string, target: string): Promise<Uint8Array> {
-    let size: number;
-    let isRegularFile: boolean;
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      const stats = await stat(target);
-      size = stats.size;
-      isRegularFile = stats.isFile();
-    } catch (cause) {
-      if (errorCodeOf(cause) === 'ENOENT') {
-        throw new NodeFileSourceReaderError(
-          'NODE_FILE_SOURCE_READER_SOURCE_NOT_FOUND',
-          `NodeFileSourceReader found no source at ${previewLocator(locator)}.`,
-          locator,
-        );
-      }
-      throw new NodeFileSourceReaderError(
-        'NODE_FILE_SOURCE_READER_READ_FAILED',
-        `NodeFileSourceReader could not inspect ${previewLocator(locator)}.`,
-        locator,
-      );
-    }
-
-    if (!isRegularFile) {
-      throw new NodeFileSourceReaderError(
-        'NODE_FILE_SOURCE_READER_SOURCE_NOT_A_FILE',
-        `NodeFileSourceReader locator does not name a regular file: ${previewLocator(locator)}.`,
-        locator,
-      );
-    }
-    if (size > this.#maxBytes) {
-      throw new NodeFileSourceReaderError(
-        'NODE_FILE_SOURCE_READER_SOURCE_TOO_LARGE',
-        `NodeFileSourceReader source ${previewLocator(locator)} is ${String(size)} bytes, above the configured limit of ${String(this.#maxBytes)}.`,
-        locator,
-      );
-    }
-
-    let bytes: Uint8Array;
-    try {
-      bytes = await readFile(target);
-    } catch (cause) {
-      const code = errorCodeOf(cause);
-      if (code === 'ENOENT') {
-        throw new NodeFileSourceReaderError(
-          'NODE_FILE_SOURCE_READER_SOURCE_NOT_FOUND',
-          `NodeFileSourceReader found no source at ${previewLocator(locator)}.`,
-          locator,
-        );
-      }
-      if (code === 'EISDIR') {
+      const before = await stat(target);
+      if (!before.isFile()) {
         throw new NodeFileSourceReaderError(
           'NODE_FILE_SOURCE_READER_SOURCE_NOT_A_FILE',
-          `NodeFileSourceReader locator does not name a regular file: ${previewLocator(locator)}.`,
+          'NodeFileSourceReader requires a regular file.',
           locator,
         );
       }
+      handle = await open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+      const opened = await handle.stat();
+      if (!opened.isFile()) {
+        throw new NodeFileSourceReaderError(
+          'NODE_FILE_SOURCE_READER_SOURCE_NOT_A_FILE',
+          'NodeFileSourceReader requires a regular file.',
+          locator,
+        );
+      }
+      if (
+        opened.dev !== before.dev ||
+        opened.ino !== before.ino ||
+        (await this.#resolveConfinedPath(locator)) !== target
+      ) {
+        throw new NodeFileSourceReaderError(
+          'NODE_FILE_SOURCE_READER_READ_FAILED',
+          'NodeFileSourceReader source changed while being opened.',
+          locator,
+        );
+      }
+      if (opened.size > this.#maxBytes) {
+        throw new NodeFileSourceReaderError(
+          'NODE_FILE_SOURCE_READER_SOURCE_TOO_LARGE',
+          'NodeFileSourceReader source exceeds the configured byte limit.',
+          locator,
+        );
+      }
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for (;;) {
+        const chunk = new Uint8Array(Math.min(65536, this.#maxBytes - total + 1));
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+        if (bytesRead === 0) break;
+        total += bytesRead;
+        if (total > this.#maxBytes) {
+          throw new NodeFileSourceReaderError(
+            'NODE_FILE_SOURCE_READER_SOURCE_TOO_LARGE',
+            'NodeFileSourceReader source exceeds the configured byte limit.',
+            locator,
+          );
+        }
+        chunks.push(chunk.subarray(0, bytesRead));
+      }
+      const bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.length;
+      }
+      return bytes;
+    } catch (cause) {
+      if (cause instanceof NodeFileSourceReaderError) throw cause;
       throw new NodeFileSourceReaderError(
-        'NODE_FILE_SOURCE_READER_READ_FAILED',
-        `NodeFileSourceReader could not read ${previewLocator(locator)}.`,
+        errorCodeOf(cause) === 'ENOENT'
+          ? 'NODE_FILE_SOURCE_READER_SOURCE_NOT_FOUND'
+          : 'NODE_FILE_SOURCE_READER_READ_FAILED',
+        'NodeFileSourceReader could not read the requested source.',
         locator,
       );
+    } finally {
+      if (handle !== undefined) await closeSource(handle, locator);
     }
-
-    if (bytes.byteLength > this.#maxBytes) {
-      throw new NodeFileSourceReaderError(
-        'NODE_FILE_SOURCE_READER_SOURCE_TOO_LARGE',
-        `NodeFileSourceReader source ${previewLocator(locator)} is ${String(bytes.byteLength)} bytes, above the configured limit of ${String(this.#maxBytes)}.`,
-        locator,
-      );
-    }
-    return bytes;
   }
 
   /**
@@ -418,9 +401,21 @@ export class NodeFileSourceReader implements SourceReader {
     } catch {
       throw new NodeFileSourceReaderError(
         'NODE_FILE_SOURCE_READER_SOURCE_NOT_UTF8',
-        `NodeFileSourceReader source ${previewLocator(locator)} is not valid UTF-8.`,
+        'NodeFileSourceReader could not read the requested source.',
         locator,
       );
     }
+  }
+}
+
+async function closeSource(handle: { close(): Promise<void> }, locator: string): Promise<void> {
+  try {
+    await handle.close();
+  } catch {
+    throw new NodeFileSourceReaderError(
+      'NODE_FILE_SOURCE_READER_READ_FAILED',
+      'NodeFileSourceReader could not close the source.',
+      locator,
+    );
   }
 }

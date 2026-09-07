@@ -11,11 +11,15 @@
     "types": ["node"],
     "baseUrl": "..",
     "paths": {
+      "@ctxalloc/adapters": ["packages/adapters/src/index.ts"],
+      "@ctxalloc/application": ["packages/application/src/index.ts"],
+      "@ctxalloc/tokenization": ["packages/tokenization/src/index.ts"],
       "@ctxalloc/compiler": ["packages/compiler/src/index.ts"],
       "@ctxalloc/domain": ["packages/domain/src/index.ts"],
       "@ctxalloc/evaluation": ["packages/evaluation/src/index.ts"],
       "@ctxalloc/ports": ["packages/ports/src/index.ts"]
     }
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["dist", "node_modules"]
 }

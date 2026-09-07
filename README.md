@@ -9,10 +9,17 @@ or agent framework.
 
 ## Status
 
-Phase 19 — **the compiler kernel is complete, the first local
-source-to-compilation slice is complete, the evaluation harness is complete, the
-first real lexical candidate provider is complete, and the local system now
-survives a process restart and is runnable from a shell**.
+Phase 20 — **the MVP implementation now includes the minimal HTTP API, shared
+compile-and-persist orchestration, boundary hardening, a reproducible acceptance
+runner, and a Docker/VPS staging procedure**. The built CLI and HTTP workflows
+pass for Markdown and conversation, including restart and trace retrieval.
+
+Acceptance is **not complete**: engineering acceptance is `INCOMPLETE`; product
+validation is `FAIL`. On the unchanged v1 validation split, median context
+reduction is 0% against a 35% target; long-context reduction is 76.92%. Live
+answer quality and a suite-level source-instruction escape count are unmeasured.
+Docker runtime validation is `NOT_RUN` on the reference machine. See
+[MVP acceptance](./docs/MVP_ACCEPTANCE.md) for measured values and limitations.
 
 `ContextCompiler` composes the kernel stages, settles the rendered budget, and
 returns a `CompilationResult` (Phase 15). `CompileLocalContextService` carries
@@ -99,7 +106,7 @@ re-renders nothing, recomputes no digest, and calls no tokenizer, provider,
 model, or clock.
 
 `ctxalloc` is a composition root, not a second product: it parses arguments,
-reads explicit JSON files, composes the same services a future HTTP API will, and
+reads explicit JSON files, composes the same services as the HTTP API, and
 serializes the result. `compile` persists the trace **after** the compilation
 completes and **before** it prints anything, so an operator never receives a
 compiled context whose audit record does not exist. `inspect-blocks` runs
@@ -125,7 +132,7 @@ retrieval malfunctioned. Retrieval proposes; the compiler selects. The technolog
 and the primary candidate it names was rejected on measured evidence
 ([docs/RETRIEVAL_SPIKE.md](./docs/RETRIEVAL_SPIKE.md)).
 
-Phases 17, 18, and 19 add **no** compiler selection behavior. The compiler calls
+Phases 17–20 add **no** compiler selection behavior. The compiler calls
 no model, reads no clock, opens no database, and cannot tell which provider
 produced a candidate. Persistence cannot change what was compiled: a compilation
 is a pure function of its inputs, and the settled trace is stored after the
@@ -136,7 +143,7 @@ The repository contains the TypeScript monorepo scaffolding from Phase 1
 infrastructure, package boundaries, boundary checker), the runtime-validated
 domain model in `@ctxalloc/domain` (scope, identifiers, content hash values,
 JSON-safe metadata, source types, source locations, `SourceDocument`,
-`ContextBlock`, `TokenBudget`, and a structured validation API), six
+`ContextBlock`, `TokenBudget`, and a structured validation API), eight
 project-owned type-only ports in `@ctxalloc/ports` (`Tokenizer`, `SourceReader`,
 `ControlStore`, `ControlStoreWriter`, `CandidateProvider`, `TraceStore`,
 `ModelProvider`, `MonotonicClock`), seven deterministic test doubles in
@@ -159,18 +166,14 @@ observational `TraceBuilder`, and `ContextCompiler`, plus
 `benchmarks/evaluation/v1/` and a versioned retrieval dataset under
 `benchmarks/retrieval/v1/`, and the `ctxalloc` command line in `apps/cli`.
 
-**The product is not complete.** The HTTP API, authentication and multi-user
-operation, semantic and hybrid retrieval, embeddings, a vector database,
-reranking, query expansion, a persistent retrieval index and its lifecycle, file
-watching, evaluation-report persistence, pricing and cost, LLM-as-judge scoring,
-and multi-model routing remain later phases. Retrieval is **lexical only** — it
-matches words, not meaning, and a paraphrase sharing no term with the corpus is a
+Authentication and multi-user operation, semantic and hybrid retrieval,
+embeddings, a vector database, reranking, query expansion, a persistent retrieval
+index and its lifecycle, file watching, evaluation-report persistence, pricing,
+LLM-as-judge scoring, model routing, and a polished UI remain outside the MVP.
+Retrieval is **lexical only**: a paraphrase sharing no term with the corpus is a
 legitimate miss. `ctxalloc index` and `ctxalloc search` are not implemented.
-
-**No benchmark acceptance gate is claimed.** The harness runs; the MVP targets in
-[Metrics](./docs/METRICS.md) remain unmet until a real run reports them. CtxAlloc
-is not a model gateway, has no production retrieval quality result, and is not
-SaaS-ready.
+The API has no authentication and must be exposed only on host loopback or behind
+operator-controlled access restrictions.
 
 `O200kBaseTokenizer` counts exact text with the `o200k_base` encoding bundled in
 `js-tiktoken` (pinned to 1.0.21, see [DEC-027](./docs/DECISIONS.md)). It runs
@@ -179,8 +182,8 @@ runtime rank download. Its counts are verified against committed golden fixtures
 that were cross-checked with the official `openai/tiktoken` package before being
 committed. **This adapter is not universal for all model families:** `o200k_base`
 is a reference encoding, and a model family that uses a different vocabulary
-needs its own adapter. CtxAlloc supports no provider API — not OpenAI, not
-Anthropic, not any other.
+needs its own adapter. CtxAlloc exposes no model gateway; the existing Anthropic adapter is used only
+for explicitly enabled evaluation outside the public HTTP server.
 
 `TokenBudget` validates a budget and reports two exact values:
 `configuredReservedTokens` and `availableInputTokens`. It is pure arithmetic over
@@ -756,10 +759,9 @@ so a symlink pointing outside it is rejected, and decodes UTF-8 strictly rather
 than substituting U+FFFD. Registrations are ordered by identity, never by
 locator; the provider's candidate order is preserved exactly.
 
-**What remains after the slice.** Real retrieval, persistence and SQLite,
-control-plane writing, trace persistence, the CLI, the HTTP API, model execution,
-the evaluation harness and its baselines, and telemetry. CtxAlloc supports no
-Obsidian integration.
+**Outer composition.** Phases 17–20 add lexical retrieval, SQLite control and
+trace persistence, CLI/HTTP interfaces and evaluation around this local slice.
+Telemetry and an Obsidian plugin remain deferred.
 
 ## Prerequisites
 
@@ -879,6 +881,63 @@ failure will not succeed on retry, and an operational one might.
 
 `ctxalloc index` and `ctxalloc search` are **not** implemented.
 
+## HTTP API and acceptance
+
+Build with Node 22 and pnpm 10.33.0, then start with exactly one explicit config:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+node apps/api/dist/bin.js --config .ctxalloc/local/config/ctxalloc-api.json
+```
+
+Follow [Staging](./docs/STAGING.md) to create that config, register the public
+sample source through the built CLI against the same SQLite database, and set up
+read-only source/config mounts plus writable state. [`examples/api`](./examples/api/)
+contains the complete config, request, registration, scope, and public Markdown.
+There are no defaults, environment fallbacks, or config discovery. Relative
+paths resolve against the config file directory. The sample binds `127.0.0.1:8787`.
+
+| Method | Exact route           | Result                                                |
+| ------ | --------------------- | ----------------------------------------------------- |
+| POST   | `/v1/context/compile` | Compilation output after its trace is stored          |
+| POST   | `/v1/evaluations/run` | Existing `EvaluationReport`; model execution disabled |
+| GET    | `/v1/traces/:id`      | Validated settled trace for exact scope               |
+| GET    | `/health`             | Liveness only                                         |
+| GET    | `/ready`              | Runtime readiness, cleared before shutdown            |
+
+```sh
+curl --fail-with-body http://127.0.0.1:8787/ready
+curl --fail-with-body -H 'Content-Type: application/json' --data-binary @examples/api/request.json http://127.0.0.1:8787/v1/context/compile
+curl --fail-with-body 'http://127.0.0.1:8787/v1/traces/example-id?tenantId=local&workspaceId=example'
+```
+
+Replace `example-id` with the returned compilation id. Trace reads require exactly
+one `tenantId` and `workspaceId`; `projectId` is optional. Missing and wrong-scope
+traces share one 404 response. Compilation and evaluation accept strict JSON,
+fatal UTF-8 and `application/json` (optional UTF-8 charset); compression is
+rejected. Actual streamed bytes are bounded by explicit `maxRequestBodyBytes`.
+The server has bounded application concurrency with immediate 503 when full,
+explicit Node HTTP timeouts, and graceful SIGTERM/SIGINT shutdown. Timeouts cannot
+preempt synchronous compiler work. Unknown routes return 404; known routes with
+the wrong method return 405. There is no implicit HEAD, CORS, or source HTTP CRUD.
+
+Both interfaces use `CompileAndPersistLocalContextService`. HTTP owns transport,
+configuration and lifecycle, with no compilation rules and no app-to-app imports.
+
+```sh
+pnpm smoke:cli
+pnpm smoke:api
+pnpm --silent acceptance:mvp > .ctxalloc/acceptance.json
+pnpm --silent performance:mvp > .ctxalloc/performance.json
+```
+
+Create `.ctxalloc` first if it does not exist. Acceptance emits a versioned JSON
+report with explicit missing gates. Exit 0 means the measurement ran without an
+engineering failure; inspect both overall states before making a release claim.
+Performance is a separate warmed measurement, never a CI timing gate. The explicit
+manual live-model command is documented in [MVP acceptance](./docs/MVP_ACCEPTANCE.md).
+
 ## Workspaces
 
 ```text
@@ -894,23 +953,26 @@ packages/
   ports/        @ctxalloc/ports
   testing/      @ctxalloc/testing
   tokenization/ @ctxalloc/tokenization
+benchmarks/     @ctxalloc/benchmarks (private acceptance executables and fixtures)
 ```
 
 Allowed internal dependency direction (enforced by `pnpm check:boundaries`):
 
 ```text
-apps/cli -> application -> compiler -> ports -> domain
+apps/cli, apps/api -> application -> compiler -> ports -> domain
          -> adapters    -> ports     -> domain
          -> evaluation  -> compiler  -> ports -> domain
          -> tokenization
 ```
 
-`apps/cli` is the outermost composition root: it may depend inward on every
-package, and **no package may depend on it**.
+`apps/cli` and `apps/api` are outermost composition roots: each depends inward
+on approved packages; neither imports the other, and no package imports either.
+The private benchmark workspace composes reusable packages for measurements.
 
-`@ctxalloc/adapters` is the only workspace that touches a filesystem, a network,
-a database, or a platform clock, and the only one that may depend on an external
-retrieval library. It depends on `@ctxalloc/ports`, on `@ctxalloc/domain` for the
+`@ctxalloc/adapters` owns reusable filesystem, network, database and clock
+adapters, and is the only package that may depend on an external retrieval
+library. Outer apps and benchmark executables handle explicit configuration,
+transport and process I/O; SQLite driver imports remain adapters-only. It depends on `@ctxalloc/ports`, on `@ctxalloc/domain` for the
 project-owned types the ports already speak, and on one exactly pinned lexical
 search library — never on the compiler kernel: an adapter that could see the
 kernel could make a selection decision. Its SQLite support uses the Node
@@ -924,6 +986,8 @@ stays decoupled from the pipeline that produces what is measured.
 ## Documentation
 
 - [Product Contract](./docs/PRODUCT_CONTRACT.md)
+- [MVP acceptance](./docs/MVP_ACCEPTANCE.md)
+- [Staging](./docs/STAGING.md)
 - [MVP Scope](./docs/MVP_SCOPE.md)
 - [Architecture](./docs/ARCHITECTURE.md)
 - [Invariants](./docs/INVARIANTS.md)

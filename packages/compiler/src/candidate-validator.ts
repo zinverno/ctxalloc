@@ -1,3 +1,4 @@
+import { snapshotCompilerInput } from './passive-input.js';
 import {
   CandidateBlockSchema,
   ScopeSchema,
@@ -296,7 +297,17 @@ export class CandidateValidator {
    * @throws {CandidateValidationError} when the batch is not valid.
    */
   validate(input: unknown): ValidatedCandidateSet {
-    const parsed = safeParse(CandidateValidationInputSchema, input);
+    const snapshot = snapshotCompilerInput(input);
+    if (!snapshot.ok)
+      throw new CandidateValidationError([
+        {
+          code: 'invalid_input',
+          path: [],
+          pointer: '',
+          message: 'Candidate input must be readable passive data without cycles.',
+        },
+      ]);
+    const parsed = safeParse(CandidateValidationInputSchema, snapshot.value);
     if (!parsed.ok) {
       // Deliberate short-circuit: a batch whose shape is unsupported gets schema
       // issues only, never cross-record ones. Re-parsing leniently to salvage a

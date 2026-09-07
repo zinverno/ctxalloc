@@ -36,12 +36,13 @@
  *   conversion between the compiler's `SettledCompilationTrace` and the
  *   JSON-safe envelope a `TraceStore` persists.
  *
- * The last two are the reusable seam both the CLI and a future HTTP API compose
+ * These are the reusable seams both the CLI and HTTP API compose
  * against. This layer still opens no database: SQLite lives behind the ports, in
  * `@ctxalloc/adapters` (INV-DEP-001, INV-ADAPTER-001).
  *
- * The HTTP API, model routing, and a persistent retrieval index remain later
- * phases.
+ * CompileAndPersistLocalContextService (DEC-043) compiles, stores the settled
+ * trace, and only then resolves for either interface. Model routing and a
+ * persistent retrieval index remain outside this layer.
  */
 
 export {
@@ -130,3 +131,5 @@ export {
   type TextChunkingOptions,
   type TextChunkingRange,
 } from './text-chunker.js';
+
+export { CompileAndPersistLocalContextService } from './compile-and-persist-local-context-service.js';

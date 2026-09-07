@@ -86,3 +86,28 @@ export function tryOwnEnumerableKeys(value: object): readonly string[] | null {
     return null;
   }
 }
+
+/** Snapshot an exact, flat input record without invoking accessors or reflection errors. */
+export function exactDataRecord(
+  input: unknown,
+  keys: readonly string[],
+): Record<string, unknown> | null {
+  try {
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) return null;
+    const names = Reflect.ownKeys(input);
+    if (
+      names.length !== keys.length ||
+      names.some((key) => typeof key !== 'string' || !keys.includes(key))
+    )
+      return null;
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      if (descriptor === undefined || !('value' in descriptor)) return null;
+      Object.defineProperty(result, key, { value: descriptor.value, enumerable: true });
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}

@@ -44,6 +44,8 @@ const DECLARATIONS = [
   'packages/application/dist/conversation-source.d.ts',
   'packages/application/dist/conversation-chunker.d.ts',
   'packages/application/dist/compile-local-context-service.d.ts',
+  'packages/application/dist/compile-and-persist-local-context-service.d.ts',
+  'apps/api/dist/index.d.ts',
   'packages/application/dist/local-source-pipeline.d.ts',
   'packages/application/dist/source-registration.d.ts',
   'packages/application/dist/prepare-local-corpus-service.d.ts',
@@ -920,6 +922,8 @@ for (const relativePath of [
   'packages/application/dist/text-chunker.d.ts',
   'packages/application/dist/conversation-chunker.d.ts',
   'packages/application/dist/compile-local-context-service.d.ts',
+  'packages/application/dist/compile-and-persist-local-context-service.d.ts',
+  'apps/api/dist/index.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
@@ -1211,6 +1215,8 @@ for (const relativePath of [
   'packages/application/dist/conversation-source.d.ts',
   'packages/application/dist/conversation-chunker.d.ts',
   'packages/application/dist/compile-local-context-service.d.ts',
+  'packages/application/dist/compile-and-persist-local-context-service.d.ts',
+  'apps/api/dist/index.d.ts',
 ]) {
   const content = contents.get(relativePath);
   if (content === undefined) continue;
@@ -3035,6 +3041,43 @@ requireContains(
     }
   }
 }
+
+// Phase 20 exposes one shared use case and only a version constant from the API.
+requireContains(
+  'packages/application/dist/compile-and-persist-local-context-service.d.ts',
+  'class CompileAndPersistLocalContextService',
+);
+requireContains(
+  'packages/application/dist/compile-and-persist-local-context-service.d.ts',
+  'execute(input: unknown): Promise<LocalCompilationResult>;',
+);
+requireContains(
+  'packages/application/dist/index.d.ts',
+  'export { CompileAndPersistLocalContextService }',
+);
+requireContains('apps/api/dist/index.d.ts', 'API_CONTRACT_VERSION = 1');
+for (const path of [
+  'apps/api/dist/index.d.ts',
+  'packages/application/dist/compile-and-persist-local-context-service.d.ts',
+]) {
+  const declarations = stripComments(contents.get(path) ?? '');
+  for (const forbidden of [
+    'IncomingMessage',
+    'ServerResponse',
+    'Server',
+    'node:',
+    'DatabaseSync',
+    'StatementSync',
+    '@ctxalloc/cli',
+    'express',
+    'fastify',
+  ]) {
+    if (declarations.includes(forbidden)) fail(`${path} exposes ${forbidden}`);
+  }
+}
+const apiEntry = stripComments(contents.get('apps/api/dist/index.d.ts') ?? '').trim();
+if (apiEntry !== 'export declare const API_CONTRACT_VERSION = 1;')
+  fail('API public entry point must expose only its contract version');
 
 if (failures.length > 0) {
   console.error('Declaration check failed:\n');

@@ -534,3 +534,16 @@ describe('AnthropicModelProvider: strict requests', () => {
     );
   });
 });
+
+it('keeps timeout active while a successful response body stalls after headers', async () => {
+  respond = (_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.flushHeaders();
+    response.write('{"content":[');
+  };
+  const error = await failureOf(
+    new AnthropicModelProvider(config({ timeoutMs: 60 })).generate(request()),
+  );
+  expect(error.code).toBe('ANTHROPIC_MODEL_PROVIDER_TIMEOUT');
+  expect(error.message).not.toContain(USER_PROMPT);
+});

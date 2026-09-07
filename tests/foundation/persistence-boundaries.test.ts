@@ -318,7 +318,7 @@ describe('DEC-042: the CLI reads bytes and holds each command to an exact option
 });
 
 describe('Phase 19 scope: what local persistence deliberately does not add', () => {
-  it('adds no HTTP framework or server', () => {
+  it('adds no HTTP framework and confines the Phase 20 server to apps/api', () => {
     const manifests = ['apps/cli', 'apps/api', ...INNER_PACKAGES, 'packages/adapters'].map((dir) =>
       readJson<Manifest>(`${dir}/package.json`),
     );
@@ -332,6 +332,7 @@ describe('Phase 19 scope: what local persistence deliberately does not add', () 
 
     for (const group of ['packages', 'apps']) {
       for (const entry of readdirSync(new URL(`${group}/`, rootUrl))) {
+        if (group === 'apps' && entry === 'api') continue; // DEC-043 outer HTTP root.
         for (const file of sourceFiles(`${group}/${entry}/src`)) {
           const code = codeOf(readSource(`${group}/${entry}/src/${file}`));
           expect(code, `${group}/${entry}/src/${file} creates a server`).not.toContain(

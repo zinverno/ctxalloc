@@ -297,7 +297,7 @@ inspecting a redirect afterwards is too late, because the request has already
 been transmitted. A redirect response is a provider failure and the `Location`
 value is never reported (INV-SEC-001).
 
-`@ctxalloc/adapters` depends on `@ctxalloc/ports` only. It deliberately does not
+`@ctxalloc/adapters` depends on `@ctxalloc/ports` and `@ctxalloc/domain`. It deliberately does not
 depend on `@ctxalloc/compiler`: an adapter that could see the kernel would be
 able to make a selection decision, and the point of the seam is that it cannot.
 
@@ -310,7 +310,7 @@ Adapters may be removed without modifying the domain compiler.
 Initial application interfaces:
 
 * CLI, implemented as `apps/cli` (DEC-042);
-* minimal HTTP API, future, as `apps/api`;
+* minimal HTTP API, implemented as `apps/api` (DEC-043);
 * test harness.
 
 These interfaces call application services.
@@ -2700,8 +2700,9 @@ application reports fixed project-owned messages and attaches no cause
 (INV-SEC-001). Parser diagnostics are treated the same way: they quote the input
 and vary by runtime, so they are not part of any published contract.
 
-Real retrieval, trace persistence, control-plane writing, model execution, the
-CLI, and the HTTP API remain later phases.
+This Phase 16 boundary is unchanged by the outer retrieval, persistence,
+control-plane writing, optional model evaluation, CLI and HTTP compositions
+implemented in Phases 17–20.
 
 The canonical `ContextBlock.normalizedContentHash` rule is owned by `@ctxalloc/domain` so that the chunker which writes a hash and the validator which rechecks it cannot drift apart.
 
@@ -3163,3 +3164,58 @@ Before implementing a new component, answer:
 10. Can the same result be implemented more directly?
 
 When the answers are unclear, implementation must pause until the responsibility is defined.
+
+
+## 22. HTTP Runtime and Acceptance Composition (Phase 20)
+
+`apps/api` is an outermost composition root alongside `apps/cli`. It may depend
+inward on application, adapters, evaluation, compiler, domain, ports and
+tokenization. No reusable package imports an app; apps never import each other.
+`node:http` and Node server types stay in internal API modules and executable
+smokes. The public API entry point exports only `API_CONTRACT_VERSION = 1`.
+
+```text
+explicit --config -> fatal UTF-8 / JSON -> absolute database/source paths
+  -> SQLiteControlStore + independent SQLiteTraceStore connections
+  -> NodeFileSourceReader + MiniSearchCandidateProvider + O200kBaseTokenizer
+  -> CompileLocalContextService + CompilationTracePersistenceService
+  -> CompileAndPersistLocalContextService
+  -> EvaluationHarness + SystemMonotonicClock (no ModelProvider)
+  -> listener -> ready
+```
+
+The shared application orchestration compiles, stores the settled trace, then
+resolves the original result. Pure compilation and persistence remain separate
+services. CLI stdout and HTTP 200 both wait for this operation. No compiled
+context or evaluation report is persisted; SQLite schema version remains 1.
+
+Internal config, body, routing, error/response, handler, runtime, server and bin
+modules separate transport validation from composition and lifecycle. Handlers
+perform no scoring, allocation, rendering, provenance reconstruction, or metric
+formula. Compile accepts the existing local request; evaluation validates only
+its versioned wrapper and delegates case/config semantics to the harness.
+Trace reads delegate exact scope and id to the existing persistence service.
+
+The body reader caps actual streamed bytes and fatal-decodes UTF-8; early
+Content-Length rejection also applies before `100 Continue`. Exact methods/paths,
+fixed error messages, fixed Allow headers and complete serialization precede
+publication. No raw dependency error, absolute path, request content, or secret
+is copied into an API error. A trace retains its compiler schema; an evaluation
+report retains its evaluation schema, independently of the API envelope version.
+
+One runtime owns two SQLite adapters, never one shared DatabaseSync handle.
+Application slots cover body reading through response production, with no queue;
+health and readiness bypass slots. Readiness means completed startup and clears
+before drain, not continuous dependency health. Shutdown stops new work, closes
+the listener, forces connections closed after the explicit grace interval, and
+awaits application completion before closing stores once. HTTP timers cannot
+preempt synchronous CPU work or cancel compiler operations.
+
+The private `benchmarks` workspace reuses EvaluationHarness and existing v1
+fixtures for acceptance. Narrow observational correctness producers implement
+METRICS definitions; no metric formula is copied into an app. Optional warmed
+performance and explicit manual live quality are separate from deterministic CI.
+Missing evidence remains missing. See [MVP_ACCEPTANCE.md](MVP_ACCEPTANCE.md) and
+[STAGING.md](STAGING.md) for results, limits, and the unauthenticated loopback
+exposure model. Docker copies built runtime output and production dependencies,
+with config/source mounts read-only and only state writable.

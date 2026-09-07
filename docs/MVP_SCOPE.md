@@ -524,9 +524,9 @@ deterministic compilation identifier, a settled privacy-minimized audit trace,
 and a hard guarantee that the rendered string is within the caller's available
 input budget.
 
-**The product is not complete.** Retrieval integration, persistence, the CLI, the
-HTTP API, model execution, and the evaluation harness remain later phases
-(sections 3.12 through 3.17).
+This is the Phase 15 kernel boundary. Retrieval, persistence, CLI, HTTP and
+evaluation are implemented outside the kernel in Phases 16–20 (sections 3.12
+through 3.17); measured product acceptance remains separate.
 
 **Stable ordering is implemented.** `ContextOrderer` consumes an
 `AllocatedCandidateSet` and one narrow versioned `ContextOrderingPolicy`, and
@@ -825,9 +825,9 @@ namespace, and identity key, never by locator; the corpus is sorted by source
 document, position, and block identifier. Provider candidate order is preserved
 exactly.
 
-**Not implemented and deliberately absent:** real retrieval, model execution and
-evaluation, control-plane writing, trace persistence, SQLite and every other
-persistence, the CLI, the HTTP API, and file watching.
+The original Phase 16 slice excluded retrieval, model evaluation, persistence
+and interfaces. Phases 17–20 implement those outer concerns without moving
+them into corpus preparation. File watching remains deferred.
 
 See DEC-039.
 
@@ -1055,7 +1055,7 @@ ctxalloc search     deferred: it would publish a retrieval ranking as a product
 
 The CLI is a composition root, not a second product implementation. It parses
 arguments with `node:util.parseArgs`, reads explicit JSON input files, composes
-the same application services and adapters a future HTTP API will, and
+the same application services and adapters as the HTTP API, and
 serializes the result. No package may import it.
 
 Contract:
@@ -1085,7 +1085,8 @@ The CLI is not required to provide a polished interactive interface.
 
 ### 3.16 Minimal HTTP API
 
-The MVP may expose:
+Implemented in Phase 20 (DEC-043), with `API_CONTRACT_VERSION = 1` and Node 22
+`node:http`, exactly:
 
 ```text
 POST /v1/context/compile
@@ -1095,9 +1096,27 @@ GET  /health
 GET  /ready
 ```
 
-The API must call the same application services used by the CLI.
+Both interfaces call `CompileAndPersistLocalContextService`; no response is
+published before settled trace storage succeeds. The API composes one control
+store and one independent trace store at startup, plus the existing reader,
+MiniSearch provider, tokenizer, local compiler service, and model-disabled harness.
+Business logic is absent from HTTP handlers. No package imports either app, and
+the apps do not import each other.
 
-Business logic must not be implemented inside HTTP route handlers.
+The only invocation is `node apps/api/dist/bin.js --config <path>`. Config is
+strict, explicit, fatal UTF-8 JSON, with paths relative to its own directory.
+Body bytes are capped while streaming. JSON/UTF-8 media, methods, paths and scope
+queries are exact; there is no compression, CORS, implicit HEAD, or source CRUD.
+Trace reads require tenant/workspace exactly once and project at most once.
+Wrong-scope and absent traces produce identical 404 responses. Errors use fixed
+versioned project-owned messages. Application work has bounded concurrency and
+no waiting queue. Health performs no dependency work; readiness records runtime
+state and clears before drain. Stores close after active work, once each.
+
+The API has no authentication. Bare processes bind loopback; the documented
+container binds internally and publishes only `127.0.0.1:8787:8787`. Full config,
+status/error mapping and lifecycle are recorded in DEC-043 and
+[STAGING.md](STAGING.md).
 
 ---
 
@@ -1352,6 +1371,15 @@ Initial thresholds may be revised only through the decision log after examining 
 * one optional LLM evaluation workflow works;
 * one real retrieval provider is either integrated cleanly or explicitly rejected after a documented spike.
 
+Phase 20 built smokes exercise both source formats, fresh CLI/API databases,
+identical logical requests, persisted trace equality after process restart, and
+wrong-scope privacy. MiniSearch remains integrated under DEC-041. Optional live
+LLM evaluation is available only through the manual acceptance executable; its
+answer-quality gate is `NOT_EVALUATED` without real evidence. The Docker staging
+path is implemented and statically checked; runtime validation is `NOT_RUN` on
+the reference machine because Docker is unavailable. Measured acceptance is
+reported in [MVP_ACCEPTANCE.md](MVP_ACCEPTANCE.md), including failed and missing gates.
+
 ### 7.5 Documentation
 
 * setup instructions work from a clean environment;
@@ -1364,28 +1392,23 @@ Initial thresholds may be revised only through the decision log after examining 
 
 ## 8. Development Order
 
-The implementation order is:
+Actual completed phase order (the original planning list placed HTTP before
+persistence; the implemented dependency order is recorded here):
 
-1. documentation and invariants;
-2. domain schemas;
-3. fake providers;
-4. token counting;
-5. validation;
-6. deduplication;
-7. budget allocation;
-8. context compilation;
-9. trace generation;
-10. evaluation fixtures;
-11. Markdown integration;
-12. CLI;
-13. optional LLM evaluation;
-14. retrieval technical spike — complete (DEC-041);
-15. one real retrieval adapter — implemented (DEC-041);
-16. HTTP API;
-17. local persistence;
-18. Docker or VPS staging.
+1. Phases 1–14: workspace foundation, domain, ports/fakes, tokenizer, validation,
+   deduplication, scoring, filtering, allocation, ordering, rendering and trace.
+2. Phase 15: deterministic `ContextCompiler` kernel (DEC-038).
+3. Phase 16: local source preparation and compilation, including Markdown,
+   plain text and conversation (DEC-039).
+4. Phase 17: evaluation harness, fixtures, and optional model adapter (DEC-040).
+5. Phase 18: retrieval spike and MiniSearch lexical provider (DEC-041).
+6. Phase 19: SQLite control/trace persistence and CLI (DEC-042).
+7. Phase 20: HTTP API, shared compile/persist orchestration, boundary hardening,
+   acceptance runner/report, and Docker/VPS staging procedure (DEC-043).
 
-A later item must not be implemented to compensate for an unfinished earlier item.
+Implementation completion does not establish product validation. Engineering
+acceptance is `INCOMPLETE`; product validation is `FAIL` on the measured v1 data.
+No fixture or threshold was changed to improve those results.
 
 ---
 
