@@ -337,6 +337,16 @@ request. The compiler does not infer these declarations from text, dates or
 numeric priority. A declaration that conflicts with a compiler-required group
 fails explicitly; it never silently removes the obligation (DEC-044).
 
+The opt-in evidence contract separates absent, explicitly low, unsupported,
+ignored and incomplete evidence (DEC-045). Callers declare component completeness
+under the request scope and explicitly choose whether incomplete evidence admits
+uncertain optional groups or prevents compilation when a threshold would exclude
+them. Completeness is an assertion about evidence coverage, not verified semantic
+truth. Low caller score does not establish objective uselessness. Incorrect
+complete evidence can yield contract-correct but ineffective selection; stronger
+preservation requires truthful caller obligations/evidence, not an implicit
+semantic guess by the compiler. Admission does not guarantee budget inclusion.
+
 ### 9.3 Prefer Removal Over Rewriting
 
 The MVP should prefer:

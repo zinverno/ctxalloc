@@ -2102,3 +2102,33 @@ during measurement. Neither includes model time. These are additional named
 measurement scopes, not redefinitions of EvaluationHarness latency. Targets
 remain 500 ms and 2500 ms p95, with no CI timing gate. Results and limitations
 are in [MVP_ACCEPTANCE.md](MVP_ACCEPTANCE.md).
+
+
+# 31. Phase 21D Development Evidence (DEC-045)
+
+`pnpm development:evidence` evaluates only `ctxalloc-evidence-development-v1`.
+Contract correctness compares actual admission, uncertainty, final selection and
+expected errors to authored expectations, plus budget, required preservation,
+existing correctness equations (section 30), repeated execution, permutation and
+persisted-trace checks. This category alone controls the development command's
+exit status. Selection effectiveness independently uses explicitly authored
+useful/irrelevant unit labels; labels are never inferred from runtime required
+flags or caller grades. Repeated candidate wrappers count once per content unit.
+The current corpus has one fact per distinct labelled block ID.
+
+The report exposes numerator, denominator and ratio for included useful/all useful,
+non-included irrelevant/all irrelevant, admitted useful/all admitted (precision)
+and admitted useful/all useful (recall). Admission precedes allocation. Irrelevant
+rejection here includes filtering and budget exclusion, which the trace separates.
+Micro aggregates sum numerators/denominators; macro aggregates average defined
+case ratios; zero denominators are null with applicable-case counts. Failed
+compilations have no selection outcome and are counted separately, never scored
+as an empty successful result. Misleading evidence has its own segment.
+
+No Phase 21D effectiveness threshold, token-reduction gate, provider calibration,
+latency or answer-quality claim is added. Contract-correct misleading evidence
+may have zero useful preservation. `ctxalloc-eval-v1`, Phase 21B development,
+the original frozen Phase 21C FAIL and Phase 21D development stay separate.
+`pnpm validation:heldout:historical` verifies Phase 21C artifacts/hashes; its PASS
+means integrity only and does not change the stored held-out FAIL. A new Phase
+21E dataset, metrics and gates require a separate freeze before authoring.

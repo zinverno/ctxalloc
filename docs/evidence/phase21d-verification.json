@@ -1,0 +1,378 @@
+{
+  "schemaVersion": 1,
+  "phase": "21D",
+  "purpose": "development-only contract verification; not held-out or product validation",
+  "baselineRevision": "087078538adad2f353812117c3fe1353a49cc505",
+  "decisionBeforeImplementation": "4e030d4249e47093a3870427c77373281a328e36",
+  "phase21C": {
+    "schemaVersion": 1,
+    "verification": "historical-artifact-integrity-only",
+    "status": "PASS",
+    "mergedBaseline": "087078538adad2f353812117c3fe1353a49cc505",
+    "protocolRevision": "36d468aee5e34d287df43aaf971cd25984b08453",
+    "originalFreezeRevision": "2319e902de318af9598f4b6508649cfc69873319",
+    "immutableWorkingFilesVerified": 21,
+    "originalSemanticsFilesVerifiedAgainstMergedTree": 155,
+    "originalBuiltArtifactHashesPreserved": 123,
+    "changedCompilerExecuted": false,
+    "originalExecutableReproduced": false,
+    "caseCount": 48,
+    "caseInputAnnotationPolicyHashesVerified": 48,
+    "successfulCompilations": 22,
+    "expectedFailures": 4,
+    "unexpectedFailures": 22,
+    "heldOutContextSelectionValidation": "FAIL",
+    "gates": [
+      {
+        "id": "failures",
+        "state": "FAIL"
+      },
+      {
+        "id": "required-blocks",
+        "state": "FAIL"
+      },
+      {
+        "id": "required-facts",
+        "state": "FAIL"
+      },
+      {
+        "id": "critical-facts",
+        "state": "FAIL"
+      },
+      {
+        "id": "useful-preservation",
+        "state": "FAIL"
+      },
+      {
+        "id": "admission-quality",
+        "state": "FAIL"
+      },
+      {
+        "id": "reduction",
+        "state": "NOT_EVALUATED"
+      },
+      {
+        "id": "budget",
+        "state": "PASS"
+      },
+      {
+        "id": "scope",
+        "state": "PASS"
+      },
+      {
+        "id": "accounting",
+        "state": "PASS"
+      },
+      {
+        "id": "determinism",
+        "state": "PASS"
+      },
+      {
+        "id": "applicability",
+        "state": "PASS"
+      },
+      {
+        "id": "runtime-required",
+        "state": "PASS"
+      }
+    ],
+    "manifestHash": "sha256:36a0e5c13243991fe861d40b162a9aaf9eaeb839bb25b26f71c25014174baba3",
+    "firstReportSha256": "sha256:3144a9f8c505f46c45e142dccf1da24feef149a38ed280d630910aa39945a4e1",
+    "evidenceHash": "sha256:176c9642c61e97f44aa2e02776be2e038c6c1d5363f68e1c8723dd52c78037d5"
+  },
+  "legacyPathsUnchanged": [
+    "benchmarks/admission-development",
+    "benchmarks/acceptance",
+    "benchmarks/diagnostics",
+    "benchmarks/evaluation",
+    "benchmarks/heldout",
+    "tests/heldout",
+    "pnpm-lock.yaml",
+    "docs/PHASE21C_HELD_OUT_PROTOCOL.md",
+    "docs/PHASE21C_HELD_OUT_VALIDATION.md",
+    "docs/evidence/phase21c-first-run.json",
+    "docs/evidence/phase21c-verification.json"
+  ],
+  "historicalV1": {
+    "gatesCompared": 23,
+    "allGatesEqual": true,
+    "allCountsAndAggregatesEqual": true,
+    "caseEvidenceEqualExcept": [
+      "compilationLatencyMilliseconds"
+    ],
+    "engineeringAcceptance": "INCOMPLETE",
+    "productValidationAcceptance": "FAIL"
+  },
+  "phase21ADiagnosticByteIdentical": true,
+  "phase21BDevelopmentByteIdentical": true,
+  "phase21ADiagnosticSha256": "bc4bb91e7e9b2a5b7152cf1cde902d4f7973478a5076b064a3cb47d14955bd1b",
+  "phase21BDevelopmentSha256": "123741582dc2c3d813f682c6107cbf2b3dd542533853a31522aa8d91e70227a0",
+  "phase21DDevelopment": {
+    "contractCorrectness": "PASS",
+    "counts": {
+      "cases": 27,
+      "inputCandidateWrappers": 39,
+      "successfulCompilations": 21,
+      "expectedFailures": 6,
+      "unexpectedOutcomes": 0,
+      "checks": 255,
+      "passedChecks": 255,
+      "successfulCandidateWrappers": 33,
+      "groups": 30,
+      "admitted": 22,
+      "admittedUnderUncertainty": 10,
+      "included": 21,
+      "budgetExcluded": 1,
+      "filtered": 8,
+      "required": 4,
+      "requiredIncluded": 4
+    },
+    "selectionEffectiveness": {
+      "successfulCasesOnly": true,
+      "overall": {
+        "usefulPreservation": {
+          "micro": {
+            "numerator": 14,
+            "denominator": 16,
+            "value": 0.875
+          },
+          "macro": 0.875,
+          "applicableCases": 16
+        },
+        "irrelevantRejection": {
+          "micro": {
+            "numerator": 7,
+            "denominator": 14,
+            "value": 0.5
+          },
+          "macro": 0.5,
+          "applicableCases": 14
+        },
+        "admissionPrecision": {
+          "micro": {
+            "numerator": 14,
+            "denominator": 22,
+            "value": 0.6363636363636364
+          },
+          "macro": 0.6764705882352942,
+          "applicableCases": 17
+        },
+        "admissionRecall": {
+          "micro": {
+            "numerator": 14,
+            "denominator": 16,
+            "value": 0.875
+          },
+          "macro": 0.875,
+          "applicableCases": 16
+        }
+      },
+      "byEvidenceQuality": [
+        {
+          "quality": "declared-development-evidence",
+          "usefulPreservation": {
+            "micro": {
+              "numerator": 14,
+              "denominator": 14,
+              "value": 1
+            },
+            "macro": 1,
+            "applicableCases": 14
+          },
+          "irrelevantRejection": {
+            "micro": {
+              "numerator": 7,
+              "denominator": 12,
+              "value": 0.5833333333333334
+            },
+            "macro": 0.5833333333333334,
+            "applicableCases": 12
+          },
+          "admissionPrecision": {
+            "micro": {
+              "numerator": 14,
+              "denominator": 20,
+              "value": 0.7
+            },
+            "macro": 0.7666666666666667,
+            "applicableCases": 15
+          },
+          "admissionRecall": {
+            "micro": {
+              "numerator": 14,
+              "denominator": 14,
+              "value": 1
+            },
+            "macro": 1,
+            "applicableCases": 14
+          }
+        },
+        {
+          "quality": "misleading",
+          "usefulPreservation": {
+            "micro": {
+              "numerator": 0,
+              "denominator": 2,
+              "value": 0
+            },
+            "macro": 0,
+            "applicableCases": 2
+          },
+          "irrelevantRejection": {
+            "micro": {
+              "numerator": 0,
+              "denominator": 2,
+              "value": 0
+            },
+            "macro": 0,
+            "applicableCases": 2
+          },
+          "admissionPrecision": {
+            "micro": {
+              "numerator": 0,
+              "denominator": 2,
+              "value": 0
+            },
+            "macro": 0,
+            "applicableCases": 2
+          },
+          "admissionRecall": {
+            "micro": {
+              "numerator": 0,
+              "denominator": 2,
+              "value": 0
+            },
+            "macro": 0,
+            "applicableCases": 2
+          }
+        }
+      ]
+    },
+    "cleanBuildReportByteIdentical": true,
+    "reportSha256": "6ed98f14c75c036c37eceab22ef1bb580a796502f83650f4b243e1efbbad800a"
+  },
+  "baselineValidation": {
+    "steps": 20,
+    "testFiles": 178,
+    "tests": 3752
+  },
+  "finalValidation": {
+    "steps": [
+      {
+        "step": "01-clean",
+        "status": "PASS"
+      },
+      {
+        "step": "02-install",
+        "status": "PASS"
+      },
+      {
+        "step": "03-format",
+        "status": "PASS"
+      },
+      {
+        "step": "04-lint",
+        "status": "PASS"
+      },
+      {
+        "step": "05-typecheck",
+        "status": "PASS"
+      },
+      {
+        "step": "06-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "07-tests",
+        "status": "PASS"
+      },
+      {
+        "step": "08-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "09-boundaries",
+        "status": "PASS"
+      },
+      {
+        "step": "10-check",
+        "status": "PASS"
+      },
+      {
+        "step": "11-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "12-build",
+        "status": "PASS"
+      },
+      {
+        "step": "13-declarations",
+        "status": "PASS"
+      },
+      {
+        "step": "14-cli-smoke",
+        "status": "PASS"
+      },
+      {
+        "step": "15-api-smoke",
+        "status": "PASS"
+      },
+      {
+        "step": "16-acceptance",
+        "status": "PASS"
+      },
+      {
+        "step": "17-diagnostic",
+        "status": "PASS"
+      },
+      {
+        "step": "18-development",
+        "status": "PASS"
+      },
+      {
+        "step": "19-history",
+        "status": "PASS"
+      },
+      {
+        "step": "20-evidence",
+        "status": "PASS"
+      },
+      {
+        "step": "22-diff-check",
+        "status": "PASS"
+      },
+      {
+        "step": "23-status",
+        "status": "PASS"
+      }
+    ],
+    "testFiles": 181,
+    "tests": 3790,
+    "newTests": 38,
+    "newTestFiles": 3,
+    "workspaceBoundaries": 11,
+    "buildProjects": 11,
+    "publicDeclarations": 76,
+    "builtCliSmoke": "PASS",
+    "builtApiChecks": 12
+  },
+  "audit": {
+    "trackedDistFiles": 0,
+    "trackedScratchFiles": 0,
+    "residualDatabaseFiles": 0,
+    "changedFileCredentialPatterns": 0,
+    "changedPrivateConfigurationPaths": 0,
+    "developmentReportContainsRawQueriesOrBlockContent": false
+  },
+  "limitations": [
+    "DEVELOPMENT ONLY; targeted synthetic cases and authored labels are not independent held-out evidence",
+    "misleading complete grades remain contract-correct but ineffective",
+    "incomplete admission can admit irrelevant content and remains subject to budget exclusion",
+    "failed compilations have no selection result and are counted separately",
+    "Phase 21C stored held-out validation remains FAIL",
+    "live answer quality NOT_EVALUATED; real-provider calibration NOT_EVALUATED",
+    "historical v1 engineering INCOMPLETE and product FAIL; Docker and source-instruction escape evidence unchanged",
+    "Phase 21E protocol proposed; no Phase 21E cases authored"
+  ]
+}

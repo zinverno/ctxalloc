@@ -359,6 +359,16 @@ See DEC-036.
 
 ---
 
+Phase 21D adds an opt-in scoring schema 2/filtering schema 3 contract (DEC-045)
+for explicit evidence compatibility, scoped component completeness and caller
+admit/reject behavior under uncertainty. This addresses whether restrictive
+admission can honor the declared evidence assumptions exposed by the failed
+Phase 21C evaluation. Its bounded maintenance cost is one scoring preflight,
+evidence observations and trace schema 4; allocator and retrieval contracts are
+unchanged. Validation work covers development correctness and effectiveness;
+new held-out validation is deferred to Phase 21E. No new semantic model,
+provider calibration, fallback registry or live quality feature enters scope.
+
 ### 3.5.2 Compilation Contracts
 
 `CompilationRequest` and `CompilationPolicy` are implemented, both
