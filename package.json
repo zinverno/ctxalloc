@@ -25,7 +25,8 @@
     "acceptance:mvp:live": "node benchmarks/dist/acceptance/live.js",
     "performance:mvp": "node benchmarks/dist/acceptance/run.js --performance",
     "diagnose:selection": "node benchmarks/dist/diagnostics/run.js",
-    "development:admission": "node benchmarks/dist/admission-development/run.js"
+    "development:admission": "node benchmarks/dist/admission-development/run.js",
+    "validation:heldout": "node benchmarks/dist/heldout/run.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
