@@ -54,3 +54,6 @@ jobs:
 
       - name: Evaluate development evidence contracts
         run: pnpm development:evidence
+
+      - name: Reproduce second frozen held-out evidence
+        run: pnpm validation:heldout:v2

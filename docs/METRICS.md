@@ -2132,3 +2132,20 @@ the original frozen Phase 21C FAIL and Phase 21D development stay separate.
 `pnpm validation:heldout:historical` verifies Phase 21C artifacts/hashes; its PASS
 means integrity only and does not change the stored held-out FAIL. A new Phase
 21E dataset, metrics and gates require a separate freeze before authoring.
+
+# 32. Phase 21E Second Frozen Held-Out Evidence
+
+The separately preregistered [Phase 21E protocol](PHASE21E_HELD_OUT_PROTOCOL.md)
+defines 60 new requests under the unchanged Phase 21D compiler contracts. Its
+versioned command is `pnpm --silent validation:heldout:v2` after a committed
+freeze. Report contract correctness independently from useful/critical/required
+preservation, admission precision/recall and full-rendered token reduction.
+Misleading-complete evidence stays in ordinary aggregates and its own explicit
+risk report; the protocol fixes its gate treatment before authoring.
+
+Expected structured rejections contribute coverage, not quality zeros. Required
+missing measurements cannot produce PASS. Default command exit 0 means the
+experiment ran; `--require-pass` enforces its verdict. Do not pool these cases
+with v1, Phase 21B/D development or Phase 21C's immutable held-out FAIL. No result
+of this offline context-selection experiment establishes full Product Validation
+PASS or live answer quality.
