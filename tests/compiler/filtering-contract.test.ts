@@ -226,6 +226,10 @@ describe('CandidateFilter decision contract', () => {
           expect(Number.isFinite(total)).toBe(true);
           break;
         }
+        case 'ELIGIBLE_INCOMPLETE_EVIDENCE': {
+          expect(decision.incompleteComponents.length).toBeGreaterThan(0);
+          break;
+        }
         case 'FILTERED_SCORE_BELOW_MINIMUM': {
           const minimum: number = decision.minimumTotalScore;
           expect(decision.scoreTotal).toBeLessThan(minimum);

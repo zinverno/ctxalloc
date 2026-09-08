@@ -1,3 +1,5 @@
+import { pointerFor } from './validation-issues.js';
+import type { ScoringEvidenceComponent } from './candidate-evidence.js';
 import {
   ContextBlockIdSchema,
   ScopeSchema,
@@ -58,6 +60,7 @@ import type {
 export const CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION = 1;
 /** Opt-in scoped applicability declarations; legacy schema 1 remains unchanged. */
 export const APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION = 2;
+export const EVIDENCE_FILTERING_POLICY_SCHEMA_VERSION = 3;
 
 /**
  * The complete filtering language of schema version 1: one optional minimum
@@ -103,8 +106,15 @@ export interface ApplicabilityCandidateFilteringPolicy extends FilteringPolicyBa
   readonly applicability: CandidateApplicability;
 }
 
+export interface EvidenceCandidateFilteringPolicy extends FilteringPolicyBase {
+  readonly schemaVersion: typeof EVIDENCE_FILTERING_POLICY_SCHEMA_VERSION;
+  readonly applicability?: CandidateApplicability | undefined;
+  readonly onIncompleteEvidence: 'admit' | 'reject';
+}
 export type CandidateFilteringPolicy =
-  LegacyCandidateFilteringPolicy | ApplicabilityCandidateFilteringPolicy;
+  | LegacyCandidateFilteringPolicy
+  | ApplicabilityCandidateFilteringPolicy
+  | EvidenceCandidateFilteringPolicy;
 
 /**
  * Machine-readable reason for one filtering decision (INV-TRACE-002).
@@ -119,6 +129,7 @@ export type CandidateFilteringPolicy =
 export type CandidateFilteringDecisionReason =
   | 'ELIGIBLE_REQUIRED'
   | 'ELIGIBLE_POLICY'
+  | 'ELIGIBLE_INCOMPLETE_EVIDENCE'
   | 'FILTERED_SCORE_BELOW_MINIMUM'
   | ApplicabilityExclusionEvidence['reason'];
 
@@ -153,6 +164,16 @@ export interface PolicyEligibleCandidateDecision {
   readonly minimumTotalScore?: number;
 }
 
+/** Explicitly admitted uncertainty remains optional for budget allocation. */
+export interface IncompleteEvidenceEligibleCandidateDecision {
+  readonly candidate: ScoredCandidate;
+  readonly decision: 'eligible';
+  readonly reason: 'ELIGIBLE_INCOMPLETE_EVIDENCE';
+  readonly scoreTotal: number;
+  readonly minimumTotalScore: number;
+  readonly incompleteComponents: readonly ScoringEvidenceComponent[];
+}
+
 /** An optional candidate the threshold excluded, with both exact operands. */
 export interface FilteredCandidateDecision {
   readonly candidate: ScoredCandidate;
@@ -178,6 +199,7 @@ export interface ApplicabilityFilteredCandidateDecision extends ApplicabilityExc
 export type CandidateFilteringDecision =
   | RequiredEligibleCandidateDecision
   | PolicyEligibleCandidateDecision
+  | IncompleteEvidenceEligibleCandidateDecision
   | FilteredCandidateDecision
   | ApplicabilityFilteredCandidateDecision;
 
@@ -211,7 +233,12 @@ export interface FilteredCandidateSet {
  * `CandidateFilteringPolicy`. Version-1 filtering of a valid batch
  * cannot fail — it reads two already-validated values and compares numbers.
  */
-export type CandidateFilteringIssueCode = 'invalid_policy' | CandidateApplicabilityIssueCode;
+export type CandidateFilteringIssueCode =
+  | 'invalid_policy'
+  | CandidateApplicabilityIssueCode
+  | 'incompatible_evidence_policy'
+  | 'evidence_scope_mismatch'
+  | 'incomplete_admission_evidence';
 
 /**
  * The single error this component raises.
@@ -307,6 +334,11 @@ const CandidateFilteringPolicySchema = z.discriminatedUnion('schemaVersion', [
   LegacyFilteringPolicySchema.extend({
     schemaVersion: z.literal(APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION),
     applicability: CandidateApplicabilitySchema,
+  }),
+  LegacyFilteringPolicySchema.extend({
+    schemaVersion: z.literal(EVIDENCE_FILTERING_POLICY_SCHEMA_VERSION),
+    applicability: CandidateApplicabilitySchema.optional(),
+    onIncompleteEvidence: z.enum(['admit', 'reject']),
   }),
 ]);
 
@@ -456,12 +488,35 @@ export class CandidateFilter {
    * follows the input order too: nothing is sorted here, and the scorer's
    * comparator is not duplicated (INV-DET-002, INV-DET-005).
    *
-   * Version 1 cannot fail here. Version 2 rejects inconsistent applicability
-   * assertions before producing any result (DEC-044).
+   * Legacy scored batches with version 1 cannot fail here. Version 2 rejects
+   * inconsistent applicability (DEC-044). Version 3 also checks composition
+   * and the caller-selected incomplete-evidence rejection behavior (DEC-045).
    */
   filter(input: ScoredCandidateSet): FilteredCandidateSet {
+    const usesEvidence = this.#policy.schemaVersion === EVIDENCE_FILTERING_POLICY_SCHEMA_VERSION;
+    if (
+      usesEvidence !== (input.evidence !== undefined) ||
+      (usesEvidence && input.candidates.some((candidate) => candidate.score.evidence === undefined))
+    )
+      throw new CandidateFilteringError([
+        {
+          code: 'incompatible_evidence_policy',
+          path: ['evidence'],
+          pointer: 'evidence',
+          message: 'scoring schema 2 and filtering schema 3 must be paired',
+        },
+      ]);
+    if (input.evidence !== undefined && !scopesEqual(input.evidence.scope, input.scope))
+      throw new CandidateFilteringError([
+        {
+          code: 'evidence_scope_mismatch',
+          path: ['evidence', 'scope'],
+          pointer: 'evidence.scope',
+          message: 'evidence scope must equal the scored request scope',
+        },
+      ]);
     const applicability =
-      this.#policy.schemaVersion === APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION
+      'applicability' in this.#policy && this.#policy.applicability !== undefined
         ? resolveApplicability(this.#policy.applicability, input)
         : { ok: true as const, value: new Map<string, ApplicabilityExclusionEvidence>() };
     if (!applicability.ok) throw new CandidateFilteringError(applicability.issues);
@@ -489,6 +544,7 @@ export class CandidateFilter {
         policyId: input.policyId,
         policyVersion: input.policyVersion,
         referenceTime: input.referenceTime,
+        ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
         candidates: eligible,
       },
       decisions,
@@ -528,6 +584,37 @@ export class CandidateFilter {
         scoreTotal,
         minimumTotalScore,
       };
+    }
+    if (this.#policy.schemaVersion === EVIDENCE_FILTERING_POLICY_SCHEMA_VERSION) {
+      const incompleteComponents = candidate.score
+        .evidence!.components.filter(
+          (entry) =>
+            entry.completeness === 'incomplete' &&
+            (candidate.score[entry.component]?.weight ?? 0) > 0,
+        )
+        .map((entry) => entry.component);
+      if (incompleteComponents.length > 0) {
+        if (this.#policy.onIncompleteEvidence === 'reject') {
+          const path = ['candidates', candidate.candidate.canonicalBlock.id, 'evidence'];
+          throw new CandidateFilteringError([
+            {
+              code: 'incomplete_admission_evidence',
+              path,
+              pointer: pointerFor(path),
+              message:
+                'the declared policy rejects score-based exclusion under incomplete evidence',
+            },
+          ]);
+        }
+        return {
+          candidate,
+          decision: 'eligible',
+          reason: 'ELIGIBLE_INCOMPLETE_EVIDENCE',
+          scoreTotal,
+          minimumTotalScore,
+          incompleteComponents,
+        };
+      }
     }
     return {
       candidate,

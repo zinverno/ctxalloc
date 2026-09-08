@@ -1,3 +1,4 @@
+import { SCORING_EVIDENCE_COMPONENTS } from './candidate-evidence.js';
 import {
   ContentHashSchema,
   ContextBlockIdSchema,
@@ -14,6 +15,7 @@ import { z } from 'zod';
 import {
   COMPILATION_TRACE_SCHEMA_VERSION,
   APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION,
+  EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION,
   type SettledCompilationTrace,
 } from './compilation-trace.js';
 
@@ -498,6 +500,30 @@ const aggregation = z.literal('max');
 
 const ScoreSchema = z.strictObject({
   total: finiteNumber,
+  evidence: z
+    .strictObject({
+      schemaVersion: z.literal(1),
+      scope: ScopeSchema,
+      components: z.array(
+        z.strictObject({
+          component: z.enum(SCORING_EVIDENCE_COMPONENTS),
+          configured: z.boolean(),
+          present: z.boolean(),
+          completeness: z.enum(['complete', 'incomplete']).nullable(),
+        }),
+      ),
+      ignoredRetrieval: z.array(
+        z.strictObject({
+          blockId: ContextBlockIdSchema,
+          providerId: nonBlank,
+          providerVersion: nonBlank,
+          semantics: z.string(),
+          higherIsBetter: z.boolean(),
+          rawValue: finiteNumber,
+        }),
+      ),
+    })
+    .optional(),
   retrieval: z
     .strictObject({
       normalizedValue: finiteNumber,
@@ -600,6 +626,13 @@ const ScoreSchema = z.strictObject({
  * score total, which is a pairing the stage that produced it cannot construct.
  */
 const FilteringDecisionSchema = z.discriminatedUnion('reason', [
+  z.strictObject({
+    decision: z.literal('eligible'),
+    reason: z.literal('ELIGIBLE_INCOMPLETE_EVIDENCE'),
+    scoreTotal: finiteNumber,
+    minimumTotalScore: finiteNumber,
+    incompleteComponents: z.array(z.enum(SCORING_EVIDENCE_COMPONENTS)).min(1),
+  }),
   z.strictObject({ decision: z.literal('eligible'), reason: z.literal('ELIGIBLE_REQUIRED') }),
   z.strictObject({
     decision: z.literal('eligible'),
@@ -714,6 +747,7 @@ const SettledTraceShapeSchema = z.strictObject({
   schemaVersion: z.union([
     z.literal(COMPILATION_TRACE_SCHEMA_VERSION),
     z.literal(APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION),
+    z.literal(EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION),
   ]),
   settled: z.literal(true),
   compilationId: digest,
@@ -776,6 +810,27 @@ const SettledTraceShapeSchema = z.strictObject({
 });
 
 const SettledTraceSchema = SettledTraceShapeSchema.superRefine((trace, ctx) => {
+  trace.groups.forEach((group, index) => {
+    if (
+      trace.schemaVersion !== EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION &&
+      (group.score.evidence !== undefined ||
+        group.filtering.reason === 'ELIGIBLE_INCOMPLETE_EVIDENCE')
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['groups', index],
+        message: 'evidence semantics require trace schema 4',
+      });
+    if (
+      trace.schemaVersion === EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION &&
+      group.score.evidence === undefined
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['groups', index, 'score'],
+        message: 'trace schema 4 requires evidence observations',
+      });
+  });
   if (trace.schemaVersion !== COMPILATION_TRACE_SCHEMA_VERSION) return;
   trace.groups.forEach((group, index) => {
     if (
@@ -938,12 +993,13 @@ function validatedSnapshotOf(input: unknown): SettledCompilationTrace {
   if (
     typeof version === 'number' &&
     version !== COMPILATION_TRACE_SCHEMA_VERSION &&
-    version !== APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION
+    version !== APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION &&
+    version !== EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION
   ) {
     throw new PersistedCompilationTraceError([
       issue(
         ['schemaVersion'],
-        `trace schema version ${String(version)} is not supported: this build reads versions 2 and 3`,
+        `trace schema version ${String(version)} is not supported: this build reads versions 2, 3 and 4`,
         'unsupported_schema_version',
       ),
     ]);

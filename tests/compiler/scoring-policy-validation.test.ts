@@ -71,7 +71,7 @@ describe('CandidateScorer: scoring policy validation', () => {
   });
 
   it('rejects a wrong schema version', () => {
-    for (const version of [0, 2, '1', undefined]) {
+    for (const version of [0, 3, '1', undefined]) {
       expect(issueCodesOf(() => new CandidateScorer(policy({ schemaVersion: version })))).toEqual([
         'invalid_policy',
       ]);

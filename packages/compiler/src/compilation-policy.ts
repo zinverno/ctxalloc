@@ -82,7 +82,8 @@ export type CompilationPolicyIssueCode =
   | 'invalid_filtering_policy'
   | 'invalid_allocation_policy'
   | 'invalid_ordering_policy'
-  | 'invalid_rendering_policy';
+  | 'invalid_rendering_policy'
+  | 'incompatible_evidence_policy';
 
 /**
  * The single error this validator raises.
@@ -285,6 +286,17 @@ export class CompilationPolicyValidator {
       rendering === undefined
     ) {
       throw new CompilationPolicyError(issues);
+    }
+
+    if ((scoring.schemaVersion === 2) !== (filtering.schemaVersion === 3)) {
+      throw new CompilationPolicyError([
+        {
+          code: 'incompatible_evidence_policy',
+          path: ['filtering'],
+          pointer: 'filtering',
+          message: 'scoring schema 2 and filtering schema 3 must be paired',
+        },
+      ]);
     }
 
     return {

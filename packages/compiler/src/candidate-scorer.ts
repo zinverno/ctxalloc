@@ -1,8 +1,10 @@
 import {
+  ScopeSchema,
   SourceDocumentIdSchema,
   TimestampSchema,
   findLoneSurrogate,
   safeParse,
+  scopesEqual,
   type ContextBlock,
   type ContextBlockId,
   type Scope,
@@ -13,6 +15,14 @@ import {
   type ValidationResult,
 } from '@ctxalloc/domain';
 import { z } from 'zod';
+import type { ValidatedCandidateSet } from './candidate-validator.js';
+import {
+  CandidateEvidenceError,
+  SCORING_EVIDENCE_COMPONENTS,
+  type CandidateEvidenceObservation,
+  type EvidenceCompletenessDeclaration,
+  type RetrievalEvidenceContract,
+} from './candidate-evidence.js';
 import type { DeduplicatedCandidate, DeduplicatedCandidateSet } from './candidate-deduplicator.js';
 import { canonicalJson, compareCodeUnits } from './canonical-json.js';
 import { pointerFor, quote, type IssuePath } from './validation-issues.js';
@@ -52,6 +62,7 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
 
 /** Current schema version of `CandidateScoringPolicy`. */
 export const CANDIDATE_SCORING_POLICY_SCHEMA_VERSION = 1;
+export const EVIDENCE_SCORING_POLICY_SCHEMA_VERSION = 2;
 
 /**
  * How one provider's raw score is mapped onto the comparable `[0, 1]` scale.
@@ -174,8 +185,7 @@ export interface RecencyScoringPolicy {
  * caller that spells an unused component as `undefined` describes the same
  * policy as one that omits the key.
  */
-export interface CandidateScoringPolicy {
-  readonly schemaVersion: typeof CANDIDATE_SCORING_POLICY_SCHEMA_VERSION;
+interface ScoringPolicyBase {
   readonly policyId: string;
   readonly policyVersion: string;
   readonly retrieval?: RetrievalScoringPolicy | undefined;
@@ -184,6 +194,18 @@ export interface CandidateScoringPolicy {
   readonly categoryPriority?: CategoryPriorityScoringPolicy | undefined;
   readonly recency?: RecencyScoringPolicy | undefined;
 }
+
+export interface LegacyCandidateScoringPolicy extends ScoringPolicyBase {
+  readonly schemaVersion: typeof CANDIDATE_SCORING_POLICY_SCHEMA_VERSION;
+}
+export interface EvidenceCandidateScoringPolicy extends ScoringPolicyBase {
+  readonly schemaVersion: typeof EVIDENCE_SCORING_POLICY_SCHEMA_VERSION;
+  readonly compatibility: {
+    readonly ignoredRetrievalContracts: readonly RetrievalEvidenceContract[];
+  };
+  readonly evidence: EvidenceCompletenessDeclaration;
+}
+export type CandidateScoringPolicy = LegacyCandidateScoringPolicy | EvidenceCandidateScoringPolicy;
 
 /* -------------------------------------------------------------------------- */
 /* Public contract: score components                                           */
@@ -338,6 +360,7 @@ export interface RecencyScoreComponent {
  */
 export interface CandidateScore {
   readonly total: number;
+  readonly evidence?: CandidateEvidenceObservation;
   readonly retrieval?: RetrievalScoreComponent;
   readonly authoredPriority?: AuthoredPriorityScoreComponent;
   readonly sourcePriority?: SourcePriorityScoreComponent;
@@ -364,6 +387,7 @@ export interface ScoredCandidate {
  */
 export interface ScoredCandidateSet {
   readonly scope: Scope;
+  readonly evidence?: EvidenceCompletenessDeclaration;
   readonly sourceDocuments: readonly SourceDocument[];
   readonly policyId: string;
   readonly policyVersion: string;
@@ -384,6 +408,8 @@ export type CandidateScoringIssueCode =
   | 'duplicate_source_priority'
   | 'duplicate_category_priority'
   | 'invalid_reference_time'
+  | 'invalid_evidence_contract'
+  | 'evidence_scope_mismatch'
   | 'retrieval_score_rule_not_found'
   | 'retrieval_score_out_of_range'
   | 'authored_priority_out_of_range'
@@ -544,7 +570,36 @@ const RecencyScoringPolicySchema = z.strictObject({
  * coerced, and no default is injected: an unsupported or future policy shape must
  * be a visible failure, not a silently reinterpreted one.
  */
-const CandidateScoringPolicySchema = z.strictObject({
+const identity = z
+  .string()
+  .refine((value) => value.trim().length > 0 && findLoneSurrogate(value) === null, {
+    message: 'must be a non-blank well-formed identity',
+  });
+/** Internal policy schemas; the scoring owner validates their cross-field semantics. */
+const RetrievalEvidenceContractSchema = z.strictObject({
+  providerId: identity,
+  providerVersion: identity,
+  semantics: identity,
+  higherIsBetter: z.boolean(),
+});
+const EvidenceCompletenessDeclarationSchema = z.strictObject({
+  scope: ScopeSchema,
+  completeness: z.array(
+    z.strictObject({
+      component: z.enum(SCORING_EVIDENCE_COMPONENTS),
+      state: z.enum(['complete', 'incomplete']),
+    }),
+  ),
+});
+const retrievalEvidenceContractKey = (contract: RetrievalEvidenceContract): string =>
+  canonicalJson([
+    contract.providerId,
+    contract.providerVersion,
+    contract.semantics,
+    contract.higherIsBetter,
+  ]);
+
+const LegacyCandidateScoringPolicySchema = z.strictObject({
   schemaVersion: z.literal(CANDIDATE_SCORING_POLICY_SCHEMA_VERSION),
   policyId: policyString,
   policyVersion: policyString,
@@ -554,6 +609,55 @@ const CandidateScoringPolicySchema = z.strictObject({
   categoryPriority: CategoryPriorityScoringPolicySchema.optional(),
   recency: RecencyScoringPolicySchema.optional(),
 });
+
+const CandidateScoringPolicySchema = z.discriminatedUnion('schemaVersion', [
+  LegacyCandidateScoringPolicySchema,
+  LegacyCandidateScoringPolicySchema.extend({
+    schemaVersion: z.literal(EVIDENCE_SCORING_POLICY_SCHEMA_VERSION),
+    compatibility: z.strictObject({
+      ignoredRetrievalContracts: z.array(RetrievalEvidenceContractSchema),
+    }),
+    evidence: EvidenceCompletenessDeclarationSchema,
+  }),
+]);
+
+function evidencePolicyIssues(policy: CandidateScoringPolicy): ValidationIssue[] {
+  if (policy.schemaVersion !== EVIDENCE_SCORING_POLICY_SCHEMA_VERSION) return [];
+  const issues: ValidationIssue[] = [];
+  const configured = SCORING_EVIDENCE_COMPONENTS.filter(
+    (component) => policy[component] !== undefined,
+  );
+  const declared = policy.evidence.completeness.map((entry) => entry.component);
+  if (
+    declared.length !== configured.length ||
+    new Set(declared).size !== declared.length ||
+    configured.some((component) => !declared.includes(component))
+  ) {
+    issues.push(
+      issue(
+        'invalid_evidence_contract',
+        ['evidence', 'completeness'],
+        'must declare completeness exactly once for every configured scoring component',
+      ),
+    );
+  }
+  const supported = new Set((policy.retrieval?.rules ?? []).map(retrievalEvidenceContractKey));
+  const seen = new Set<string>();
+  for (const contract of policy.compatibility.ignoredRetrievalContracts) {
+    const key = retrievalEvidenceContractKey(contract);
+    if (seen.has(key) || supported.has(key)) {
+      issues.push(
+        issue(
+          'invalid_evidence_contract',
+          ['compatibility', 'ignoredRetrievalContracts'],
+          'ignored retrieval contracts must be unique and must not also have scoring rules',
+        ),
+      );
+    }
+    seen.add(key);
+  }
+  return issues;
+}
 
 /**
  * Validates one scoring policy and returns it, or the structured issues that
@@ -583,7 +687,10 @@ export function parseCandidateScoringPolicy(
     };
   }
 
-  const duplicates = detectPolicyDuplicates(parsed.value);
+  const duplicates = [
+    ...detectPolicyDuplicates(parsed.value),
+    ...evidencePolicyIssues(parsed.value),
+  ];
   if (duplicates.length > 0) return { ok: false, issues: duplicates };
   return { ok: true, value: parsed.value };
 }
@@ -942,6 +1049,7 @@ interface ComponentResult<TComponent> {
 export class CandidateScorer {
   readonly #policy: CandidateScoringPolicy;
   readonly #retrievalRules: ReadonlyMap<string, RetrievalNormalizationRule>;
+  readonly #ignoredRetrieval: ReadonlySet<string>;
   readonly #sourcePriorityValues: ReadonlyMap<string, number>;
   readonly #categoryPriorityValues: ReadonlyMap<string, number>;
 
@@ -960,6 +1068,11 @@ export class CandidateScorer {
 
     const validated: CandidateScoringPolicy = parsed.value;
     this.#policy = validated;
+    this.#ignoredRetrieval = new Set(
+      validated.schemaVersion === EVIDENCE_SCORING_POLICY_SCHEMA_VERSION
+        ? validated.compatibility.ignoredRetrievalContracts.map(retrievalEvidenceContractKey)
+        : [],
+    );
     this.#retrievalRules = new Map(
       (validated.retrieval?.rules ?? []).map((rule) => [
         retrievalContractKey(
@@ -980,6 +1093,74 @@ export class CandidateScorer {
     this.#categoryPriorityValues = new Map(
       (validated.categoryPriority?.byCategory ?? []).map((rule) => [rule.category, rule.value]),
     );
+  }
+
+  /** DEC-045: compatibility preflight calculates no score and produces no selection. */
+  validateEvidence(input: Pick<ValidatedCandidateSet, 'scope' | 'candidates'>): void {
+    const issues: ValidationIssue[] = [];
+    if (
+      this.#policy.schemaVersion === EVIDENCE_SCORING_POLICY_SCHEMA_VERSION &&
+      !scopesEqual(this.#policy.evidence.scope, input.scope)
+    ) {
+      issues.push(
+        issue(
+          'evidence_scope_mismatch',
+          ['evidence', 'scope'],
+          'evidence scope must equal the validated request scope',
+        ),
+      );
+    }
+    const candidates = [...input.candidates].sort(
+      (a, b) =>
+        compareCodeUnits(a.block.id, b.block.id) ||
+        compareCodeUnits(canonicalJson(a), canonicalJson(b)),
+    );
+    for (const candidate of candidates) {
+      const retrieval = candidate.retrieval;
+      if (retrieval?.score !== undefined) {
+        const contract = {
+          providerId: retrieval.providerId,
+          providerVersion: retrieval.providerVersion,
+          semantics: retrieval.score.semantics,
+          higherIsBetter: retrieval.score.higherIsBetter,
+        };
+        const key = retrievalEvidenceContractKey(contract);
+        const rule = this.#retrievalRules.get(key);
+        if (!this.#ignoredRetrieval.has(key)) {
+          if (rule === undefined)
+            issues.push(
+              issue(
+                'retrieval_score_rule_not_found',
+                candidatePath(candidate.block.id, 'retrieval', 'score'),
+                'numeric retrieval evidence has neither a matching scoring rule nor an explicit ignore contract',
+              ),
+            );
+          else if (retrieval.score.value < rule.min || retrieval.score.value > rule.max)
+            issues.push(
+              issue(
+                'retrieval_score_out_of_range',
+                candidatePath(candidate.block.id, 'retrieval', 'score'),
+                'numeric retrieval evidence is outside its declared normalization window',
+              ),
+            );
+        }
+      }
+      const priority = candidate.block.attributes.priority;
+      const authored = this.#policy.authoredPriority;
+      if (
+        priority !== undefined &&
+        authored !== undefined &&
+        (priority < authored.min || priority > authored.max)
+      )
+        issues.push(
+          issue(
+            'authored_priority_out_of_range',
+            candidatePath(candidate.block.id, 'attributes', 'priority'),
+            'authored priority is outside its declared normalization window',
+          ),
+        );
+    }
+    if (issues.length > 0) throw new CandidateEvidenceError(issues);
   }
 
   /**
@@ -1018,6 +1199,13 @@ export class CandidateScorer {
         })),
       );
     }
+    if (this.#policy.schemaVersion === EVIDENCE_SCORING_POLICY_SCHEMA_VERSION)
+      this.validateEvidence({
+        scope: input.scope,
+        candidates: input.candidates.flatMap((group) =>
+          group.members.map((member) => member.candidate),
+        ),
+      });
     const validatedTime: Timestamp = parsedTime.value.referenceTime;
     const referenceEpochSeconds = epochSecondsOf(validatedTime);
 
@@ -1059,6 +1247,9 @@ export class CandidateScorer {
       policyId: this.#policy.policyId,
       policyVersion: this.#policy.policyVersion,
       referenceTime: validatedTime,
+      ...(this.#policy.schemaVersion === EVIDENCE_SCORING_POLICY_SCHEMA_VERSION
+        ? { evidence: this.#policy.evidence }
+        : {}),
       candidates,
     };
   }
@@ -1123,6 +1314,9 @@ export class CandidateScorer {
       // because the components are still assembled before the collected issues
       // are raised.
       total: Number.isFinite(total) ? canonicalNumber(total) : 0,
+      ...(this.#policy.schemaVersion === EVIDENCE_SCORING_POLICY_SCHEMA_VERSION
+        ? { evidence: this.#observeEvidence(group) }
+        : {}),
       ...(retrieval === undefined ? {} : { retrieval: retrieval.component }),
       ...(authoredPriority === undefined ? {} : { authoredPriority: authoredPriority.component }),
       ...(sourcePriority === undefined ? {} : { sourcePriority: sourcePriority.component }),
@@ -1131,12 +1325,51 @@ export class CandidateScorer {
     };
   }
 
+  #observeEvidence(group: DeduplicatedCandidate): CandidateEvidenceObservation {
+    const policy = this.#policy;
+    if (policy.schemaVersion !== EVIDENCE_SCORING_POLICY_SCHEMA_VERSION)
+      throw new Error('Evidence observation requires scoring schema 2.');
+    const blocks = distinctBlocksOf(group);
+    const retrievals = scoredRetrievalsOf(group);
+    const presence = {
+      retrieval: retrievals.length > 0,
+      authoredPriority: blocks.some((block) => block.attributes.priority !== undefined),
+      sourcePriority: blocks.length > 0,
+      categoryPriority: blocks.some((block) => block.attributes.category !== undefined),
+      recency: blocks.some(
+        (block) => block.createdAt !== undefined || block.updatedAt !== undefined,
+      ),
+    };
+    return {
+      schemaVersion: 1,
+      scope: policy.evidence.scope,
+      components: SCORING_EVIDENCE_COMPONENTS.map((component) => ({
+        component,
+        configured: policy[component] !== undefined,
+        present: presence[component],
+        completeness:
+          policy.evidence.completeness.find((entry) => entry.component === component)?.state ??
+          null,
+      })),
+      ignoredRetrieval: retrievals
+        .filter((entry) => this.#ignoredRetrieval.has(retrievalEvidenceContractKey(entry)))
+        .map((entry) => ({
+          blockId: entry.blockId,
+          providerId: entry.providerId,
+          providerVersion: entry.providerVersion,
+          semantics: entry.semantics,
+          higherIsBetter: entry.higherIsBetter,
+          rawValue: canonicalNumber(entry.rawValue),
+        })),
+    };
+  }
+
   /**
    * Normalizes every configured retrieval score in the group and aggregates them.
    *
    * A raw value participates only when the policy owns an exact rule for its
    * provider, provider version, semantics, and direction. A scored record with no
-   * such rule is a failure, not a zero and not a silent drop: treating it as zero
+   * such rule is a failure unless schema 2 explicitly ignores that exact contract: treating it as zero
    * would state that the provider found the block irrelevant, and dropping it
    * would hide a policy that no longer covers the retrieval actually in use
    * (INV-SCORE-002, INV-SCORE-004). That holds whether the policy configures no
@@ -1164,6 +1397,7 @@ export class CandidateScorer {
     const evidence: RetrievalScoreEvidence[] = [];
 
     for (const entry of scoredRetrievalsOf(group)) {
+      if (this.#ignoredRetrieval.has(retrievalEvidenceContractKey(entry))) continue;
       const at = (...rest: IssuePath): IssuePath =>
         candidatePath(canonicalId, 'members', entry.blockId, 'retrieval', 'score', ...rest);
       const rule = this.#retrievalRules.get(

@@ -9,6 +9,13 @@ import { API_CONTRACT_VERSION } from './index.js';
 
 const MESSAGES = {
   invalid_request: 'The request is invalid.',
+  retrieval_score_rule_not_found: 'Numeric retrieval evidence is unsupported by this policy.',
+  retrieval_score_out_of_range: 'Numeric retrieval evidence is outside its declared window.',
+  authored_priority_out_of_range: 'Authored evidence is outside its declared range.',
+  evidence_scope_mismatch: 'Evidence scope must equal the request scope.',
+  incompatible_evidence_policy: 'Scoring and admission evidence contracts are incompatible.',
+  incomplete_admission_evidence:
+    'The policy rejects admission decisions under incomplete evidence.',
   applicability_scope_mismatch: 'Applicability scope must equal the request scope.',
   missing_applicability_target: 'An applicability target is absent from the candidate batch.',
   conflicting_applicability_declarations:
@@ -60,9 +67,24 @@ export function toApiError(cause: unknown): ApiError {
       return new ApiError(400, 'invalid_request');
     if (cause instanceof ContextCompilationError && cause.stage === 'request-validation')
       return new ApiError(400, 'invalid_request');
+    if (cause instanceof ContextCompilationError && cause.stage === 'evidence-validation') {
+      const codes = [
+        'retrieval_score_rule_not_found',
+        'retrieval_score_out_of_range',
+        'authored_priority_out_of_range',
+        'evidence_scope_mismatch',
+      ] as const;
+      const matched = codes.find((code) => code === cause.issues[0]?.code);
+      return matched === undefined
+        ? new ApiError(400, 'invalid_request', 'compilation')
+        : new ApiError(400, matched, 'compilation');
+    }
     if (cause instanceof ContextCompilationError && cause.stage === 'filtering') {
       // Map only the defined caller failures; never echo component issue text.
       const code = [
+        'incomplete_admission_evidence',
+        'incompatible_evidence_policy',
+        'evidence_scope_mismatch',
         'applicability_scope_mismatch',
         'missing_applicability_target',
         'conflicting_applicability_declarations',

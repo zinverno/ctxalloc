@@ -106,7 +106,7 @@ describe('INV-STORE-004: persisted settled traces are validated on the way in', 
   });
 
   it('rejects an unsupported future schema version with its own code', () => {
-    const stored = { ...(persisted(correctedTrace()) as object), schemaVersion: 4 };
+    const stored = { ...(persisted(correctedTrace()) as object), schemaVersion: 5 };
     const error = reject(stored);
 
     expect(error.issues[0]?.code).toBe('unsupported_schema_version');
