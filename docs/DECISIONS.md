@@ -5920,3 +5920,195 @@ new profile registry or kernel model is unnecessary. Independent development
 examples justify contract behavior only. Frozen evaluation v1 remains historical
 regression evidence; Phase 21C must freeze a separate held-out set after these
 contracts and profiles are fixed.
+
+---
+
+## DEC-045: Explicit Signal Compatibility and Scoped Evidence Completeness
+
+**Status:** Accepted for Phase 21D implementation. Recorded before behavior changes.
+
+**Baseline and context.** PR #24 merged as
+`087078538adad2f353812117c3fe1353a49cc505`. Phase 21C is a permanently frozen
+held-out FAIL. Twenty-two intended-success inputs supplied numeric retrieval
+measurements to authored-only policies without normalization rules. Four other
+requests lost evaluator-required, runtime-optional facts because support was
+missing or misleading. Neither observation authorizes changing that experiment,
+legacy policy identities, thresholds, or the compiler's claim to semantic truth.
+
+**Diagnosis of the existing pipeline.** Candidate schemas reject unknown fields
+before the scorer runs. Candidate validation proves scope, source provenance,
+content hash and token counts; exact deduplication preserves all evidence. The
+scorer then visits every numeric retrieval measurement, including measurements
+under a policy with no retrieval component or a zero-weight component. An exact
+provider-id/version/semantics/direction normalization rule must cover it; otherwise
+`retrieval_score_rule_not_found` rejects the complete scoring stage. A known rule
+with an uncovered raw value gives `retrieval_score_out_of_range`. This is an
+unsupported input/policy configuration, not an assertion of irrelevance, an
+instruction to ignore, or invalidity of the real provider itself (DEC-032).
+Authored priority is consumed only when its component is configured; the other
+known contextual attributes likewise affect scores only through their configured
+components. Absent authored/retrieval evidence yields an empty evidence array and
+zero normalized support. Source/category defaults and the recency missing value
+are explicit existing policy choices. All of those arithmetic meanings remain.
+
+The filter currently consumes score, required status and, in schema 2, scoped
+applicability. It has no completeness evidence. Missing and explicitly low support
+can therefore produce the same score and admission outcome even though they are
+different evidence states. Required bypass guarantees only independently declared
+runtime obligations. It cannot preserve evaluator-only obligations it never sees.
+
+**Compatibility decision.** Add opt-in scoring schema **2**, retaining schema 1
+unchanged. Version 2 requires this closed configuration:
+
+```ts
+compatibility: {
+  ignoredRetrievalContracts: readonly {
+    providerId: string;
+    providerVersion: string;
+    semantics: string;
+    higherIsBetter: boolean;
+  }[];
+};
+```
+
+The explicit empty list means reject every uncovered numeric retrieval contract.
+An entry permits ignoring only that exact known schema-1 retrieval tuple. There
+is no wildcard, future-signal acceptance, provider-name heuristic, rank inference,
+or global ignore switch. Configuring both a normalization rule and an ignore
+entry for the same tuple is invalid; repeated entries are invalid. Supported
+measurements continue to require their declared normalization windows, including
+weight-zero components. Ignored values contribute no score and cannot change
+ranking or admission; their presence and exact numeric metadata remain observable
+in version-4 traces. Unknown candidate, policy or evidence fields remain errors.
+An absent scoring component still means that known attribute is not a configured
+ranking signal; version-2 diagnostics make configured/present/unused states visible.
+This does not teach an authored profile how to interpret retrieval measurements.
+
+Expose a deterministic `CandidateScorer.validateEvidence` preflight over the
+validated candidate batch. It checks exact compatibility, covered ranges and the
+scoped completeness declaration without calculating scores, ranking, filtering,
+allocating or rendering. Version-2 compilation invokes it after candidate
+validation and before deduplication/scoring, under a new `evidence-validation`
+failure stage. Stable issue codes survive the compiler error wrapper. Legacy
+compilation keeps its original stage/error behavior; callers may explicitly use
+preflight to inspect legacy compatibility. Direct version-2 scoring also checks
+its evidence contract so manual stage composition cannot silently bypass it.
+
+**Completeness decision.** Version-2 scoring also requires:
+
+```ts
+evidence: {
+  scope: Scope;
+  completeness: readonly {
+    component: 'retrieval' | 'authoredPriority' | 'sourcePriority'
+      | 'categoryPriority' | 'recency';
+    state: 'complete' | 'incomplete';
+  }[];
+};
+```
+
+Exactly one declaration is required for each configured component, and no entry
+may name an unconfigured component. These two states are the minimum distinction
+needed for exclusion: `incomplete` includes partial or unknown coverage. Presence
+of a measurement is a separate trace observation, so complete-absent,
+complete-explicit-zero, incomplete-absent and incomplete-present remain distinct.
+The compiler never infers completeness from score, rank, candidate count, source
+text, metadata, provider identity or absence itself.
+
+The declaration is caller-owned, **request-scoped and component-wide**. A provider
+may inform the caller, but the adapter does not silently promote that statement
+into policy. Each component covers the complete supplied candidate batch, including
+all configured retrieval rules for the retrieval component. One component can be
+complete while another is incomplete. Per-provider or per-candidate completeness
+and automatic fallback-profile selection are deferred; callers with heterogeneous
+coverage must conservatively declare the affected component incomplete. Scope
+must exactly match the already validated request, and foreign candidates fail
+before this declaration is consulted. The exact declaration participates in the
+request fingerprint and is observable in traces.
+
+`complete` asserts that missing/low support, or an explicit existing component
+default, may be used as negative evidence under the paired threshold. It is a
+caller claim about the adequacy of the exclusion evidence, not a guarantee of
+semantic truth. `incomplete` withholds that permission. Missing authored/retrieval
+signals keep their existing arithmetic zero; the new state prevents accidental
+interpretation of that number as justified exclusion. A nonzero but weak value
+can likewise be incomplete. A wrong complete declaration remains wrong input
+truth: no deterministic kernel mechanism can discover that dishonesty.
+
+**Uncertainty decision.** Add filtering schema **3**, paired with scoring schema
+2. It retains the optional minimum and optional existing scoped applicability,
+and requires `onIncompleteEvidence: 'admit' | 'reject'`. New scoring/filtering
+contracts must be paired, including in manual stage composition, so a caller
+cannot accidentally feed incomplete evidence to a legacy threshold-only filter.
+Existing schema-1 scoring and schema-1/2 filtering pairs remain unchanged.
+
+Resolve applicability and its required conflicts first. Runtime-required groups
+retain unconditional admission after valid applicability. An optional group at
+or above the threshold is eligible normally. With no minimum, there is no
+score-based exclusion. Only an optional group **below the threshold**, with at
+least one incomplete configured component of positive weight, requires the new
+choice: `admit` emits `ELIGIBLE_INCOMPLETE_EVIDENCE` and its component evidence;
+`reject` fails the complete compilation with `incomplete_admission_evidence`.
+Zero-weight channels are observable but cannot justify or prevent a numerical
+exclusion. Complete low evidence follows the normal threshold rule. A generous
+budget does not override either exclusion or the explicit reject choice.
+
+Admitting uncertainty preserves eligibility, not guaranteed final inclusion: the
+unchanged allocator still enforces the budget and orders optional candidates.
+Caller-known obligations must use runtime `required` when final preservation is
+mandatory. Explicit applicability remains authoritative over optional uncertainty;
+uncertainty never revives unusable content. Exact-content groups share the scoped
+component declaration. Duplicate wrappers cannot multiply score or completeness,
+choose a more favorable declaration, or change the uncertainty action. Required
+members retain the existing canonical-selection and conflict rules.
+
+**Trace, schemas and failure boundaries.** Add opt-in trace schema **4** for these
+policies, recording configured/present/absent component states, declared
+completeness, ignored retrieval measurements, score, uncertainty decision and
+final disposition without source text. Required/applicability decisions retain
+their existing reasons. Legacy policies still emit schema 2 or 3 with identical
+values, fingerprints and ordering. Readers accept 2/3/4 and reject version-4-only
+evidence/reasons in older records and unknown future versions. No database or
+stored-record envelope migration is needed; deploy readers before enabling new
+policies, and retain the new reader for version-4 audit history on rollback.
+
+The existing composition/request envelopes retain schema 1, as in DEC-044: their
+owned nested policy languages are explicitly versioned. The compiler failure
+stage union and fixed API error mapping gain the new validation stage; malformed
+or incompatible caller inputs remain structured client errors, without raw
+provider messages or source content. Allocation, ordering and rendering policy
+schemas do not change. Phase 21D profiles receive new ids under
+`evidence-dev:` and explicit versions; no `admission-dev:` identity is repurposed.
+
+**Historical evidence decision.** The merged Phase 21C tree preserves its
+original protocol, manifest, inputs and report but may be a squash merge whose
+ancestry does not retain the original freeze commit. Historical verification
+therefore pins the merged baseline artifact tree plus the original report and
+manifest hashes. It verifies their immutable working bytes and their committed
+baseline bytes, every frozen semantic-file hash against that baseline tree,
+per-case input/annotation/policy hashes and the original evidence hash and FAIL.
+Built-artifact hashes remain recorded historical provenance, not a claim about
+newly compiled Phase 21D binaries. CI uses this historical-integrity path instead
+of running the old frozen executable on changed compiler sources. The old runner,
+manifest, data, annotations, gates and first report are not edited or regenerated.
+
+**Guarantees and limits.** Contract correctness means deterministic handling of
+valid, explicitly compatible evidence according to the declared completeness and
+uncertainty choices. Selection effectiveness is measured separately against
+DEVELOPMENT-ONLY truth labels. A falsely low useful score or falsely high useless
+score under a complete declaration can be contract-correct and ineffective. No
+LLM, semantic heuristic, threshold tuning from ho20/ho32, or conversion of truth
+labels to runtime required flags is introduced. Multiple signals, calibrated
+provider contracts or explicit obligations may support stronger caller guarantees;
+none establishes infallible semantic recovery here.
+
+**Validation and alternatives.** Cover all 21 requested development scenarios,
+plus focused invariants for explicit ignores, deterministic preflight, scope,
+unknown fields, absence versus zero, complete/incomplete low evidence, both
+uncertainty choices, required/applicability/duplicate behavior, manual composition,
+trace reconciliation and persisted version guards. Keep contract correctness and
+selection effectiveness separate. Reject implicit global fail-open/fail-closed,
+catch-all ignores, automatic fallback profiles, candidate-text completeness and
+semantic recovery heuristics. Ordinary legacy evidence remains separate and
+unchanged. Phase 21E will freeze new contracts, metrics and gates before authoring
+a completely new held-out dataset; no Phase 21E cases are authored in Phase 21D.

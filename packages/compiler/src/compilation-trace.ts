@@ -1,3 +1,4 @@
+import type { ScoringEvidenceComponent } from './candidate-evidence.js';
 import {
   availableInputTokens,
   findLoneSurrogate,
@@ -137,6 +138,7 @@ import { pointerFor, quote, type IssuePath } from './validation-issues.js';
 export const COMPILATION_TRACE_SCHEMA_VERSION = 2;
 /** Opt-in filtering schema 2 records applicability reasons without rewriting v2 traces. */
 export const APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION = 3;
+export const EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION = 4;
 
 /** Preimage version of `CompilationTraceRequest.queryHash`. */
 const QUERY_HASH_VERSION = 1;
@@ -413,9 +415,18 @@ export interface CompilationTraceApplicabilityDecision extends ApplicabilityExcl
   readonly decision: 'filtered';
 }
 
+export interface CompilationTraceIncompleteEvidenceDecision {
+  readonly decision: 'eligible';
+  readonly reason: 'ELIGIBLE_INCOMPLETE_EVIDENCE';
+  readonly scoreTotal: number;
+  readonly minimumTotalScore: number;
+  readonly incompleteComponents: readonly ScoringEvidenceComponent[];
+}
+
 export type CompilationTraceFilteringDecision =
   | CompilationTraceRequiredEligibleDecision
   | CompilationTracePolicyEligibleDecision
+  | CompilationTraceIncompleteEvidenceDecision
   | CompilationTraceFilteredDecision
   | CompilationTraceApplicabilityDecision;
 
@@ -776,7 +787,9 @@ export interface CompilationTraceSettlement {
  */
 export interface CompilationTraceBase {
   readonly schemaVersion:
-    typeof COMPILATION_TRACE_SCHEMA_VERSION | typeof APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION;
+    | typeof COMPILATION_TRACE_SCHEMA_VERSION
+    | typeof APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION
+    | typeof EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION;
 
   readonly request: CompilationTraceRequest;
   readonly sources: readonly CompilationTraceSource[];
@@ -1763,6 +1776,14 @@ function traceFilteringDecision(
   switch (decision.reason) {
     case 'ELIGIBLE_REQUIRED':
       return { decision: 'eligible', reason: 'ELIGIBLE_REQUIRED' };
+    case 'ELIGIBLE_INCOMPLETE_EVIDENCE':
+      return {
+        decision: 'eligible',
+        reason: decision.reason,
+        scoreTotal: decision.scoreTotal,
+        minimumTotalScore: decision.minimumTotalScore,
+        incompleteComponents: decision.incompleteComponents,
+      };
     case 'ELIGIBLE_POLICY':
       return {
         decision: 'eligible',
@@ -1969,9 +1990,11 @@ export class TraceBuilder {
 
     const trace: UnsettledCompilationTrace = {
       schemaVersion:
-        request.policy.filtering.schemaVersion === 2
-          ? APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION
-          : COMPILATION_TRACE_SCHEMA_VERSION,
+        request.policy.filtering.schemaVersion === 3
+          ? EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION
+          : request.policy.filtering.schemaVersion === 2
+            ? APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION
+            : COMPILATION_TRACE_SCHEMA_VERSION,
       // The builder traces one measured attempt and nothing more. Settling a
       // compilation belongs to `ContextCompiler`, which owns the correction and
       // the same-tokenizer composition (ARCHITECTURE 7.2, DEC-038).

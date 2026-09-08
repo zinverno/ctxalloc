@@ -66,6 +66,7 @@ const DECLARATIONS = [
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/candidate-evidence.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
   'packages/compiler/dist/context-orderer.d.ts',
   'packages/compiler/dist/context-renderer.d.ts',
@@ -1469,7 +1470,10 @@ requireContains(
   'packages/compiler/dist/candidate-scorer.d.ts',
   'CANDIDATE_SCORING_POLICY_SCHEMA_VERSION = 1',
 );
-requireContains('packages/compiler/dist/candidate-scorer.d.ts', 'interface CandidateScoringPolicy');
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'type CandidateScoringPolicy = LegacyCandidateScoringPolicy | EvidenceCandidateScoringPolicy;',
+);
 requireContains(
   'packages/compiler/dist/candidate-scorer.d.ts',
   'interface RetrievalNormalizationRule',
@@ -1974,7 +1978,7 @@ requireContains(
 );
 requireContains(
   'packages/compiler/dist/candidate-filter.d.ts',
-  'type CandidateFilteringPolicy = LegacyCandidateFilteringPolicy | ApplicabilityCandidateFilteringPolicy;',
+  'type CandidateFilteringPolicy = LegacyCandidateFilteringPolicy | ApplicabilityCandidateFilteringPolicy | EvidenceCandidateFilteringPolicy;',
 );
 // DEC-044 retains the legacy branch and exposes a separate scoped opt-in branch.
 for (const member of [
@@ -2030,7 +2034,7 @@ requireContains('packages/compiler/dist/index.d.ts', "} from './candidate-filter
       "readonly reason: 'ELIGIBLE_REQUIRED';",
       "readonly reason: 'ELIGIBLE_POLICY';",
       "readonly reason: 'FILTERED_SCORE_BELOW_MINIMUM';",
-      'type CandidateFilteringDecision = RequiredEligibleCandidateDecision | PolicyEligibleCandidateDecision | FilteredCandidateDecision',
+      'type CandidateFilteringDecision = RequiredEligibleCandidateDecision | PolicyEligibleCandidateDecision | IncompleteEvidenceEligibleCandidateDecision | FilteredCandidateDecision',
     ]) {
       requireContains('packages/compiler/dist/candidate-filter.d.ts', decision);
     }
@@ -2275,7 +2279,7 @@ for (const member of [
 // compilation identity, and a settled one requires both (DEC-038).
 requireContains(
   'packages/compiler/dist/compilation-trace.d.ts',
-  'readonly schemaVersion: typeof COMPILATION_TRACE_SCHEMA_VERSION | typeof APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION;',
+  'readonly schemaVersion: typeof COMPILATION_TRACE_SCHEMA_VERSION | typeof APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION | typeof EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION;',
 );
 for (const member of [
   'interface CompilationTraceBase',
@@ -2710,6 +2714,7 @@ for (const relativePath of [
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/candidate-evidence.d.ts',
   'packages/compiler/dist/candidate-applicability.d.ts',
   'packages/compiler/dist/candidate-filter.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
@@ -2749,6 +2754,7 @@ for (const relativePath of [
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/candidate-evidence.d.ts',
   'packages/compiler/dist/candidate-applicability.d.ts',
   'packages/compiler/dist/candidate-filter.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
@@ -2774,6 +2780,7 @@ for (const relativePath of [
   'packages/compiler/dist/candidate-validator.d.ts',
   'packages/compiler/dist/candidate-deduplicator.d.ts',
   'packages/compiler/dist/candidate-scorer.d.ts',
+  'packages/compiler/dist/candidate-evidence.d.ts',
   'packages/compiler/dist/budget-allocator.d.ts',
   'packages/compiler/dist/context-orderer.d.ts',
 ]) {
@@ -3105,6 +3112,42 @@ for (const path of [
 const apiEntry = stripComments(contents.get('apps/api/dist/index.d.ts') ?? '').trim();
 if (apiEntry !== 'export declare const API_CONTRACT_VERSION = 1;')
   fail('API public entry point must expose only its contract version');
+
+// DEC-045: explicit contracts remain project-owned, readonly, and versioned.
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  "validateEvidence(input: Pick<ValidatedCandidateSet, 'scope' | 'candidates'>): void;",
+);
+requireContains(
+  'packages/compiler/dist/candidate-scorer.d.ts',
+  'EVIDENCE_SCORING_POLICY_SCHEMA_VERSION = 2',
+);
+requireContains(
+  'packages/compiler/dist/candidate-filter.d.ts',
+  'EVIDENCE_FILTERING_POLICY_SCHEMA_VERSION = 3',
+);
+requireContains(
+  'packages/compiler/dist/candidate-filter.d.ts',
+  "readonly onIncompleteEvidence: 'admit' | 'reject';",
+);
+requireContains(
+  'packages/compiler/dist/compilation-trace.d.ts',
+  'EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION = 4',
+);
+requireContains(
+  'packages/compiler/dist/candidate-evidence.d.ts',
+  "type EvidenceCompletenessState = 'complete' | 'incomplete';",
+);
+requireContains(
+  'packages/compiler/dist/candidate-evidence.d.ts',
+  'readonly completeness: EvidenceCompletenessState | null;',
+);
+requireContains('packages/compiler/dist/candidate-evidence.d.ts', 'readonly configured: boolean;');
+requireContains('packages/compiler/dist/candidate-evidence.d.ts', 'readonly present: boolean;');
+requireContains(
+  'packages/compiler/dist/candidate-evidence.d.ts',
+  'declare class CandidateEvidenceError',
+);
 
 if (failures.length > 0) {
   console.error('Declaration check failed:\n');

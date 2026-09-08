@@ -49,5 +49,8 @@ jobs:
       - name: Evaluate development admission semantics
         run: pnpm development:admission
 
-      - name: Measure frozen held-out context selection
-        run: pnpm validation:heldout
+      - name: Verify immutable Phase 21C historical evidence
+        run: pnpm validation:heldout:historical
+
+      - name: Evaluate development evidence contracts
+        run: pnpm development:evidence

@@ -594,10 +594,14 @@ A single unexplained final score is insufficient.
 Retrieval scores must be:
 
 * validated;
-* normalized according to provider contract;
+* normalized according to provider contract when consumed;
 * bounded or transformed by explicit policy.
 
 The compiler must not assume scores from different providers share the same scale.
+An uncovered numeric retrieval contract rejects in legacy scoring schema 1.
+Schema 2 may explicitly ignore an exact provider/version/semantics/direction tuple;
+it contributes nothing and remains observable. No wildcard or future signal is
+accepted through an ignore declaration (DEC-045).
 
 ---
 
@@ -1221,3 +1225,33 @@ candidate's exact-content group under a matching explicit policy scope. Every
 wrapper remains traceable, with the specific disposition and declared member ids.
 Missing targets and contradictory group declarations fail explicitly. Unsupported
 replacement/self/cycle fields must not become executable relationships (DEC-044).
+
+
+## INV-EVIDENCE-001: Completeness Is Explicit and Scoped
+
+Only a validated scoring schema 2 policy declares completeness: exactly once per
+configured component, across the current batch, under an exactly matching scope.
+No score value, rank, candidate count, text, metadata, provider identity, absence,
+duplicate multiplicity or foreign-scope candidate can create or strengthen it.
+Component configuration, evidence presence and completeness remain distinguishable
+in trace schema 4, including explicit zero versus absence (DEC-045).
+
+## INV-EVIDENCE-002: Incomplete Exclusion Requires a Caller Choice
+
+Scoring schema 2 and filtering schema 3 must be paired. After applicability and
+required obligations, a below-threshold optional group with an incomplete
+positive-weight component is admitted or causes compilation failure according
+to explicit `onIncompleteEvidence`. It is never silently treated as complete
+negative evidence. Incompleteness with zero weight is observational only. A met
+threshold or no threshold retains ordinary eligibility. Budget capacity cannot
+bypass a complete-evidence exclusion; uncertain admission cannot bypass budget
+limits. Applicable required groups remain mandatory and required/applicability
+conflicts remain errors (INV-BUDGET-003/004, INV-APPLICABILITY-001).
+
+## INV-EVIDENCE-003: Contract Correctness Is Not Evidence Truth
+
+A complete declaration is not a proof of relevance. Confidently false caller
+grades can produce contract-correct selection that loses useful optional facts.
+Development evaluation reports these as evidence-quality limitations separately
+from policy correctness. Frozen failed evidence must not be rewritten as proof
+of new behavior; Phase 21C remains FAIL and Phase 21D is development only.

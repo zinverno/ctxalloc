@@ -1,3 +1,4 @@
+import { CandidateEvidenceError } from './candidate-evidence.js';
 import {
   findLoneSurrogate,
   safeParse,
@@ -265,6 +266,7 @@ export type ContextCompilationStage =
   | 'configuration'
   | 'request-validation'
   | 'candidate-validation'
+  | 'evidence-validation'
   | 'deduplication'
   | 'scoring'
   | 'filtering'
@@ -594,6 +596,10 @@ export class ContextCompiler {
         candidates: request.candidates,
       }),
     );
+    if (request.policy.scoring.schemaVersion === 2)
+      at('evidence-validation', () =>
+        new CandidateScorer(request.policy.scoring).validateEvidence(validated),
+      );
     const deduplicated = at('deduplication', () => this.#deduplicator.deduplicate(validated));
     const scored = at('scoring', () =>
       new CandidateScorer(request.policy.scoring).score(deduplicated, request.referenceTime),
@@ -674,6 +680,7 @@ export class ContextCompiler {
       return run();
     } catch (error: unknown) {
       if (
+        error instanceof CandidateEvidenceError ||
         error instanceof CandidateValidationError ||
         error instanceof CandidateScoringError ||
         error instanceof CandidateFilteringError ||

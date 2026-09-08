@@ -102,6 +102,9 @@ export {
 } from './budget-allocator.js';
 export {
   CANDIDATE_FILTERING_POLICY_SCHEMA_VERSION,
+  EVIDENCE_FILTERING_POLICY_SCHEMA_VERSION,
+  type EvidenceCandidateFilteringPolicy,
+  type IncompleteEvidenceEligibleCandidateDecision,
   APPLICABILITY_FILTERING_POLICY_SCHEMA_VERSION,
   type LegacyCandidateFilteringPolicy,
   type ApplicabilityCandidateFilteringPolicy,
@@ -127,6 +130,9 @@ export {
 } from './candidate-deduplicator.js';
 export {
   CANDIDATE_SCORING_POLICY_SCHEMA_VERSION,
+  EVIDENCE_SCORING_POLICY_SCHEMA_VERSION,
+  type EvidenceCandidateScoringPolicy,
+  type LegacyCandidateScoringPolicy,
   CandidateScorer,
   CandidateScoringError,
   type AuthoredPriorityScoreComponent,
@@ -185,6 +191,8 @@ export {
 export {
   COMPILATION_TRACE_SCHEMA_VERSION,
   APPLICABILITY_COMPILATION_TRACE_SCHEMA_VERSION,
+  EVIDENCE_COMPILATION_TRACE_SCHEMA_VERSION,
+  type CompilationTraceIncompleteEvidenceDecision,
   type CompilationTraceApplicabilityDecision,
   CompilationTraceError,
   TraceBuilder,
@@ -276,3 +284,13 @@ export {
   type CandidateApplicabilityIssueCode,
   type ApplicabilityExclusionEvidence,
 } from './candidate-applicability.js';
+
+export {
+  CandidateEvidenceError,
+  SCORING_EVIDENCE_COMPONENTS,
+  type ScoringEvidenceComponent,
+  type EvidenceCompletenessState,
+  type EvidenceCompletenessDeclaration,
+  type RetrievalEvidenceContract,
+  type CandidateEvidenceObservation,
+} from './candidate-evidence.js';

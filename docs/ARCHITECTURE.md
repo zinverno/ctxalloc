@@ -406,6 +406,7 @@ The implemented part of the flow is named by its components, not numbered:
 ```text
 CompilationRequest validation
   -> CandidateValidator
+  -> CandidateScorer.validateEvidence (scoring schema 2 only; no scores)
   -> CandidateDeduplicator
   -> CandidateScorer
   -> CandidateFilter
@@ -1073,8 +1074,9 @@ Ranges are policy input. They are never inferred from the provider, from a rank,
 or from the values in the current batch: batch-relative normalization would make
 one candidate's score depend on which unrelated candidates were retrieved
 alongside it. A value outside its range rejects rather than clamps, and a scored
-record with no exact rule rejects rather than being read as zero or dropped
-(INV-SCORE-002, INV-SCORE-004). A retrieval record with no score is valid and
+record with no exact rule rejects unless scoring schema 2 explicitly ignores
+that exact evidence contract. Legacy scoring schema 1 still rejects it at scoring;
+schema 2 checks compatibility before deduplication (DEC-045, INV-SCORE-002/004). A retrieval record with no score is valid and
 contributes no relevance; rank alone and provider identity alone are never
 relevance (INV-PROV-003).
 
@@ -1301,12 +1303,49 @@ require any necessary replacement. Foreign candidates still reject upstream;
 foreign policy scope also rejects, so it cannot suppress local data.
 
 Schema-1 policies retain byte-identical schema-2 traces. Schema-2 policies emit
-trace schema 3, and the persisted reader accepts both 2 and 3 without rewriting
+trace schema 3, and the persisted reader accepts 2, 3 and the opt-in 4 without rewriting
 old rows. New reasons are rejected in a schema-2 record. SQLite envelopes and
 schema stay unchanged. Deploy the reader before opting into the new policy;
 older binaries cannot read new traces. See DEC-044 and
 [Phase 21B](PHASE21B_ADMISSION_SEMANTICS.md) for the declaration contract, profiles,
 independent development evidence and rollback boundary.
+
+#### Opt-in evidence compatibility and completeness (DEC-045)
+
+Scoring schema 2 must be paired with filtering schema 3. Top-level request and
+compilation-policy envelopes remain version 1. Legacy score/filter pairs retain
+their behavior and trace versions. The scoring owner validates exact numeric
+retrieval compatibility, normalization windows and declaration scope through
+`CandidateScorer.validateEvidence` after full candidate validation and before
+deduplication. This pure preflight calculates no scores, ranking or selection;
+failures retain stable codes at the new `evidence-validation` stage. Direct
+scoring also invokes preflight. No new retrieval or provider dependency is added.
+
+Compatibility is reject-by-default plus an explicit exact-tuple ignore list;
+unknown fields and future signal types still fail. Ignored numeric observations
+are visible in traces and supply no score. Policy declarations explicitly cover
+every configured component exactly once with `complete` or `incomplete`, under
+the request's exact scope. The declaration is component-wide across the batch,
+not inferred per candidate. Presence, configured state and completeness are
+separate observations; an ignored measurement may be present without contributing.
+
+Filtering resolves applicability first, preserves runtime-required groups, then
+compares the unchanged scalar score to the caller's threshold. If an optional
+non-excluded group is below the threshold and any positive-weight component is
+incomplete, the caller's required `onIncompleteEvidence` choice either admits it
+with `ELIGIBLE_INCOMPLETE_EVIDENCE` or fails the compilation with
+`incomplete_admission_evidence`. Zero-weight incompleteness cannot affect this
+decision. No threshold or a met threshold needs no exclusion justification.
+Uncertain admission grants eligibility; budget allocation and settlement still
+own final inclusion. No fallback profile is selected automatically.
+
+The new pair writes trace schema 4, with five configured/present/completeness
+component observations, ignored numeric retrieval observations and the admission
+reason per group. The settlement overlay supplies final dispositions. Persisted
+readers accept 2/3/4, reject evidence fields in 2/3 and reject future versions.
+They remain shape validators, not arithmetic or semantic-truth evaluators.
+Storage envelopes and SQLite schema are unchanged. Migration and rollback are in
+[Phase 21D](PHASE21D_EVIDENCE_SEMANTICS.md).
 
 ### 6.4 BudgetAllocator
 
@@ -2211,7 +2250,8 @@ fingerprint exists to bind.
 
 ```ts
 type ContextCompilationStage =
-  | 'configuration' | 'request-validation' | 'candidate-validation' | 'deduplication'
+  | 'configuration' | 'request-validation' | 'candidate-validation'
+  | 'evidence-validation' | 'deduplication'
   | 'scoring' | 'filtering' | 'allocation' | 'ordering' | 'rendering' | 'trace'
   | 'correction' | 'result';
 
