@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "e24a42a71d414ce6de1e8c46de98094100cb7bc1",
+  "protocolRevision": "36d468aee5e34d287df43aaf971cd25984b08453",
+  "heldOutFreezeRevision": "2319e902de318af9598f4b6508649cfc69873319",
+  "firstExecutionHead": "2319e902de318af9598f4b6508649cfc69873319",
+  "heldOutContextSelectionValidation": "FAIL",
+  "evidenceHash": "sha256:176c9642c61e97f44aa2e02776be2e038c6c1d5363f68e1c8723dd52c78037d5",
+  "firstReportSha256": "3144a9f8c505f46c45e142dccf1da24feef149a38ed280d630910aa39945a4e1",
+  "firstRepeatByteIdenticalIncludingRuntimeProvenance": true,
+  "finalCleanBuildReportByteIdenticalIncludingRuntimeProvenance": true,
+  "allowedRepeatExclusion": [
+    "runtimeProvenance"
+  ],
+  "protectedFilesVerified": 155,
+  "builtArtifactsVerified": 123,
+  "postObservationExecutableChanges": false,
+  "frozenLegacyPathsUnchanged": [
+    "packages",
+    "apps",
+    "benchmarks/admission-development",
+    "benchmarks/acceptance",
+    "benchmarks/diagnostics",
+    "benchmarks/evaluation",
+    "pnpm-lock.yaml"
+  ],
+  "historicalV1": {
+    "gatesCompared": 23,
+    "allGatesEqual": true,
+    "allCountsAndAggregatesEqual": true,
+    "caseEvidenceEqualExcept": [
+      "compilationLatencyMilliseconds"
+    ],
+    "engineeringAcceptance": "INCOMPLETE",
+    "productValidationAcceptance": "FAIL"
+  },
+  "diagnosticByteIdentical": true,
+  "developmentByteIdentical": true,
+  "developmentSha256": "123741582dc2c3d813f682c6107cbf2b3dd542533853a31522aa8d91e70227a0",
+  "baselineValidation": {
+    "steps": 20,
+    "testFiles": 175,
+    "tests": 3734
+  },
+  "finalValidation": {
+    "steps": [
+      {
+        "step": "01-clean",
+        "status": "PASS"
+      },
+      {
+        "step": "02-install",
+        "status": "PASS"
+      },
+      {
+        "step": "03-format",
+        "status": "PASS"
+      },
+      {
+        "step": "04-lint",
+        "status": "PASS"
+      },
+      {
+        "step": "05-typecheck",
+        "status": "PASS"
+      },
+      {
+        "step": "06-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "07-tests",
+        "status": "PASS"
+      },
+      {
+        "step": "08-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "09-boundaries",
+        "status": "PASS"
+      },
+      {
+        "step": "10-check",
+        "status": "PASS"
+      },
+      {
+        "step": "11-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "12-build",
+        "status": "PASS"
+      },
+      {
+        "step": "13-declarations",
+        "status": "PASS"
+      },
+      {
+        "step": "14-cli-smoke",
+        "status": "PASS"
+      },
+      {
+        "step": "15-api-smoke",
+        "status": "PASS"
+      },
+      {
+        "step": "16-acceptance",
+        "status": "PASS"
+      },
+      {
+        "step": "17-diagnostic",
+        "status": "PASS"
+      },
+      {
+        "step": "18-development",
+        "status": "PASS"
+      },
+      {
+        "step": "19-heldout",
+        "status": "PASS"
+      },
+      {
+        "step": "22-diff-check",
+        "status": "PASS"
+      },
+      {
+        "step": "23-status",
+        "status": "PASS"
+      }
+    ],
+    "testFiles": 178,
+    "tests": 3752,
+    "newTests": 18,
+    "newTestFiles": 3,
+    "workspaceBoundaries": 11,
+    "buildProjects": 11,
+    "publicDeclarations": 75,
+    "builtCliSmoke": "PASS",
+    "builtApiChecks": 12
+  },
+  "audit": {
+    "trackedDistFiles": 0,
+    "residualDatabaseFiles": 0,
+    "changedFileCredentialPatterns": 0,
+    "changedPrivateConfigurationPaths": 0,
+    "reportContainsRawQueriesBlockContentOrFactDescriptions": false
+  },
+  "limitations": [
+    "same-process synthetic authoring, not independent human annotations",
+    "22 unexpected input/profile compatibility failures leave two profiles unmeasured",
+    "successful-output aggregates contain only 22 requests",
+    "no budget-allocation exclusions in successful cases",
+    "live answer quality NOT_EVALUATED",
+    "latency NOT_MEASURED",
+    "real retrieval calibration NOT_EVALUATED",
+    "Docker and suite-level source-instruction escape evidence unchanged"
+  ],
+  "requirePassExitCode": 2,
+  "requirePassReportByteIdentical": true
+}

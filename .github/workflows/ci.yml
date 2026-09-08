@@ -11,6 +11,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -46,3 +48,6 @@ jobs:
 
       - name: Evaluate development admission semantics
         run: pnpm development:admission
+
+      - name: Measure frozen held-out context selection
+        run: pnpm validation:heldout
