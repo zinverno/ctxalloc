@@ -54,3 +54,6 @@ jobs:
 
       - name: Evaluate development evidence contracts
         run: pnpm development:evidence
+
+      - name: Verify immutable Phase 21E first-run evidence
+        run: pnpm validation:heldout:v2:historical
