@@ -29,8 +29,16 @@
     "protectedSemanticFiles": 220,
     "builtArtifactHashes": 142,
     "caseInputAnnotationPolicyTriples": 60,
-    "postObservationProtectedChanges": 0,
-    "cleanBuildReproductionByteIdentical": true
+    "cleanBuildReproductionByteIdentical": true,
+    "selectionSemanticsChangedAfterObservation": false,
+    "postObservationWiringChanges": [
+      ".github/workflows/ci.yml",
+      "package.json"
+    ],
+    "unchangedCurrentOriginalSemanticFiles": 218,
+    "originalArtifactHashesStillMatchingCurrentBuild": 142,
+    "originalFreezeManifestRegenerated": false,
+    "originalFirstReportModified": false
   },
   "results": {
     "contractCorrectness": "PASS",
@@ -688,6 +696,157 @@
     "phase21COriginalHeldout": "FAIL"
   },
   "finalValidation": {
+    "scope": "Final-tree repository validation with separate Phase 21E historical-integrity command",
+    "steps": [
+      {
+        "step": "01-clean",
+        "status": "PASS"
+      },
+      {
+        "step": "02-install",
+        "status": "PASS"
+      },
+      {
+        "step": "03-format",
+        "status": "PASS"
+      },
+      {
+        "step": "04-lint",
+        "status": "PASS"
+      },
+      {
+        "step": "05-typecheck",
+        "status": "PASS"
+      },
+      {
+        "step": "06-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "07-tests",
+        "status": "PASS"
+      },
+      {
+        "step": "08-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "09-boundaries",
+        "status": "PASS"
+      },
+      {
+        "step": "10-check",
+        "status": "PASS"
+      },
+      {
+        "step": "11-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "12-build",
+        "status": "PASS"
+      },
+      {
+        "step": "13-declarations",
+        "status": "PASS"
+      },
+      {
+        "step": "14-cli-smoke",
+        "status": "PASS"
+      },
+      {
+        "step": "15-api-smoke",
+        "status": "PASS"
+      },
+      {
+        "step": "16-acceptance",
+        "status": "PASS"
+      },
+      {
+        "step": "17-diagnostic",
+        "status": "PASS"
+      },
+      {
+        "step": "18-development",
+        "status": "PASS"
+      },
+      {
+        "step": "19-history",
+        "status": "PASS"
+      },
+      {
+        "step": "20-evidence",
+        "status": "PASS"
+      },
+      {
+        "step": "21-heldout-v2-history",
+        "status": "PASS"
+      },
+      {
+        "step": "22-diff-check",
+        "status": "PASS"
+      },
+      {
+        "step": "23-status",
+        "status": "PASS"
+      }
+    ],
+    "testFiles": 185,
+    "tests": 3809,
+    "newTestFiles": 4,
+    "newTests": 19,
+    "workspaceBoundaries": 11,
+    "buildProjects": 11,
+    "publicDeclarations": 76,
+    "builtCliSmoke": "PASS",
+    "builtApiSmokeChecks": 12
+  },
+  "audit": {
+    "schemaVersion": 1,
+    "protectedRawBodiesInFirstReport": 0,
+    "queriesInFirstReport": 0,
+    "trackedBuildSecretOrDatabaseArtifacts": [],
+    "credentialPatternMatchesInChangedFiles": 0,
+    "sourceTreeTemporaryDatabaseFiles": [],
+    "changedCompilerOrHistoricalFiles": [],
+    "firstReportSHA256": "4c3114ca7dc301fe79e55559c21bc647fa2290b4356b6389096ea960b2896646",
+    "authoringAudit": {
+      "schemaVersion": 1,
+      "protocolRevision": "2e1db08110523d532775a041a8406f75c624c088",
+      "cases": 60,
+      "uniqueQueries": 60,
+      "uniqueSourceContents": 230,
+      "blockRecords": 260,
+      "sourceTypes": {
+        "text": 85,
+        "markdown": 90,
+        "conversation": 85
+      },
+      "priorLiteralMatches": 0,
+      "crossCaseContentReuse": 0,
+      "compilationOrSelectionExecuted": false,
+      "comparisonPaths": [
+        "benchmarks/heldout/v1/cases.json",
+        "benchmarks/evidence-development/cases.ts",
+        "benchmarks/admission-development/cases.ts",
+        "benchmarks/evaluation/v1/fixtures.ts"
+      ]
+    },
+    "checkedChangedFiles": 30,
+    "allWorkspaceResidualDatabaseFiles": []
+  },
+  "limits": [
+    "Synthetic author-labeled requests are not representative population evidence",
+    "Misleading complete evidence preserves 0/4 useful facts despite contract correctness",
+    "Admission under uncertainty preserves useful groups but may retain irrelevant context",
+    "Incomplete-reject returns only three successful contexts; nine expected failures are separate coverage",
+    "Phase 21C immutable held-out FAIL unchanged",
+    "Live answer quality NOT_EVALUATED; full Product Validation PASS is not established",
+    "Distinct protocol/freeze ancestry is required for executable reproduction; do not squash it away",
+    "Frozen executable has a post-commit report-reader buffer failure; final-tree CI verifies immutable artifacts only through a separately versioned command"
+  ],
+  "changedFiles": 30,
+  "producerValidation": {
     "steps": [
       {
         "step": "01-clean",
@@ -790,50 +949,123 @@
     "buildProjects": 11,
     "publicDeclarations": 76,
     "builtCliSmoke": "PASS",
-    "builtApiSmokeChecks": 12
+    "builtApiSmokeChecks": 12,
+    "scope": "Freeze-head executable validation before committing its first report"
   },
-  "audit": {
+  "postCommitProducerLimitation": {
+    "revision": "210efbd015b98499454a3d48dbe1208b668fdc30",
+    "command": "pnpm --silent validation:heldout:v2 --require-pass",
+    "exitCode": 1,
+    "reportedCode": "heldout_v2_integrity_or_execution_failed",
+    "diagnosedCause": "spawnSync git ENOBUFS",
+    "firstReportBytes": 1097510,
+    "defaultChildProcessBufferBytes": 1048576,
+    "frozenRunnerChanged": false,
+    "newHistoricalVerifierBufferBytes": 16777216,
+    "selectionExecutedByHistoricalVerifier": false
+  },
+  "phase21EHistoricalVerification": {
     "schemaVersion": 1,
-    "protectedRawBodiesInFirstReport": 0,
-    "queriesInFirstReport": 0,
-    "trackedBuildSecretOrDatabaseArtifacts": [],
-    "credentialPatternMatchesInChangedFiles": 0,
-    "sourceTreeTemporaryDatabaseFiles": [],
-    "changedCompilerOrHistoricalFiles": [],
-    "firstReportSHA256": "4c3114ca7dc301fe79e55559c21bc647fa2290b4356b6389096ea960b2896646",
-    "authoringAudit": {
-      "schemaVersion": 1,
-      "protocolRevision": "2e1db08110523d532775a041a8406f75c624c088",
-      "cases": 60,
-      "uniqueQueries": 60,
-      "uniqueSourceContents": 230,
-      "blockRecords": 260,
-      "sourceTypes": {
-        "text": 85,
-        "markdown": 90,
-        "conversation": 85
+    "verification": "historical-artifact-integrity-only",
+    "status": "PASS",
+    "originalResultsRevision": "210efbd015b98499454a3d48dbe1208b668fdc30",
+    "protocolRevision": "2e1db08110523d532775a041a8406f75c624c088",
+    "originalFreezeRevision": "ebebc9b5671fc55acee4eb84fce047821d1c5ea2",
+    "immutableWorkingFilesVerified": 21,
+    "originalSemanticsFilesVerifiedAgainstFreezeTree": 220,
+    "originalBuiltArtifactHashesPreserved": 142,
+    "compilerExecuted": false,
+    "originalExecutableReproduced": false,
+    "originalRunnerLimitation": "Committed first report exceeds default git-show child-process buffer; frozen runner retained unchanged.",
+    "caseCount": 60,
+    "caseInputAnnotationPolicyHashesVerified": 60,
+    "successfulCompilations": 43,
+    "expectedFailures": 17,
+    "unexpectedOutcomes": 0,
+    "contractCorrectness": "PASS",
+    "primarySelectionEffectiveness": "PASS",
+    "misleadingRiskDisclosure": "PASS",
+    "heldOutEvidenceAwareContextSelection": "PASS",
+    "gates": [
+      {
+        "id": "outcomes",
+        "state": "PASS"
       },
-      "priorLiteralMatches": 0,
-      "crossCaseContentReuse": 0,
-      "compilationOrSelectionExecuted": false,
-      "comparisonPaths": [
-        "benchmarks/heldout/v1/cases.json",
-        "benchmarks/evidence-development/cases.ts",
-        "benchmarks/admission-development/cases.ts",
-        "benchmarks/evaluation/v1/fixtures.ts"
-      ]
-    },
-    "checkedChangedFiles": 26,
-    "allWorkspaceResidualDatabaseFiles": []
-  },
-  "limits": [
-    "Synthetic author-labeled requests are not representative population evidence",
-    "Misleading complete evidence preserves 0/4 useful facts despite contract correctness",
-    "Admission under uncertainty preserves useful groups but may retain irrelevant context",
-    "Incomplete-reject returns only three successful contexts; nine expected failures are separate coverage",
-    "Phase 21C immutable held-out FAIL unchanged",
-    "Live answer quality NOT_EVALUATED; full Product Validation PASS is not established",
-    "Distinct protocol/freeze ancestry is required for executable reproduction; do not squash it away"
-  ],
-  "changedFiles": 26
+      {
+        "id": "runtime-required",
+        "state": "PASS"
+      },
+      {
+        "id": "budget",
+        "state": "PASS"
+      },
+      {
+        "id": "scope",
+        "state": "PASS"
+      },
+      {
+        "id": "accounting",
+        "state": "PASS"
+      },
+      {
+        "id": "determinism",
+        "state": "PASS"
+      },
+      {
+        "id": "admission",
+        "state": "PASS"
+      },
+      {
+        "id": "applicability",
+        "state": "PASS"
+      },
+      {
+        "id": "compatibility",
+        "state": "PASS"
+      },
+      {
+        "id": "completeness",
+        "state": "PASS"
+      },
+      {
+        "id": "traceVersion",
+        "state": "PASS"
+      },
+      {
+        "id": "useful-blocks",
+        "state": "PASS"
+      },
+      {
+        "id": "useful-facts",
+        "state": "PASS"
+      },
+      {
+        "id": "critical-facts",
+        "state": "PASS"
+      },
+      {
+        "id": "required-facts",
+        "state": "PASS"
+      },
+      {
+        "id": "admission-recall",
+        "state": "PASS"
+      },
+      {
+        "id": "admission-precision",
+        "state": "PASS"
+      },
+      {
+        "id": "reduction",
+        "state": "PASS"
+      },
+      {
+        "id": "misleading-risk-disclosure",
+        "state": "PASS"
+      }
+    ],
+    "manifestHash": "sha256:f7210ac39e7e5b8fc97bf62608b57994c454c1f4c84ba7f97d28c179df0204b2",
+    "firstReportSha256": "sha256:4c3114ca7dc301fe79e55559c21bc647fa2290b4356b6389096ea960b2896646",
+    "evidenceHash": "sha256:24423484552fb656906888f8d90c96fa0e8140bdc8739451dceec75d5091acff"
+  }
 }

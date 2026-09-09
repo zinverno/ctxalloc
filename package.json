@@ -29,7 +29,8 @@
     "validation:heldout": "node benchmarks/dist/heldout/run.js",
     "validation:heldout:historical": "node benchmarks/dist/historical/run.js",
     "development:evidence": "node benchmarks/dist/evidence-development/run.js",
-    "validation:heldout:v2": "node benchmarks/dist/heldout-v2/run.js"
+    "validation:heldout:v2": "node benchmarks/dist/heldout-v2/run.js",
+    "validation:heldout:v2:historical": "node benchmarks/dist/historical-v2/run.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

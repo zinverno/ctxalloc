@@ -18,7 +18,7 @@ The 60 requests produced 43 intended successes and all 17 expected structured fa
 | Stable evidence hash | `sha256:24423484552fb656906888f8d90c96fa0e8140bdc8739451dceec75d5091acff` |
 | Manifest SHA-256 | `sha256:f7210ac39e7e5b8fc97bf62608b57994c454c1f4c84ba7f97d28c179df0204b2` |
 
-The [protocol](PHASE21E_HELD_OUT_PROTOCOL.md) and all executable preparation, evaluation and gate code were committed before any Phase 21E source content was authored. The distinct dataset commit preceded the first compiler invocation. Its tree was clean at that invocation. The [original report](evidence/phase21e-first-run.json) is the exact stdout byte sequence, copied without JSON reformatting; exit code was 0 and stderr was empty. No frozen semantic file, input, annotation, threshold, budget or gate changed after observation. [Verification evidence](evidence/phase21e-verification.json) records baseline/final checks, audits and reproduction.
+The [protocol](PHASE21E_HELD_OUT_PROTOCOL.md) and all executable preparation, evaluation and gate code were committed before any Phase 21E source content was authored. The distinct dataset commit preceded the first compiler invocation. Its tree was clean at that invocation. The [original report](evidence/phase21e-first-run.json) is the exact stdout byte sequence, copied without JSON reformatting; exit code was 0 and stderr was empty. No frozen evaluator, compiler, input, annotation, threshold, budget, metric or gate changed after observation. A later historical verifier and explicit package/CI wiring were added after a committed-report reader limitation was found; that path does not execute selection. [Verification evidence](evidence/phase21e-verification.json) records baseline/final checks, audits and reproduction.
 
 The manifest protects 220 semantic files and 142 built JavaScript artifacts, with 60 input/annotation/policy hash triples. Compiler sources and all historical experiment inputs and producers are unchanged from the merged baseline. The fixed compiler instance is `ctxalloc-heldout-v2` v1; tokenizer is `js-tiktoken:o200k_base` v1.0.21 and renderer is `ctxalloc-jsonl` v1. Scoring/filtering/trace/evidence-observation schemas remain **2/3/4/1**. All five evaluation profiles are v1; the nine Phase 21D development profiles are unchanged.
 
@@ -194,13 +194,13 @@ Phase 21C remains the immutable first held-out **FAIL**: 48 requests, 22 success
 
 The next development phase should evaluate the caller evidence-quality boundary and real answer-quality measurement design separately. This experiment supports the fixed compatibility/completeness/uncertainty contracts on this new synthetic matrix. It does not calibrate a real provider, prove that caller confidence is truthful, establish broad compression under uncertainty, or show that an LLM answers better. A provider or answer-quality study needs its own preregistration and unseen data. No live LLM, new retrieval backend, summarizer, UI, database feature or compiler feature was added.
 
-The runnable freeze guard requires the distinct protocol and dataset commits to remain ancestors. A squash that removes those identities cannot reproduce the original staged experiment through this command; preserve their ancestry for executable reproduction, or introduce a separate historical-integrity path in a later phase. This PR is opened for review and is not merged.
+The frozen executable and the historical verifier require their recorded protocol, freeze and results commits to remain ancestors. Preserve those identities when integrating this PR; a squash that removes them requires a later explicitly re-anchored historical verification. This PR is opened for review and is not merged.
 
 
-## Complete repository verification
+## Verification before the results commit
 
-All 23 final validation steps passed, including the required clean build and
-second execution from rebuilt artifacts. Both the standalone full test run and
+All 23 producer-stage validation steps passed at the freeze revision, including the required clean build and
+second execution from rebuilt artifacts before the report itself was committed. Both the standalone full test run and
 the aggregate check ran **184 files / 3,802 tests**; 12 tests in three new files
 were added to the baseline's 181 files / 3,790 tests.
 
@@ -233,6 +233,72 @@ The historical v1 producer emits the existing Node SQLite experimental warning;
 it does not change its historical verdict. Phase 21E records no timing claim.
 The committed additions are evaluation/protocol/test/data/evidence files and
 one new root command plus CI step. No public declarations or compiler behavior
-changed. Required checks were not skipped. Live model quality, real retrieval
+changed. The post-commit verification path is described below. Required checks were not skipped. Live model quality, real retrieval
 calibration, Docker closure and source-instruction escape closure remain outside
 this phase as preregistered.
+
+## Post-commit artifact limitation and separate historical verifier
+
+The first report is **1,097,510 bytes**. After committing it at
+`210efbd015b98499454a3d48dbe1208b668fdc30`, the frozen executable's final
+`git show` verification exceeded Node's default synchronous child-process output
+buffer. The exact-head `pnpm --silent validation:heldout:v2 --require-pass`
+exited 1 with `heldout_v2_integrity_or_execution_failed`; direct diagnosis found
+`spawnSync git ENOBUFS`. This is an artifact-reader failure after the report
+commit. It does not alter the preserved first execution or its gate outcomes.
+The frozen reader, its original source and artifact hashes, and its limitation
+are retained unchanged. The default executable is not advertised as working
+on the final branch tree.
+
+Part L of the requested evaluation permits a later historical-integrity command.
+`pnpm --silent validation:heldout:v2:historical` supplies that separate path. It
+reads Git artifacts with an explicit 16 MiB buffer, authenticates the original
+report bytes and stable evidence hash, verifies the immutable evaluator/data/
+protocol inventory and all 60 input/annotation/policy hashes, and verifies all
+220 original semantic hashes against the original freeze tree. It preserves the
+142 original built artifact hashes as historical identities. It imports no
+compiler or evaluator and explicitly reports `compilerExecuted: false` and
+`originalExecutableReproduced: false`. Its PASS means integrity, not a new
+held-out execution or a new effectiveness result.
+
+The post-observation changes are two new historical-verifier modules, seven
+regression/tamper tests, a new package command and a CI step selecting that
+command, plus documentation/verification evidence. `package.json` and
+`.github/workflows/ci.yml` are the two original protected files with changed
+execution wiring; their original versions remain in the immutable freeze. This
+is disclosed rather than rebasing, regenerating or weakening the original
+manifest. No selection or metric semantics were changed. The original command
+continues to enforce its original file inventory and is retained for its
+original freeze checkout; CI now verifies history on the final tree.
+
+The first-report reader issue and the need to preserve distinct commit ancestry
+remain documented limits. A future executable runner repair must use a new
+version and preserve this original report; it must not retune these observed
+cases or replace the first-run bytes.
+
+## Final-tree validation with historical verification
+
+All 23 applicable steps passed again after adding the separate verifier: clean,
+frozen install, format, lint, typecheck, standalone full tests, boundaries,
+aggregate check, clean build, declarations, CLI/API smoke, historical v1,
+Phase 21A/B/C/D, and Phase 21E historical integrity. Both full-suite invocations
+passed **185 files / 3,809 tests**. The phase adds **19 tests in four files** in
+total: 12 tests frozen with the protocol and seven later historical-integrity
+tests. Builds still cover 11 projects and 76 public declarations; all 12 API
+smoke checks pass.
+
+[Phase 21E historical evidence](evidence/phase21e-history.json) verifies 21
+immutable working files, 220 original semantic hashes and 60 case hash triples,
+while retaining 142 original artifact hashes and the original PASS. A separate
+clean-build audit also confirmed that **all 142 original JavaScript artifact
+hashes still match** the current build; no original evaluator or compiler
+artifact was changed. Of the original 220 protected files, 218 working files
+remain byte-identical and the two disclosed command/CI wiring files changed.
+
+Historical v1's 23 gates, all counts/aggregates and case evidence apart from
+latency still match the start baseline. Phase 21A/B/C-integrity/D reports remain
+byte-identical. The final audit covers **30 changed files** and found no
+credential patterns, private configuration or residual database side files.
+The first report remains byte-identical to its original saved stdout. Final-tree
+CI uses historical artifact verification; it does not claim that the frozen
+executable was reproduced on that changed tree.
