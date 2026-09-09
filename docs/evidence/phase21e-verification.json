@@ -1,0 +1,839 @@
+{
+  "schemaVersion": 1,
+  "phase": "21E",
+  "baselineRevision": "9dceacbd320ddaaa642b2484d876cec21c302d06",
+  "branch": "codex/phase-21e-heldout-validation",
+  "startState": {
+    "baseline": "9dceacbd320ddaaa642b2484d876cec21c302d06",
+    "clean": true,
+    "pr25Merged": true,
+    "mergedAt": "2026-09-08T18:08:42Z",
+    "baselineEqualsPhase21DHeadTree": true
+  },
+  "protocolRevision": "2e1db08110523d532775a041a8406f75c624c088",
+  "heldOutFreezeRevision": "ebebc9b5671fc55acee4eb84fce047821d1c5ea2",
+  "firstExecution": {
+    "schemaVersion": 1,
+    "startedAt": "2026-09-09T04:53:30.059447+00:00",
+    "finishedAt": "2026-09-09T04:53:34.837069+00:00",
+    "head": "ebebc9b5671fc55acee4eb84fce047821d1c5ea2",
+    "command": "pnpm --silent validation:heldout:v2",
+    "exitCode": 0,
+    "stdoutSHA256": "4c3114ca7dc301fe79e55559c21bc647fa2290b4356b6389096ea960b2896646",
+    "stderrBytes": 0,
+    "verdict": "PASS",
+    "evidenceHash": "sha256:24423484552fb656906888f8d90c96fa0e8140bdc8739451dceec75d5091acff"
+  },
+  "freezeIntegrity": {
+    "manifestHash": "sha256:f7210ac39e7e5b8fc97bf62608b57994c454c1f4c84ba7f97d28c179df0204b2",
+    "protectedSemanticFiles": 220,
+    "builtArtifactHashes": 142,
+    "caseInputAnnotationPolicyTriples": 60,
+    "postObservationProtectedChanges": 0,
+    "cleanBuildReproductionByteIdentical": true
+  },
+  "results": {
+    "contractCorrectness": "PASS",
+    "primarySelectionEffectiveness": "PASS",
+    "misleadingRiskDisclosure": "PASS",
+    "heldOutEvidenceAwareContextSelection": "PASS",
+    "requiredGates": 19,
+    "passedGates": 19,
+    "gateObservations": 775,
+    "counts": {
+      "cases": 60,
+      "successes": 43,
+      "expectedFailures": 17,
+      "matchedExpectedFailures": 17,
+      "unexpectedFailures": 0,
+      "unexpectedSuccesses": 0,
+      "wrappers": 280,
+      "successfulWrappers": 206,
+      "groups": 162,
+      "admitted": 127,
+      "admittedUnderUncertainty": 36,
+      "included": 123,
+      "filtered": 35,
+      "budgetExcluded": 4
+    },
+    "primaryRatios": {
+      "usefulBlockRecall": {
+        "numerator": 78,
+        "denominator": 78,
+        "micro": 1,
+        "macro": 1,
+        "measuredCases": 41,
+        "distribution": {
+          "count": 41,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p90": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "leaveOneRequestOutMicroRange": {
+          "minimum": 1,
+          "maximum": 1
+        }
+      },
+      "usefulFactCoverage": {
+        "numerator": 86,
+        "denominator": 86,
+        "micro": 1,
+        "macro": 1,
+        "measuredCases": 41,
+        "distribution": {
+          "count": 41,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p90": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "leaveOneRequestOutMicroRange": {
+          "minimum": 1,
+          "maximum": 1
+        }
+      },
+      "criticalFactCoverage": {
+        "numerator": 41,
+        "denominator": 41,
+        "micro": 1,
+        "macro": 1,
+        "measuredCases": 41,
+        "distribution": {
+          "count": 41,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p90": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "leaveOneRequestOutMicroRange": {
+          "minimum": 1,
+          "maximum": 1
+        }
+      },
+      "weightedRequiredFactCoverage": {
+        "numerator": 213,
+        "denominator": 213,
+        "micro": 1,
+        "macro": 1,
+        "measuredCases": 41,
+        "distribution": {
+          "count": 41,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p90": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "leaveOneRequestOutMicroRange": {
+          "minimum": 1,
+          "maximum": 1
+        }
+      },
+      "optionalAdmissionPrecision": {
+        "numerator": 69,
+        "denominator": 114,
+        "micro": 0.6052631578947368,
+        "macro": 0.7134146341463414,
+        "measuredCases": 41,
+        "distribution": {
+          "count": 41,
+          "mean": 0.7134146341463414,
+          "median": 0.5,
+          "p10": 0.3333333333333333,
+          "p90": 1,
+          "minimum": 0.25,
+          "maximum": 1
+        },
+        "leaveOneRequestOutMicroRange": {
+          "minimum": 0.5982142857142857,
+          "maximum": 0.6181818181818182
+        }
+      },
+      "optionalAdmissionRecall": {
+        "numerator": 69,
+        "denominator": 69,
+        "micro": 1,
+        "macro": 1,
+        "measuredCases": 41,
+        "distribution": {
+          "count": 41,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p90": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "leaveOneRequestOutMicroRange": {
+          "minimum": 1,
+          "maximum": 1
+        }
+      },
+      "runtimeRequiredGroupRecall": {
+        "numerator": 9,
+        "denominator": 9,
+        "micro": 1,
+        "macro": 1,
+        "measuredCases": 9,
+        "distribution": {
+          "count": 9,
+          "mean": 1,
+          "median": 1,
+          "p10": 1,
+          "p90": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "leaveOneRequestOutMicroRange": {
+          "minimum": 1,
+          "maximum": 1
+        }
+      },
+      "irrelevantRejection": {
+        "numerator": 35,
+        "denominator": 76,
+        "micro": 0.4605263157894737,
+        "macro": 0.4722222222222222,
+        "measuredCases": 36,
+        "distribution": {
+          "count": 36,
+          "mean": 0.4722222222222222,
+          "median": 0.5,
+          "p10": 0,
+          "p90": 1,
+          "minimum": 0,
+          "maximum": 1
+        },
+        "leaveOneRequestOutMicroRange": {
+          "minimum": 0.4383561643835616,
+          "maximum": 0.4794520547945205
+        }
+      }
+    },
+    "eligibleReduction": {
+      "fullRenderedTokens": 5245,
+      "compiledRenderedTokens": 2022,
+      "tokensSaved": 3223,
+      "ratio": 0.6144899904671115,
+      "distribution": {
+        "count": 21,
+        "mean": 0.6160571167235037,
+        "median": 0.6680161943319838,
+        "p10": 0.4383561643835616,
+        "p90": 0.71875,
+        "minimum": 0.4280442804428044,
+        "maximum": 0.7515923566878981
+      }
+    },
+    "misleadingRisk": {
+      "counts": {
+        "cases": 2,
+        "successes": 2,
+        "expectedFailures": 0,
+        "matchedExpectedFailures": 0,
+        "unexpectedFailures": 0,
+        "unexpectedSuccesses": 0,
+        "wrappers": 8,
+        "successfulWrappers": 8,
+        "groups": 8,
+        "admitted": 4,
+        "admittedUnderUncertainty": 0,
+        "included": 4,
+        "filtered": 4,
+        "budgetExcluded": 0
+      },
+      "ratios": {
+        "usefulBlockRecall": {
+          "numerator": 0,
+          "denominator": 4,
+          "micro": 0,
+          "macro": 0,
+          "measuredCases": 2,
+          "distribution": {
+            "count": 2,
+            "mean": 0,
+            "median": 0,
+            "p10": 0,
+            "p90": 0,
+            "minimum": 0,
+            "maximum": 0
+          },
+          "leaveOneRequestOutMicroRange": {
+            "minimum": 0,
+            "maximum": 0
+          }
+        },
+        "usefulFactCoverage": {
+          "numerator": 0,
+          "denominator": 4,
+          "micro": 0,
+          "macro": 0,
+          "measuredCases": 2,
+          "distribution": {
+            "count": 2,
+            "mean": 0,
+            "median": 0,
+            "p10": 0,
+            "p90": 0,
+            "minimum": 0,
+            "maximum": 0
+          },
+          "leaveOneRequestOutMicroRange": {
+            "minimum": 0,
+            "maximum": 0
+          }
+        },
+        "criticalFactCoverage": {
+          "numerator": 0,
+          "denominator": 2,
+          "micro": 0,
+          "macro": 0,
+          "measuredCases": 2,
+          "distribution": {
+            "count": 2,
+            "mean": 0,
+            "median": 0,
+            "p10": 0,
+            "p90": 0,
+            "minimum": 0,
+            "maximum": 0
+          },
+          "leaveOneRequestOutMicroRange": {
+            "minimum": 0,
+            "maximum": 0
+          }
+        },
+        "weightedRequiredFactCoverage": {
+          "numerator": 0,
+          "denominator": 10,
+          "micro": 0,
+          "macro": 0,
+          "measuredCases": 2,
+          "distribution": {
+            "count": 2,
+            "mean": 0,
+            "median": 0,
+            "p10": 0,
+            "p90": 0,
+            "minimum": 0,
+            "maximum": 0
+          },
+          "leaveOneRequestOutMicroRange": {
+            "minimum": 0,
+            "maximum": 0
+          }
+        },
+        "optionalAdmissionPrecision": {
+          "numerator": 0,
+          "denominator": 4,
+          "micro": 0,
+          "macro": 0,
+          "measuredCases": 2,
+          "distribution": {
+            "count": 2,
+            "mean": 0,
+            "median": 0,
+            "p10": 0,
+            "p90": 0,
+            "minimum": 0,
+            "maximum": 0
+          },
+          "leaveOneRequestOutMicroRange": {
+            "minimum": 0,
+            "maximum": 0
+          }
+        },
+        "optionalAdmissionRecall": {
+          "numerator": 0,
+          "denominator": 4,
+          "micro": 0,
+          "macro": 0,
+          "measuredCases": 2,
+          "distribution": {
+            "count": 2,
+            "mean": 0,
+            "median": 0,
+            "p10": 0,
+            "p90": 0,
+            "minimum": 0,
+            "maximum": 0
+          },
+          "leaveOneRequestOutMicroRange": {
+            "minimum": 0,
+            "maximum": 0
+          }
+        },
+        "runtimeRequiredGroupRecall": {
+          "numerator": 0,
+          "denominator": 0,
+          "micro": null,
+          "macro": null,
+          "measuredCases": 0,
+          "distribution": null,
+          "leaveOneRequestOutMicroRange": null
+        },
+        "irrelevantRejection": {
+          "numerator": 0,
+          "denominator": 4,
+          "micro": 0,
+          "macro": 0,
+          "measuredCases": 2,
+          "distribution": {
+            "count": 2,
+            "mean": 0,
+            "median": 0,
+            "p10": 0,
+            "p90": 0,
+            "minimum": 0,
+            "maximum": 0
+          },
+          "leaveOneRequestOutMicroRange": {
+            "minimum": 0,
+            "maximum": 0
+          }
+        }
+      },
+      "reduction": {
+        "fullRenderedTokens": 321,
+        "compiledRenderedTokens": 163,
+        "tokensSaved": 158,
+        "ratio": 0.49221183800623053,
+        "distribution": {
+          "count": 2,
+          "mean": 0.4922360248447205,
+          "median": 0.484472049689441,
+          "p10": 0.484472049689441,
+          "p90": 0.5,
+          "minimum": 0.484472049689441,
+          "maximum": 0.5
+        }
+      },
+      "correctness": {
+        "ratios": {
+          "provenanceCoverage": {
+            "numerator": 4,
+            "denominator": 4,
+            "micro": 1,
+            "macro": 1,
+            "measuredCases": 2,
+            "distribution": {
+              "count": 2,
+              "mean": 1,
+              "median": 1,
+              "p10": 1,
+              "p90": 1,
+              "minimum": 1,
+              "maximum": 1
+            },
+            "leaveOneRequestOutMicroRange": {
+              "minimum": 1,
+              "maximum": 1
+            }
+          },
+          "wrapperAccountingCompleteness": {
+            "numerator": 8,
+            "denominator": 8,
+            "micro": 1,
+            "macro": 1,
+            "measuredCases": 2,
+            "distribution": {
+              "count": 2,
+              "mean": 1,
+              "median": 1,
+              "p10": 1,
+              "p90": 1,
+              "minimum": 1,
+              "maximum": 1
+            },
+            "leaveOneRequestOutMicroRange": {
+              "minimum": 1,
+              "maximum": 1
+            }
+          },
+          "groupDecisionCompleteness": {
+            "numerator": 8,
+            "denominator": 8,
+            "micro": 1,
+            "macro": 1,
+            "measuredCases": 2,
+            "distribution": {
+              "count": 2,
+              "mean": 1,
+              "median": 1,
+              "p10": 1,
+              "p90": 1,
+              "minimum": 1,
+              "maximum": 1
+            },
+            "leaveOneRequestOutMicroRange": {
+              "minimum": 1,
+              "maximum": 1
+            }
+          },
+          "decisionReasonCoverage": {
+            "numerator": 20,
+            "denominator": 20,
+            "micro": 1,
+            "macro": 1,
+            "measuredCases": 2,
+            "distribution": {
+              "count": 2,
+              "mean": 1,
+              "median": 1,
+              "p10": 1,
+              "p90": 1,
+              "minimum": 1,
+              "maximum": 1
+            },
+            "leaveOneRequestOutMicroRange": {
+              "minimum": 1,
+              "maximum": 1
+            }
+          },
+          "traceReconciliationRate": {
+            "numerator": 2,
+            "denominator": 2,
+            "micro": 1,
+            "macro": 1,
+            "measuredCases": 2,
+            "distribution": {
+              "count": 2,
+              "mean": 1,
+              "median": 1,
+              "p10": 1,
+              "p90": 1,
+              "minimum": 1,
+              "maximum": 1
+            },
+            "leaveOneRequestOutMicroRange": {
+              "minimum": 1,
+              "maximum": 1
+            }
+          }
+        },
+        "budgetViolations": 0,
+        "crossScopeInclusions": 0,
+        "contractMismatches": 0,
+        "repeatComparisons": 4,
+        "repeatMismatches": 0,
+        "additionalCompilationDisagreements": 0
+      }
+    }
+  },
+  "historicalV1": {
+    "gatesCompared": 23,
+    "allGatesEqual": true,
+    "allCountsAndAggregatesEqual": true,
+    "caseEvidenceEqualExcept": [
+      "compilationLatencyMilliseconds"
+    ],
+    "engineeringAcceptance": "INCOMPLETE",
+    "productValidationAcceptance": "FAIL",
+    "counts": {
+      "cases": 13,
+      "successfulCompilations": 11,
+      "expectedFailureCases": 2,
+      "expectedFailuresMatched": 2,
+      "unexpectedFailures": 0,
+      "providerFailures": 0,
+      "determinismFailures": 0,
+      "budgetViolations": 0,
+      "severeQualityLosses": 0,
+      "modelIdentityMismatches": 0
+    }
+  },
+  "historicalReports": [
+    {
+      "report": "diagnostic",
+      "byteIdenticalToBaseline": true,
+      "sha256": "bc4bb91e7e9b2a5b7152cf1cde902d4f7973478a5076b064a3cb47d14955bd1b"
+    },
+    {
+      "report": "development",
+      "byteIdenticalToBaseline": true,
+      "sha256": "123741582dc2c3d813f682c6107cbf2b3dd542533853a31522aa8d91e70227a0"
+    },
+    {
+      "report": "history",
+      "byteIdenticalToBaseline": true,
+      "sha256": "de963c116665bd675787553114a2810867cffb18699290959b72a655bf9c3f20"
+    },
+    {
+      "report": "evidence",
+      "byteIdenticalToBaseline": true,
+      "sha256": "6ed98f14c75c036c37eceab22ef1bb580a796502f83650f4b243e1efbbad800a"
+    }
+  ],
+  "phase21CIntegrity": {
+    "schemaVersion": 1,
+    "verification": "historical-artifact-integrity-only",
+    "status": "PASS",
+    "mergedBaseline": "087078538adad2f353812117c3fe1353a49cc505",
+    "protocolRevision": "36d468aee5e34d287df43aaf971cd25984b08453",
+    "originalFreezeRevision": "2319e902de318af9598f4b6508649cfc69873319",
+    "immutableWorkingFilesVerified": 21,
+    "originalSemanticsFilesVerifiedAgainstMergedTree": 155,
+    "originalBuiltArtifactHashesPreserved": 123,
+    "changedCompilerExecuted": false,
+    "originalExecutableReproduced": false,
+    "caseCount": 48,
+    "caseInputAnnotationPolicyHashesVerified": 48,
+    "successfulCompilations": 22,
+    "expectedFailures": 4,
+    "unexpectedFailures": 22,
+    "heldOutContextSelectionValidation": "FAIL",
+    "gates": [
+      {
+        "id": "failures",
+        "state": "FAIL"
+      },
+      {
+        "id": "required-blocks",
+        "state": "FAIL"
+      },
+      {
+        "id": "required-facts",
+        "state": "FAIL"
+      },
+      {
+        "id": "critical-facts",
+        "state": "FAIL"
+      },
+      {
+        "id": "useful-preservation",
+        "state": "FAIL"
+      },
+      {
+        "id": "admission-quality",
+        "state": "FAIL"
+      },
+      {
+        "id": "reduction",
+        "state": "NOT_EVALUATED"
+      },
+      {
+        "id": "budget",
+        "state": "PASS"
+      },
+      {
+        "id": "scope",
+        "state": "PASS"
+      },
+      {
+        "id": "accounting",
+        "state": "PASS"
+      },
+      {
+        "id": "determinism",
+        "state": "PASS"
+      },
+      {
+        "id": "applicability",
+        "state": "PASS"
+      },
+      {
+        "id": "runtime-required",
+        "state": "PASS"
+      }
+    ],
+    "manifestHash": "sha256:36a0e5c13243991fe861d40b162a9aaf9eaeb839bb25b26f71c25014174baba3",
+    "firstReportSha256": "sha256:3144a9f8c505f46c45e142dccf1da24feef149a38ed280d630910aa39945a4e1",
+    "evidenceHash": "sha256:176c9642c61e97f44aa2e02776be2e038c6c1d5363f68e1c8723dd52c78037d5"
+  },
+  "phase21DDevelopment": {
+    "contractCorrectness": "PASS",
+    "counts": {
+      "cases": 27,
+      "inputCandidateWrappers": 39,
+      "successfulCompilations": 21,
+      "expectedFailures": 6,
+      "unexpectedOutcomes": 0,
+      "checks": 255,
+      "passedChecks": 255,
+      "successfulCandidateWrappers": 33,
+      "groups": 30,
+      "admitted": 22,
+      "admittedUnderUncertainty": 10,
+      "included": 21,
+      "budgetExcluded": 1,
+      "filtered": 8,
+      "required": 4,
+      "requiredIncluded": 4
+    },
+    "productValidation": "NOT_EVALUATED"
+  },
+  "baselineValidation": {
+    "baseline": "9dceacbd320ddaaa642b2484d876cec21c302d06",
+    "steps": 22,
+    "tests": 3790,
+    "testFiles": 181,
+    "workspaces": 11,
+    "buildProjects": 11,
+    "declarations": 76,
+    "apiSmokeChecks": 12,
+    "historicalV1GatesEqual": 23,
+    "historicalV1EvidenceEqualExceptLatency": true,
+    "phase21ADiagnosticByteIdentical": true,
+    "phase21BDevelopmentByteIdentical": true,
+    "phase21CHistoryByteIdentical": true,
+    "phase21DDevelopmentByteIdentical": true,
+    "phase21COriginalHeldout": "FAIL"
+  },
+  "finalValidation": {
+    "steps": [
+      {
+        "step": "01-clean",
+        "status": "PASS"
+      },
+      {
+        "step": "02-install",
+        "status": "PASS"
+      },
+      {
+        "step": "03-format",
+        "status": "PASS"
+      },
+      {
+        "step": "04-lint",
+        "status": "PASS"
+      },
+      {
+        "step": "05-typecheck",
+        "status": "PASS"
+      },
+      {
+        "step": "06-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "07-tests",
+        "status": "PASS"
+      },
+      {
+        "step": "08-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "09-boundaries",
+        "status": "PASS"
+      },
+      {
+        "step": "10-check",
+        "status": "PASS"
+      },
+      {
+        "step": "11-no-dist",
+        "status": "PASS"
+      },
+      {
+        "step": "12-build",
+        "status": "PASS"
+      },
+      {
+        "step": "13-declarations",
+        "status": "PASS"
+      },
+      {
+        "step": "14-cli-smoke",
+        "status": "PASS"
+      },
+      {
+        "step": "15-api-smoke",
+        "status": "PASS"
+      },
+      {
+        "step": "16-acceptance",
+        "status": "PASS"
+      },
+      {
+        "step": "17-diagnostic",
+        "status": "PASS"
+      },
+      {
+        "step": "18-development",
+        "status": "PASS"
+      },
+      {
+        "step": "19-history",
+        "status": "PASS"
+      },
+      {
+        "step": "20-evidence",
+        "status": "PASS"
+      },
+      {
+        "step": "21-heldout-v2",
+        "status": "PASS"
+      },
+      {
+        "step": "22-diff-check",
+        "status": "PASS"
+      },
+      {
+        "step": "23-status",
+        "status": "PASS"
+      }
+    ],
+    "testFiles": 184,
+    "tests": 3802,
+    "newTestFiles": 3,
+    "newTests": 12,
+    "workspaceBoundaries": 11,
+    "buildProjects": 11,
+    "publicDeclarations": 76,
+    "builtCliSmoke": "PASS",
+    "builtApiSmokeChecks": 12
+  },
+  "audit": {
+    "schemaVersion": 1,
+    "protectedRawBodiesInFirstReport": 0,
+    "queriesInFirstReport": 0,
+    "trackedBuildSecretOrDatabaseArtifacts": [],
+    "credentialPatternMatchesInChangedFiles": 0,
+    "sourceTreeTemporaryDatabaseFiles": [],
+    "changedCompilerOrHistoricalFiles": [],
+    "firstReportSHA256": "4c3114ca7dc301fe79e55559c21bc647fa2290b4356b6389096ea960b2896646",
+    "authoringAudit": {
+      "schemaVersion": 1,
+      "protocolRevision": "2e1db08110523d532775a041a8406f75c624c088",
+      "cases": 60,
+      "uniqueQueries": 60,
+      "uniqueSourceContents": 230,
+      "blockRecords": 260,
+      "sourceTypes": {
+        "text": 85,
+        "markdown": 90,
+        "conversation": 85
+      },
+      "priorLiteralMatches": 0,
+      "crossCaseContentReuse": 0,
+      "compilationOrSelectionExecuted": false,
+      "comparisonPaths": [
+        "benchmarks/heldout/v1/cases.json",
+        "benchmarks/evidence-development/cases.ts",
+        "benchmarks/admission-development/cases.ts",
+        "benchmarks/evaluation/v1/fixtures.ts"
+      ]
+    },
+    "checkedChangedFiles": 26,
+    "allWorkspaceResidualDatabaseFiles": []
+  },
+  "limits": [
+    "Synthetic author-labeled requests are not representative population evidence",
+    "Misleading complete evidence preserves 0/4 useful facts despite contract correctness",
+    "Admission under uncertainty preserves useful groups but may retain irrelevant context",
+    "Incomplete-reject returns only three successful contexts; nine expected failures are separate coverage",
+    "Phase 21C immutable held-out FAIL unchanged",
+    "Live answer quality NOT_EVALUATED; full Product Validation PASS is not established",
+    "Distinct protocol/freeze ancestry is required for executable reproduction; do not squash it away"
+  ],
+  "changedFiles": 26
+}
