@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "id": "ctxalloc-phase21e-squash-reanchor",
+  "version": "1",
+  "experiment": {
+    "id": "ctxalloc-heldout-v2",
+    "version": "1",
+    "phase": "21E",
+    "protocolRevision": "2e1db08110523d532775a041a8406f75c624c088",
+    "freezeRevision": "ebebc9b5671fc55acee4eb84fce047821d1c5ea2",
+    "resultsRevision": "210efbd015b98499454a3d48dbe1208b668fdc30",
+    "finalHead": "8dbba53b3d1d8719f932458f3e2c85e1ca264cd3",
+    "finalTreeOid": "30c355fa7b079c0f98d91f494fb4feb7e12faef0"
+  },
+  "integration": {
+    "revision": "f4c3c999ee6afc3fe52ea606fcd6fdca1053d06c",
+    "treeOid": "30c355fa7b079c0f98d91f494fb4feb7e12faef0",
+    "treeEqualityProven": true,
+    "originalExperimentCommitsAreAncestors": false
+  },
+  "oneTimeProof": {
+    "originalChainVerified": true,
+    "completeGitTreeEqualityVerified": true,
+    "originalFreezeSemanticFilesVerified": 220,
+    "originalFinalHeadSource": "PR #26 API metadata, refs/pull/26/head and locally available original Git object."
+  },
+  "firstReport": {
+    "path": "docs/evidence/phase21e-first-run.json",
+    "sha256": "sha256:4c3114ca7dc301fe79e55559c21bc647fa2290b4356b6389096ea960b2896646",
+    "evidenceHash": "sha256:24423484552fb656906888f8d90c96fa0e8140bdc8739451dceec75d5091acff"
+  },
+  "frozenManifest": {
+    "path": "benchmarks/heldout-v2/v2/freeze.json",
+    "sha256": "sha256:f7210ac39e7e5b8fc97bf62608b57994c454c1f4c84ba7f97d28c179df0204b2"
+  },
+  "frozenArtifacts": [
+    {
+      "path": "benchmarks/heldout-v2/aggregate.ts",
+      "sha256": "sha256:154190207e12b5e01fccc5344c155b3feb281a6221ddd853695a0d1ccb10dbce"
+    },
+    {
+      "path": "benchmarks/heldout-v2/data.ts",
+      "sha256": "sha256:7b3756777982c80a81d0d3f3133d3461ac3193919885c59e34861147189a1847"
+    },
+    {
+      "path": "benchmarks/heldout-v2/freeze.ts",
+      "sha256": "sha256:b10f67f31854217339c7e7089fd1714707f2d86ad3ec7f010fa557df4e0c72e2"
+    },
+    {
+      "path": "benchmarks/heldout-v2/gates.ts",
+      "sha256": "sha256:cee8fad8ec1d3dce424898afc05b4da588b04c105f4c8109f0c3b2577d0a47b1"
+    },
+    {
+      "path": "benchmarks/heldout-v2/integrity.ts",
+      "sha256": "sha256:b505cd3f490a62f7127b54840e73ed8a074068e8eeac1e86a29533d84cb29be7"
+    },
+    {
+      "path": "benchmarks/heldout-v2/metrics.ts",
+      "sha256": "sha256:ca9f2ca8fa3232f031d327fe4f91cb07909bd5b91ebfce189928bd81c1e07865"
+    },
+    {
+      "path": "benchmarks/heldout-v2/observe.ts",
+      "sha256": "sha256:e08534b0352bb02440032b9d8cb710c2e9917c60aa9744d372a1c4007e83622b"
+    },
+    {
+      "path": "benchmarks/heldout-v2/prepare.ts",
+      "sha256": "sha256:a2bfd39c8b01ca130f0e602ea52be84e86b5ec3302ec2c88646e68c68d9b569d"
+    },
+    {
+      "path": "benchmarks/heldout-v2/profiles.ts",
+      "sha256": "sha256:ce55eee153a31a2e2d7cc2dab07d323aeb8f6ae07d8a5436cb87f878be7d5668"
+    },
+    {
+      "path": "benchmarks/heldout-v2/protocol.ts",
+      "sha256": "sha256:32f265a35ffb309dcf7091e74a32beffffd62aed743a3a09cbf14a5f35ace444"
+    },
+    {
+      "path": "benchmarks/heldout-v2/run.ts",
+      "sha256": "sha256:dfbd3867fca6fb483be70ec98cf77dfccdf4be95f6cf0f3a9d85dc4369b286a4"
+    },
+    {
+      "path": "benchmarks/heldout-v2/types.ts",
+      "sha256": "sha256:344e2fc36825ab0143491c3440cdfd10d7295057fee157c8c2ba8a8a5ab34742"
+    },
+    {
+      "path": "benchmarks/heldout-v2/v2/authoring.json",
+      "sha256": "sha256:56e07c1fc64a71555e08b411261790f660fe63b64d76a06da4a104705582ba64"
+    },
+    {
+      "path": "benchmarks/heldout-v2/v2/cases.json",
+      "sha256": "sha256:134dd4c7f8759c4c6931705c439efa09d802d7adebd9ce7fc700955920a74b5a"
+    },
+    {
+      "path": "benchmarks/heldout-v2/v2/freeze.json",
+      "sha256": "sha256:f7210ac39e7e5b8fc97bf62608b57994c454c1f4c84ba7f97d28c179df0204b2"
+    },
+    {
+      "path": "docs/PHASE21E_HELD_OUT_PROTOCOL.md",
+      "sha256": "sha256:02d890e372d462fffda887f7d0b134f28afffcd16e320ad007411a3dbcd89df5"
+    },
+    {
+      "path": "docs/evidence/phase21e-first-run.json",
+      "sha256": "sha256:4c3114ca7dc301fe79e55559c21bc647fa2290b4356b6389096ea960b2896646"
+    },
+    {
+      "path": "tests/heldout-v2/integrity.test.ts",
+      "sha256": "sha256:e84351fe5fbed50b8e63e9232ece4479fc7af393480730be451ca1c583b14300"
+    },
+    {
+      "path": "tests/heldout-v2/observation.test.ts",
+      "sha256": "sha256:8fc7c806293cdb618f09a5ccc9d51eb2160ac50b6bb5a4c2a4f8430d1aff92e3"
+    },
+    {
+      "path": "tests/heldout-v2/preparation.test.ts",
+      "sha256": "sha256:b0705c7e64e4230d8032e9b41aba11d98ddc6e25ef34e053fd5ef60c08de806c"
+    },
+    {
+      "path": "tests/heldout-v2/toy-fixtures.ts",
+      "sha256": "sha256:d1270107867cb4c592e961b6ab20a425e013350cb7813dbe394635a931929d63"
+    }
+  ],
+  "semanticInventory": {
+    "count": 220,
+    "sha256": "sha256:291a76cc5a628807edb553683fd70bcfeae92928286759bc08e0602ec86880db",
+    "unchangedAtIntegration": 218,
+    "postObservationExceptions": [
+      {
+        "path": ".github/workflows/ci.yml",
+        "originalSha256": "sha256:acaed717a42f7425970d6bbb048290d5a2473bfaee3d8d15d87f9f0343800abe",
+        "integrationSha256": "sha256:d4f695d82ac20ecba7a3751d6f6da022bedee50c2fa64f9223f224e28db22fb8",
+        "originalUtf8": "name: CI\n\non:\n  push:\n    branches: [main]\n  pull_request:\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n\n      - name: Set up Node.js\n        uses: actions/setup-node@v4\n        with:\n          node-version-file: .nvmrc\n\n      - name: Enable Corepack\n        run: corepack enable\n\n      - name: Install dependencies\n        run: pnpm install --frozen-lockfile\n\n      - name: Validate\n        run: pnpm check\n\n      - name: Build\n        run: pnpm build\n\n      - name: Validate declarations\n        run: pnpm check:declarations\n\n      - name: Smoke-test the built CLI\n        run: pnpm smoke:cli\n\n      - name: Smoke-test the built HTTP API\n        run: pnpm smoke:api\n\n      - name: Measure deterministic MVP acceptance\n        run: pnpm acceptance:mvp\n\n      - name: Diagnose frozen validation selection\n        run: pnpm diagnose:selection\n\n      - name: Evaluate development admission semantics\n        run: pnpm development:admission\n\n      - name: Verify immutable Phase 21C historical evidence\n        run: pnpm validation:heldout:historical\n\n      - name: Evaluate development evidence contracts\n        run: pnpm development:evidence\n\n      - name: Reproduce second frozen held-out evidence\n        run: pnpm validation:heldout:v2\n",
+        "reason": "Post-observation command/CI wiring disclosed in original Phase 21E handoff; original selection semantics unchanged."
+      },
+      {
+        "path": "package.json",
+        "originalSha256": "sha256:02e8b10f023524c6b2c2a501588cf58cd75c96c3b854a8c8f4324c7854ce1334",
+        "integrationSha256": "sha256:c0362b2cf8436a833a60801abdb348f57c06bc99098930d8fa1ebc892f70e6b8",
+        "originalUtf8": "{\n  \"name\": \"ctxalloc\",\n  \"version\": \"0.0.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"packageManager\": \"pnpm@10.33.0\",\n  \"engines\": {\n    \"node\": \">=22 <23\",\n    \"pnpm\": \">=10\"\n  },\n  \"scripts\": {\n    \"build\": \"tsc -b\",\n    \"typecheck\": \"tsc -p tsconfig.typecheck.json\",\n    \"lint\": \"eslint . --max-warnings=0\",\n    \"test\": \"vitest run\",\n    \"format\": \"prettier --write .\",\n    \"format:check\": \"prettier --check .\",\n    \"check:boundaries\": \"node scripts/check-boundaries.mjs\",\n    \"check:declarations\": \"node scripts/check-declarations.mjs\",\n    \"smoke:cli\": \"node scripts/smoke-cli.mjs\",\n    \"check\": \"pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run check:boundaries\",\n    \"clean\": \"node scripts/clean.mjs\",\n    \"smoke:api\": \"node scripts/smoke-api.mjs\",\n    \"acceptance:mvp\": \"node benchmarks/dist/acceptance/run.js\",\n    \"acceptance:mvp:live\": \"node benchmarks/dist/acceptance/live.js\",\n    \"performance:mvp\": \"node benchmarks/dist/acceptance/run.js --performance\",\n    \"diagnose:selection\": \"node benchmarks/dist/diagnostics/run.js\",\n    \"development:admission\": \"node benchmarks/dist/admission-development/run.js\",\n    \"validation:heldout\": \"node benchmarks/dist/heldout/run.js\",\n    \"validation:heldout:historical\": \"node benchmarks/dist/historical/run.js\",\n    \"development:evidence\": \"node benchmarks/dist/evidence-development/run.js\",\n    \"validation:heldout:v2\": \"node benchmarks/dist/heldout-v2/run.js\"\n  },\n  \"devDependencies\": {\n    \"@eslint/js\": \"^9.17.0\",\n    \"@types/node\": \"^22.10.0\",\n    \"eslint\": \"^9.17.0\",\n    \"globals\": \"^15.14.0\",\n    \"prettier\": \"^3.4.0\",\n    \"typescript\": \"^5.7.2\",\n    \"typescript-eslint\": \"^8.18.0\",\n    \"vitest\": \"^3.0.0\"\n  }\n}\n",
+        "reason": "Post-observation command/CI wiring disclosed in original Phase 21E handoff; original selection semantics unchanged."
+      }
+    ]
+  },
+  "builtArtifactIdentities": {
+    "count": 142,
+    "sha256": "sha256:863802af5b22215343cdd3ac3f169fcc153990bd99b2a3abb10c3758d758b1dc",
+    "semantics": "Original JavaScript hashes retained in the authenticated frozen manifest; no rebuild or executable reproduction is asserted by this verifier."
+  },
+  "caseHashTriples": {
+    "count": 60,
+    "sha256": "sha256:fe63055ae78376d8c5488229228895d0021e826306d16df82e7b36eacd19c988"
+  },
+  "verificationSemantics": {
+    "kind": "historical-integrity-after-squash-integration",
+    "compilerExecuted": false,
+    "selectionExecuted": false,
+    "originalExecutableReproduced": false,
+    "originalAncestryRestored": false,
+    "orphanedCommitsRequired": false,
+    "historicalContentSource": "canonical integration revision; two original freeze wiring snapshots embedded above",
+    "currentFilesRequired": "authenticated re-anchor manifest must match its committed HEAD bytes",
+    "explanation": "PR #26 was squash-merged. Original chronology identities are retained as provenance; content equality does not restore their ancestry or make the integration revision the original freeze."
+  }
+}
