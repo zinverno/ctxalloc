@@ -177,6 +177,39 @@ hashes, counts and two public wiring snapshots. It contains no private notes,
 conversations, user queries, credentials, machine paths or timestamps. Original
 reports and existing historical validation remain separate artifacts.
 
-The final regression and artifact audit results are recorded after the
-implementation commit, so the CLI can authenticate an actually committed
-re-anchor manifest.
+[Regression evidence](evidence/phase21e-reanchor-verification.json) records
+21 completed command checks at implementation revision
+`b24137c9e9f99ab223eac451f2d49530d9426b97`, including the expected exit 1 from
+the unchanged old historical command. The [new deterministic verifier output](evidence/phase21e-reanchored-history.json)
+is stored separately from the original evidence; its stdout SHA-256 is
+`88781cd86805b955b5b199aa84c0af780b0238713dd7f6bc1b25793594e4bd4c`.
+
+| Check | Result |
+| --- | --- |
+| Clean; frozen install | PASS; Node 22.23.2, pnpm 10.33.0; lockfile unchanged |
+| Format; lint; typecheck | PASS; zero lint warnings |
+| Standalone complete tests | 186 files / 3,830 tests; no skips |
+| Aggregate check | PASS; same 186 files / 3,830 tests |
+| No generated dist after either test run | PASS |
+| Boundaries; clean build | 11 workspace packages / 11 TypeScript build projects |
+| Declarations | 76 public declarations |
+| Built CLI smoke | PASS; executable and cross-process persistence |
+| Built API smoke | 12/12 checks |
+| Historical v1 | 23 gates equal; 13 cases, 11 successes, two expected failures; Product Validation FAIL unchanged |
+| Phase 21A/B/C-integrity/D | All four outputs byte-identical to the recorded Phase 21E baseline |
+| Phase 21B | 20/20 development cases |
+| Phase 21D | 27 cases; 21 successes, six expected failures; 255/255 contract checks |
+| Original Phase 21E historical command | PASS on original final head; expected ancestry rejection on merged lineage |
+| New Phase 21E re-anchored command | Integrity PASS; historical selection PASS unchanged |
+| Original built JavaScript audit | All 142 hashes match the clean build |
+| Frozen working artifact audit | All 21 Phase 21E artifacts byte-identical |
+| Artifact/privacy/database and diff audits | No forbidden tracked artifacts, credential-pattern matches, residual database files or protected compiler/history changes |
+
+Historical v1 comparisons exclude measured latency, timestamps, derived report
+hashes, source/environment metadata and its optional performance mode, which was
+not run. All remaining evaluation evidence, counts and gates match the preserved
+reference. SQLite emits its existing experimental warning during regression
+checks. Neither warning changes a verdict. Local validation logs and the
+one-time original checkout remain outside committed evidence. The final PR
+head receives the same CI checks; this document does not claim an experiment
+reproduction from that CI run.
