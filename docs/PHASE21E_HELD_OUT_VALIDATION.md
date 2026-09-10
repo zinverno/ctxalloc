@@ -1,5 +1,7 @@
 # Phase 21E: second frozen held-out validation
 
+Integration update: PR #26 was squash-merged and the original experiment commits are not ancestors of main. [Phase 21E-R](PHASE21E_REANCHOR.md) records exact handoff/integration tree equality and provides a separate versioned historical verifier. The original PASS, ancestry warning and report remain unchanged.
+
 **Held-out evidence-aware context selection: PASS.** All 19 preregistered gates and 775 individual checks passed on the first execution. Contract correctness, primary selection effectiveness and misleading-risk disclosure each passed. This is bounded offline context-selection evidence; it is **not full Product Validation PASS**. Live answer quality remains NOT_EVALUATED.
 
 The 60 requests produced 43 intended successes and all 17 expected structured failures, with zero unexpected outcomes. The 41 primary successes preserved 78/78 useful groups, 86/86 useful facts, 41/41 critical facts and 213/213 weighted required facts. All nine runtime-required groups survived. The two misleading-complete cases preserved 0/4 useful facts and admitted all four irrelevant groups, despite being contract-correct. Their results remain in every ordinary aggregate below.

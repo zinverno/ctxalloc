@@ -1,0 +1,354 @@
+{
+  "schemaVersion": 1,
+  "phase": "21E-R",
+  "purpose": "Historical-integrity maintenance after squash integration; no new held-out execution",
+  "baselineRevision": "f4c3c999ee6afc3fe52ea606fcd6fdca1053d06c",
+  "baselineWorkingTreeClean": true,
+  "implementationRevision": "b24137c9e9f99ab223eac451f2d49530d9426b97",
+  "branch": "codex/phase-21e-reanchor",
+  "nodeVersion": "22.23.2",
+  "pnpmVersion": "10.33.0",
+  "commandChecks": [
+    {
+      "step": "clean",
+      "command": [
+        "pnpm",
+        "clean"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "frozen-install",
+      "command": [
+        "pnpm",
+        "install",
+        "--frozen-lockfile"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "format",
+      "command": [
+        "pnpm",
+        "format:check"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "lint",
+      "command": [
+        "pnpm",
+        "lint"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "typecheck",
+      "command": [
+        "pnpm",
+        "typecheck"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "tests",
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "boundaries",
+      "command": [
+        "pnpm",
+        "check:boundaries"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "aggregate-check",
+      "command": [
+        "pnpm",
+        "check"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "clean-before-build",
+      "command": [
+        "pnpm",
+        "clean"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "build",
+      "command": [
+        "pnpm",
+        "build"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "declarations",
+      "command": [
+        "pnpm",
+        "check:declarations"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "cli-smoke",
+      "command": [
+        "pnpm",
+        "smoke:cli"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "api-smoke",
+      "command": [
+        "pnpm",
+        "smoke:api"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "historical-v1",
+      "command": [
+        "pnpm",
+        "--silent",
+        "acceptance:mvp"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21a",
+      "command": [
+        "pnpm",
+        "--silent",
+        "diagnose:selection"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21b",
+      "command": [
+        "pnpm",
+        "--silent",
+        "development:admission"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21c-integrity",
+      "command": [
+        "pnpm",
+        "--silent",
+        "validation:heldout:historical"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21d",
+      "command": [
+        "pnpm",
+        "--silent",
+        "development:evidence"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "original-phase21e-ancestry-rejection",
+      "command": [
+        "pnpm",
+        "--silent",
+        "validation:heldout:v2:historical"
+      ],
+      "expectedExitCode": 1,
+      "exitCode": 1,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21e-reanchored",
+      "command": [
+        "pnpm",
+        "--silent",
+        "validation:heldout:v2:reanchored"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    }
+  ],
+  "commandCheckCount": 21,
+  "noDistAfterStandaloneAndAggregateTests": true,
+  "tests": {
+    "standalone": {
+      "files": 186,
+      "tests": 3830
+    },
+    "aggregate": {
+      "files": 186,
+      "tests": 3830
+    },
+    "newReanchorTests": 26,
+    "originalVerifierIntegrationTests": 2,
+    "previousOriginalVerifierTests": 7,
+    "netNewTests": 21,
+    "skippedTests": 0
+  },
+  "build": {
+    "projects": 11,
+    "workspaceBoundaries": 11,
+    "publicDeclarations": 76,
+    "cliSmoke": "PASS",
+    "apiSmokeChecks": 12,
+    "originalJavaScriptHashesMatchingCleanBuild": 142
+  },
+  "historicalV1": {
+    "reference": "docs/evidence/phase20-reference.json",
+    "gatesEqual": 23,
+    "counts": {
+      "cases": 13,
+      "successfulCompilations": 11,
+      "expectedFailureCases": 2,
+      "expectedFailuresMatched": 2,
+      "unexpectedFailures": 0,
+      "providerFailures": 0,
+      "determinismFailures": 0,
+      "budgetViolations": 0,
+      "severeQualityLosses": 0,
+      "modelIdentityMismatches": 0
+    },
+    "allNonTimingEvaluationEvidenceEqual": true,
+    "comparisonExcludes": [
+      "environment",
+      "sourceRevision",
+      "performance (optional performance mode not run)",
+      "evaluation timestamps, report hashes and latency",
+      "per-case compilationLatencyMilliseconds"
+    ],
+    "engineeringAcceptance": "INCOMPLETE",
+    "productValidationAcceptance": "FAIL"
+  },
+  "historicalComparisons": [
+    {
+      "report": "phase21a",
+      "byteIdenticalToRecordedPhase21EBaseline": true,
+      "sha256": "sha256:bc4bb91e7e9b2a5b7152cf1cde902d4f7973478a5076b064a3cb47d14955bd1b"
+    },
+    {
+      "report": "phase21b",
+      "byteIdenticalToRecordedPhase21EBaseline": true,
+      "sha256": "sha256:123741582dc2c3d813f682c6107cbf2b3dd542533853a31522aa8d91e70227a0"
+    },
+    {
+      "report": "phase21c-integrity",
+      "byteIdenticalToRecordedPhase21EBaseline": true,
+      "sha256": "sha256:de963c116665bd675787553114a2810867cffb18699290959b72a655bf9c3f20"
+    },
+    {
+      "report": "phase21d",
+      "byteIdenticalToRecordedPhase21EBaseline": true,
+      "sha256": "sha256:6ed98f14c75c036c37eceab22ef1bb580a796502f83650f4b243e1efbbad800a"
+    }
+  ],
+  "originalPhase21EVerifier": {
+    "originalHead": "8dbba53b3d1d8719f932458f3e2c85e1ca264cd3",
+    "originalHeadIntegrity": "PASS",
+    "compilerExecuted": false,
+    "originalHeadOutputMatchesCommittedHistoricalReport": true,
+    "mergedLineageResult": "expected ancestry rejection",
+    "implementationUnchanged": true
+  },
+  "reanchoredVerifier": {
+    "command": "pnpm --silent validation:heldout:v2:reanchored",
+    "status": "PASS",
+    "manifestSha256": "sha256:82dc0e77413573478caf9789f79474fcaa66235f9171044456e2b3246c9cf6fe",
+    "outputPath": "docs/evidence/phase21e-reanchored-history.json",
+    "outputSha256": "sha256:88781cd86805b955b5b199aa84c0af780b0238713dd7f6bc1b25793594e4bd4c",
+    "originalSemanticFilesVerified": 220,
+    "semanticFilesMatchingIntegration": 218,
+    "originalWiringSnapshotsVerified": 2,
+    "caseInputAnnotationPolicyHashesVerified": 60,
+    "builtIdentitiesPreserved": 142,
+    "compilerExecuted": false,
+    "selectionExecuted": false,
+    "originalExecutableReproduced": false,
+    "originalAncestryRestored": false,
+    "orphanedCommitsRequired": false
+  },
+  "historicalVerdicts": {
+    "phase21E": "PASS",
+    "phase21C": "FAIL",
+    "v1ProductValidation": "FAIL",
+    "reinterpretedOrPooled": false
+  },
+  "audit": {
+    "protectedCompilerOrFrozenHistoryChanges": [],
+    "frozenPhase21EWorkingArtifactsByteIdentical": 21,
+    "forbiddenTrackedArtifacts": [],
+    "credentialPatternMatches": 0,
+    "residualDatabaseFiles": [],
+    "newPrivateContent": false,
+    "newMachinePathsOrTimestampsInEvidence": false,
+    "trackedFilesAudited": 470,
+    "changedFilesAudited": 11
+  },
+  "scope": {
+    "phase21ESelectionExecuted": false,
+    "phase21CSelectionExecuted": false,
+    "regressionAndDevelopmentCompilerChecksExecuted": true,
+    "liveModelEvaluationExecuted": false,
+    "phase22AStarted": false
+  }
+}
