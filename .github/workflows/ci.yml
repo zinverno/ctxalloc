@@ -57,3 +57,6 @@ jobs:
 
       - name: Verify Phase 21E evidence after squash integration
         run: pnpm validation:heldout:v2:reanchored
+
+      - name: Calibrate real retrieval admission evidence (development only)
+        run: pnpm development:retrieval

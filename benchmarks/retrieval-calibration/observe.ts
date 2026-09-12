@@ -118,7 +118,26 @@ export async function observe(dataset: Dataset, tokenizer: Tokenizer) {
         expandedCorpus: paired(expanded),
       },
     };
-    rows.push({ query, prepared, candidates, summary });
+    const permutationDetails = {
+      sameRanks:
+        JSON.stringify(candidates.map((c) => c.block.id)) ===
+        JSON.stringify(permuted.map((c) => c.block.id)),
+      changedScores: candidates.filter(
+        (c) =>
+          c.retrieval!.score!.value !==
+          permuted.find((p) => p.block.id === c.block.id)?.retrieval?.score?.value,
+      ).length,
+      maxAbsoluteScoreDelta: Math.max(
+        0,
+        ...candidates.map((c) =>
+          Math.abs(
+            c.retrieval!.score!.value -
+              permuted.find((p) => p.block.id === c.block.id)!.retrieval!.score!.value,
+          ),
+        ),
+      ),
+    };
+    rows.push({ query, prepared, candidates, summary, permutationDetails });
   }
   return rows;
 }
