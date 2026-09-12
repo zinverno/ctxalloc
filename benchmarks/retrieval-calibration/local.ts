@@ -3,7 +3,7 @@ import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { parseDataset } from './data.js';
 
 /** Explicit JSON only: never scan directories, follow embedded paths or accept executable config. */
-export function loadLocalDataset(path: string, ignoredRoot = resolve('.ctxalloc')) {
+export function loadLocalJson(path: string, ignoredRoot = resolve('.ctxalloc')): unknown {
   const root = realpathSync(ignoredRoot);
   const file = realpathSync(resolve(path));
   const rel = relative(root, file);
@@ -16,5 +16,9 @@ export function loadLocalDataset(path: string, ignoredRoot = resolve('.ctxalloc'
     statSync(file).size > 4_000_000
   )
     throw new Error('local_input_boundary');
-  return parseDataset(JSON.parse(readFileSync(file, 'utf8')));
+  return JSON.parse(readFileSync(file, 'utf8')) as unknown;
+}
+
+export function loadLocalDataset(path: string, ignoredRoot = resolve('.ctxalloc')) {
+  return parseDataset(loadLocalJson(path, ignoredRoot));
 }

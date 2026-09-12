@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "process": {
+    "kind": null,
     "author": null,
     "method": null,
     "independentOfRetrieval": false,

@@ -240,3 +240,67 @@ Keep detailed worksheets, annotations, execution markers and reports local. Only
 separately reviewed and explicitly approved sanitized aggregate evidence may enter
 Git; this PR includes none from private sources. Hashes are identifiers, not
 anonymization or proof of consent. No automatic upload or publication occurs.
+
+## Commands and input worksheet
+
+Run from the repository root after a normal frozen install and build:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+pnpm dogfood:status
+mkdir -p .ctxalloc/dogfood/pilot/snapshot
+cp benchmarks/dogfood/templates/settings.json .ctxalloc/dogfood/pilot/settings.json
+cp benchmarks/dogfood/templates/tasks.json .ctxalloc/dogfood/pilot/tasks.json
+cp benchmarks/dogfood/templates/annotations.json .ctxalloc/dogfood/pilot/annotations.json
+```
+
+Read the [entry guide](../benchmarks/dogfood/templates/ENTRY_GUIDE.md). The copied
+files are deliberately incomplete. Put only explicitly approved snapshot files
+in the snapshot directory and supply the source decisions before preparation:
+
+```sh
+pnpm dogfood:prepare --local .ctxalloc/dogfood/pilot/settings.json --out .ctxalloc/dogfood/pilot/review.json
+```
+
+The review file contains private source/chunk content and stays local. Human
+annotation happens without scores or selections. Freeze only after operating
+settings, actual human annotations and explicit evaluation approval are supplied:
+
+```sh
+pnpm dogfood:freeze --local .ctxalloc/dogfood/pilot/settings.json --tasks .ctxalloc/dogfood/pilot/tasks.json --annotations .ctxalloc/dogfood/pilot/annotations.json --out .ctxalloc/dogfood/pilot/freeze.json
+pnpm dogfood:evaluate --local .ctxalloc/dogfood/pilot/settings.json --tasks .ctxalloc/dogfood/pilot/tasks.json --annotations .ctxalloc/dogfood/pilot/annotations.json --freeze .ctxalloc/dogfood/pilot/freeze.json --out .ctxalloc/dogfood/pilot/first-result.json
+```
+
+The evaluation command verifies the freeze before retrieval, exclusively creates
+the result path and writes a `STARTED_NOT_COMPLETED` marker before selection.
+Completion replaces only that invocation's owned marker with its first result.
+Interruption leaves the marker. An existing path is rejected before selection;
+a rerun needs a new result filename, while corrected inputs require a new
+experiment identity and freeze. Reviewable artifacts record source and built-code
+identities; changing the runtime, code, snapshot or inputs invalidates the freeze.
+No global experiment registry is introduced; preserving distinct experiment
+identities and the actual annotation process remains an operator responsibility.
+
+`status` returns READY_FOR_HUMAN_DATA with exit 0. Missing prerequisite decisions
+or the human checkpoint return that state with exit 2 and no evaluation. Invalid
+inputs, changed freezes and workflow errors return a bounded rejection with exit 2.
+An evaluated baseline returns exit 0 for PASS, 1 for FAIL, or 2 for INCOMPLETE.
+Software-only internal fixtures are explicitly marked TOY_SOFTWARE_TEST_ONLY and
+cannot claim a real verdict or qualified savings; the CLI refuses toy provenance
+at the human checkpoint. CI runs only status and software tests.
+
+Input limits are explicit pilot safety bounds: each JSON input is at most
+4,000,000 bytes, with at most 64 listed sources, 2,000,000 total source-text bytes,
+2,000 prepared chunks and 100 tasks. The chosen reader limit may be smaller.
+Reports include native candidate evidence once per query and no complete traces
+or compiled source content; detailed outputs remain local. These engineering
+bounds are not inferred production budgets or a way to select favorable cases.
+
+Zero caller obligations are reported as a null runtime ratio and a NOT_APPLICABLE
+gate. Missing criticality or no annotated critical facts is NOT_EVALUATED. A
+required-content failure is a failed compilation, not a successful budget overrun;
+its final-context metrics remain zero/null and its budget observation is unavailable.
+Partial source spans retain useful-block judgments separately from complete
+fact/evidence preservation. Unknown stage observations carry explicit coverage
+counts and do not become invented retrieval/admission loss numbers.
