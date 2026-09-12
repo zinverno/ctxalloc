@@ -31,7 +31,9 @@
     "development:evidence": "node benchmarks/dist/evidence-development/run.js",
     "validation:heldout:v2": "node benchmarks/dist/heldout-v2/run.js",
     "validation:heldout:v2:historical": "node benchmarks/dist/historical-v2/run.js",
-    "validation:heldout:v2:reanchored": "node benchmarks/dist/reanchored-v2/run.js"
+    "validation:heldout:v2:reanchored": "node benchmarks/dist/reanchored-v2/run.js",
+    "development:retrieval": "node benchmarks/dist/retrieval-calibration/run.js",
+    "development:retrieval:raw": "node benchmarks/dist/retrieval-calibration/raw.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

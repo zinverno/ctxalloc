@@ -1,0 +1,360 @@
+{
+  "schemaVersion": 1,
+  "phase": "22A",
+  "purpose": "Local engineering verification; not retrieval effectiveness or Product Validation PASS",
+  "implementationRevision": "f977065af02a4c75db59908eae522837274af175",
+  "baselineRevision": "62a4cd7eb5ebe1e30a813171406d178e71977727",
+  "canonicalPhase21EIntegrationRevision": "f4c3c999ee6afc3fe52ea606fcd6fdca1053d06c",
+  "environment": {
+    "node": "22.23.2",
+    "pnpm": "10.33.0",
+    "platform": "linux/x64"
+  },
+  "commandChecks": [
+    {
+      "step": "clean",
+      "command": [
+        "pnpm",
+        "clean"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "frozen-install",
+      "command": [
+        "pnpm",
+        "install",
+        "--frozen-lockfile"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "format",
+      "command": [
+        "pnpm",
+        "format:check"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "lint",
+      "command": [
+        "pnpm",
+        "lint"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "typecheck",
+      "command": [
+        "pnpm",
+        "typecheck"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "tests",
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "boundaries",
+      "command": [
+        "pnpm",
+        "check:boundaries"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "aggregate-check",
+      "command": [
+        "pnpm",
+        "check"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "clean-before-build",
+      "command": [
+        "pnpm",
+        "clean"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "build",
+      "command": [
+        "pnpm",
+        "build"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "declarations",
+      "command": [
+        "pnpm",
+        "check:declarations"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "cli-smoke",
+      "command": [
+        "pnpm",
+        "smoke:cli"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "api-smoke",
+      "command": [
+        "pnpm",
+        "smoke:api"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "historical-v1",
+      "command": [
+        "pnpm",
+        "--silent",
+        "acceptance:mvp"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21a",
+      "command": [
+        "pnpm",
+        "--silent",
+        "diagnose:selection"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21b",
+      "command": [
+        "pnpm",
+        "--silent",
+        "development:admission"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21c-integrity",
+      "command": [
+        "pnpm",
+        "--silent",
+        "validation:heldout:historical"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21d",
+      "command": [
+        "pnpm",
+        "--silent",
+        "development:evidence"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase21e-reanchored",
+      "command": [
+        "pnpm",
+        "--silent",
+        "validation:heldout:v2:reanchored"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "phase22a-native-known-defect",
+      "command": [
+        "pnpm",
+        "--silent",
+        "development:retrieval:raw"
+      ],
+      "expectedExitCode": 1,
+      "exitCode": 1,
+      "status": "PASS"
+    },
+    {
+      "step": "phase22a-calibration",
+      "command": [
+        "pnpm",
+        "--silent",
+        "development:retrieval"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "step": "local-manifest-smoke",
+      "command": [
+        "pnpm",
+        "--silent",
+        "development:retrieval",
+        "--local",
+        "<ignored-local-manifest>"
+      ],
+      "expectedExitCode": 0,
+      "exitCode": 0,
+      "status": "PASS",
+      "reportBytesMatchPublicRun": true
+    }
+  ],
+  "commandCheckCount": 23,
+  "tests": {
+    "standalone": {
+      "files": 191,
+      "tests": 3868,
+      "skipped": 0
+    },
+    "aggregate": {
+      "files": 191,
+      "tests": 3868,
+      "skipped": 0
+    },
+    "added": {
+      "files": 5,
+      "tests": 38
+    }
+  },
+  "boundaries": {
+    "workspacePackages": 11,
+    "forbiddenDependencies": 0
+  },
+  "build": {
+    "typescriptProjects": 11,
+    "declarationsValidated": 76,
+    "historicalFrozenArtifactsByteIdentical": 142
+  },
+  "smoke": {
+    "cli": "PASS",
+    "apiChecks": 12
+  },
+  "historicalV1": {
+    "engineeringAcceptance": "INCOMPLETE",
+    "productValidationAcceptance": "FAIL",
+    "gatesUnchanged": 23,
+    "counts": {
+      "cases": 13,
+      "successfulCompilations": 11,
+      "expectedFailureCases": 2,
+      "expectedFailuresMatched": 2,
+      "unexpectedFailures": 0,
+      "providerFailures": 0,
+      "determinismFailures": 0,
+      "budgetViolations": 0,
+      "severeQualityLosses": 0,
+      "modelIdentityMismatches": 0
+    },
+    "comparisonScope": "Semantic gates and quality unchanged; revision, optional performance execution and volatile timing/environment fields differ."
+  },
+  "audit": {
+    "baseline": "62a4cd7eb5ebe1e30a813171406d178e71977727",
+    "filesAudited": 493,
+    "changedFilesAudited": 25,
+    "protectedFilesByteIdentical": 468,
+    "forbiddenTrackedOrProposedArtifacts": [],
+    "protectedChanges": [],
+    "credentialPatternMatchPaths": [],
+    "residualDatabaseFilesOutsideIgnoredLocalState": [],
+    "historicalComparisons": [
+      {
+        "report": "phase21a",
+        "sha256": "sha256:bc4bb91e7e9b2a5b7152cf1cde902d4f7973478a5076b064a3cb47d14955bd1b",
+        "unchanged": true
+      },
+      {
+        "report": "phase21b",
+        "sha256": "sha256:123741582dc2c3d813f682c6107cbf2b3dd542533853a31522aa8d91e70227a0",
+        "unchanged": true
+      },
+      {
+        "report": "phase21c-integrity",
+        "sha256": "sha256:de963c116665bd675787553114a2810867cffb18699290959b72a655bf9c3f20",
+        "unchanged": true
+      },
+      {
+        "report": "phase21d",
+        "sha256": "sha256:6ed98f14c75c036c37eceab22ef1bb580a796502f83650f4b243e1efbbad800a",
+        "unchanged": true
+      }
+    ],
+    "reportChecks": {
+      "nativeFirstBytesUnchanged": true,
+      "calibrationBytesReproduce": true,
+      "historicalPhase21EPass": true,
+      "historicalPhase21CFail": true,
+      "calibrationContractPass": true,
+      "nativeFailurePreserved": true
+    },
+    "nativeFirstSha256": "92e8c67093f4efbe867806d28ac0d09b8fb81b0356470a69530c65e3e84ba5b0",
+    "calibrationSha256": "5ac0727da871ff3c0757f79b850cc6ac9b3290766253026dece7057cf25b7192",
+    "privacy": "Only attributed public corpus text is committed; reports contain fixed metadata, hashes, counts, and numeric measurements. Private local state is ignored.",
+    "status": "PASS"
+  },
+  "nativeRawObservation": {
+    "exitCode": 1,
+    "status": "FAIL",
+    "expected": "Preserved native score permutation defect; calibration does not relabel native determinism as passing."
+  },
+  "localManifestReportReproduced": true,
+  "phase22BAuthored": false,
+  "liveModelCalls": 0,
+  "status": "PASS"
+}

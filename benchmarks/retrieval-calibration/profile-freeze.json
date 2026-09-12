@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "phase": "22A",
+  "status": "DEVELOPMENT_PROFILE_FROZEN",
+  "profileId": "minisearch-query-rank-incomplete-admit",
+  "profileVersion": "1",
+  "profileHash": "2fa9e503ec5da8b9e3c4a665d26169d4f6d8394ea7eccaa7387daf7146c0c7a7",
+  "implementationHash": "01cbcacde4bb6bf6ca4b9103eefe445c5edda71f104f6089ebdbe393d9064ea1",
+  "firstRawReportHash": "92e8c67093f4efbe867806d28ac0d09b8fb81b0356470a69530c65e3e84ba5b0",
+  "rawObservationRevision": "9b58e3980ce5b6907ce3f48ef31a7527c19788c4",
+  "corpusRevision": "070d78c7f4b601e33701b715cd76952c409805e1",
+  "corpusHash": "7a6deb92da803766b76204d26c0fcddaf388b516f5908e4f0b32c84820d17e82",
+  "phase22BAuthored": false,
+  "effectivenessValidated": false,
+  "nativeScorePermutationFailurePreserved": true,
+  "completeness": "incomplete",
+  "uncertaintyBehavior": "admit all retrieved candidates; no threshold",
+  "phase22BGates": [
+    "Freeze protocol before new workload collection",
+    "Independent human positive, negative, critical and fact annotations before retrieval",
+    "Cover project docs, notes, conversation, tool results, stale material and missing query types",
+    "Preserve 100% of retrieved useful and runtime-required units at admission",
+    "Report retrieval/preparation, admission and allocation loss separately",
+    "100% critical facts; per-stratum retrieval recall and final useful-fact preservation >=95% at predeclared production budgets",
+    "Predeclare per-stratum retrieval and allocation preservation floors and budget regimes",
+    "No token-saving success when preservation floor fails",
+    "Public reports contain hashes, counts and bounded metadata only"
+  ]
+}

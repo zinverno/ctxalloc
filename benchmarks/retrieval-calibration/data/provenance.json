@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "ctxalloc-phase22a-qasper-train-v1",
+  "split": "DEVELOPMENT",
+  "upstream": "QASPER 0.3 train",
+  "source": "https://qasper-dataset.s3.us-west-2.amazonaws.com/qasper-train-dev-v0.3.tgz",
+  "license": "CC-BY-4.0",
+  "originalTrainingFileSha256": "9458bfe76074a8fa8d1685af02bcc73537aa6d338ad20591dfaff1946bc88bf4",
+  "logicalCorpusSha256": "7a6deb92da803766b76204d26c0fcddaf388b516f5908e4f0b32c84820d17e82",
+  "selection": "First 12 paper IDs by SHA-256, with 10–100 nonblank paragraphs; all their questions",
+  "selectedPaperIds": [
+    "1810.06743",
+    "1611.01400",
+    "1910.00458",
+    "1909.00754",
+    "1909.05358",
+    "1904.10500",
+    "1709.05411",
+    "1910.07181",
+    "1904.01608",
+    "1911.13087",
+    "1909.05017",
+    "1810.03459"
+  ],
+  "duplicateParagraphsRemoved": 2,
+  "documentCount": 12,
+  "blockCount": 529,
+  "queryCount": 39,
+  "positiveJudgments": 45,
+  "negativeJudgments": 0,
+  "evidenceUnits": 53,
+  "unavailableEvidenceUnits": 8,
+  "criticalAnnotations": 0,
+  "annotationMethod": "Original human evidence paragraphs, exact text join; no model-authored labels",
+  "limitations": [
+    "Unmarked paragraphs are unjudged",
+    "Evidence units are paragraphs, not atomic facts",
+    "No criticality annotations"
+  ]
+}
