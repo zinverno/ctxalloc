@@ -304,3 +304,45 @@ its final-context metrics remain zero/null and its budget observation is unavail
 Partial source spans retain useful-block judgments separately from complete
 fact/evidence preservation. Unknown stage observations carry explicit coverage
 counts and do not become invented retrieval/admission loss numbers.
+
+## Preparation verification and handoff
+
+The workflow implementation is committed at `43eea2f`; the protocol and blank
+intake were first committed at `3735e2a`, before the software fixtures. The final
+verification record is [phase22b-verification.json](evidence/phase22b-verification.json).
+No approved real corpus or human annotations were supplied, no real operating
+settings were frozen, and no dogfood baseline evaluation was run. The phase remains
+**READY_FOR_HUMAN_DATA**. Retrieval/admission/allocation losses and qualified token
+savings for real dogfood are **NOT_EVALUATED**.
+
+All **27 final command checks** met their expected exits. Standalone tests and the
+aggregate check each passed **195 files / 3,898 tests**, with zero skips; the new
+workflow contributes **4 files / 30 tests**. Build and boundaries cover **11
+TypeScript projects/workspace packages**, with **76 declarations**, built CLI smoke
+and **12 built API smoke checks** passing. The built dogfood code-identity check
+passes, and status plus blank prepare/freeze/evaluate checks return the human-data
+checkpoint without selection or output artifacts. Expected exits are **1** for the
+historical Phase 22A native observation and **2** for each blank dogfood operation.
+
+The unchanged starting baseline initially hit a 10-second `beforeAll` timeout in
+an existing API suite during aggregate validation (190 files passed, one suite
+failed; 3,860 tests passed and eight skipped). Its standalone 3,868 tests had passed.
+The same aggregate command passed on retry with all 191 files / 3,868 tests; no code
+or timeout was changed. That first failure remains recorded. Final implementation
+validation needed no retries.
+
+Historical Phase 21A/B/C-integrity/D outputs and both Phase 22A reports reproduce
+byte-for-byte. The Phase 21E re-anchor authenticates historical PASS; Phase 21C and
+the Phase 22A raw permutation observation retain their original FAIL. All **142
+historical frozen JavaScript artifacts** remain byte-identical after the clean
+build. Historical v1 retains all **23 gate results** and its original Product
+Validation FAIL; only revision, environment/timing and optional performance fields
+are outside the semantic comparison.
+
+The artifact/privacy/database audit covers **511 tracked or proposed files**, **21
+changed paths**, and **490 protected baseline files**, all of which remain
+byte-identical. No forbidden generated artifact, credential-pattern match,
+protected-file change or database side file outside ignored local state was found.
+No private corpus, real human judgments or private evaluation report is committed.
+The source-boundary and empty-checkpoint checks are software evidence only; they
+cannot prove the origin, annotation quality or performance of a future workload.
