@@ -423,3 +423,40 @@ Historical evidence remains separate: `ctxalloc-eval-v1` MVP evidence, Phase 21C
 frozen FAIL, Phase 21E frozen PASS, Phase 21E-R re-anchor, and Phase 22A DEVELOPMENT.
 No original held-out experiment was rerun, relabeled, merged with these results,
 or required to restore orphaned ancestry. No live LLM or LLM judge was invoked.
+
+## Final local verification
+
+The implementation at `f977065` passed the complete repository validation sequence;
+this final documentation commit records the results. See
+[`phase22a-verification.json`](evidence/phase22a-verification.json) for commands,
+expected exits, exact counts and report hashes. The 23 command checks comprise
+clean, frozen install, format, lint, typecheck, standalone tests, boundaries,
+aggregate check, a second clean and build, declarations, CLI/API smoke, historical
+v1, Phase 21A/B/C-integrity/D/E-reanchored, native observation, calibration,
+whitespace audit and the explicit local-manifest smoke. Native observation
+correctly exits **1** for its preserved permutation failure; all other commands
+exit 0. A passing engineering sequence does not convert that raw failure into PASS.
+
+Both standalone tests and aggregate check passed **191 files / 3,868 tests**, with
+no skips; Phase 22A adds **5 files / 38 tests**. Boundary checks cover **11 workspace
+packages** with no forbidden dependencies. The clean build covers **11 TypeScript
+projects**, declaration checks validate **76 declarations**, and the built API
+smoke passes **12 checks**. The built CLI smoke also passes. All **142 historical
+frozen JavaScript artifacts** remain byte-identical after the clean build.
+
+Historical Phase 21A/B/C-integrity/D reports reproduce their re-anchor verification
+hashes. The re-anchored Phase 21E verifier authenticates the historical **PASS**;
+Phase 21C retains its original **FAIL**. Historical v1 retains all **23 gate
+results**, with **13 cases, 11 successful compilations, 2 matched expected failures,
+0 unexpected/provider/determinism failures and 0 budget violations**. Its Product
+Validation remains **FAIL**; revision, environment/timing and optional performance
+execution fields are outside the semantic comparison.
+
+The artifact/privacy/database audit covers **493 tracked or proposed files** and
+**25 changed paths**. All **468 protected baseline files** remain byte-identical.
+No forbidden generated artifact, credential-pattern match, unexpected protected
+change or database side file outside ignored local state was found. Both the
+preserved first native report and calibrated report reproduce byte-for-byte; an
+explicit ignored local copy of the public manifest reproduces the calibrated
+report exactly. No private corpus is committed. These checks validate the stated
+privacy boundary; a pattern audit is not a proof that arbitrary future data is safe.
