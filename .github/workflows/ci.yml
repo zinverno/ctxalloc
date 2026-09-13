@@ -60,3 +60,6 @@ jobs:
 
       - name: Calibrate real retrieval admission evidence (development only)
         run: pnpm development:retrieval
+
+      - name: Check dogfood preparation status (no human data or evaluation)
+        run: pnpm dogfood:status

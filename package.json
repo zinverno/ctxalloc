@@ -33,7 +33,11 @@
     "validation:heldout:v2:historical": "node benchmarks/dist/historical-v2/run.js",
     "validation:heldout:v2:reanchored": "node benchmarks/dist/reanchored-v2/run.js",
     "development:retrieval": "node benchmarks/dist/retrieval-calibration/run.js",
-    "development:retrieval:raw": "node benchmarks/dist/retrieval-calibration/raw.js"
+    "development:retrieval:raw": "node benchmarks/dist/retrieval-calibration/raw.js",
+    "dogfood:status": "node benchmarks/dist/dogfood/run.js status",
+    "dogfood:prepare": "node benchmarks/dist/dogfood/run.js prepare",
+    "dogfood:freeze": "node benchmarks/dist/dogfood/run.js freeze",
+    "dogfood:evaluate": "node benchmarks/dist/dogfood/run.js evaluate"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
